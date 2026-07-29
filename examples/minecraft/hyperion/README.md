@@ -150,32 +150,62 @@ two load-bearing parts:
 
 ## State of the deployment, 2026-07-29
 
-Three VMs exist in `us-west-1`: `hyperion-game`, `hyperion-proxy-0`,
-`hyperion-proxy-1`. The third proxy is in this spec and evaluates; **it has not
-been created.** Nothing below was verified by applying it.
+Three VMs exist in `us-west-1`: `hyperion-game` on hil-compute-3,
+`hyperion-proxy-0` and `hyperion-proxy-1` on hil-compute-1. The third proxy is
+in this spec and evaluates; **it has not been created.**
 
-What works now that did not before: both proxies resolve the game server and
-`hyperion-proxy.service` has stayed `active` for 12 hours instead of
-crash-looping. Full-fleet play does not work, and the reason is one layer under
-DNS.
+**The fleet serves Minecraft, across hosts, through either proxy.** A real
+status handshake -- protocol 776, the same packet a client sends -- against
+each proxy returns the game server's own status:
 
-**Names resolve; packets do not cross hosts.** From `hyperion-proxy-0`
-(hil-compute-1), against `hyperion-game` (hil-compute-3):
+    $ ix shell hyperion-game -- sh -c 'python3 /tmp/mcping.py \
+        hyperion-proxy-0.ix.internal 25565'
+    version:     {'name': '26.2', 'protocol': 776}
+    players:     {'max': 12000, 'online': 0, 'sample': []}
+    description: Getting 10k Players to PvP at Once on a Minecraft Server to
+                 Break the Guinness World Record
 
-    ping hyperion-proxy-1.ix.internal   (same host)   2/2 received, 0.24 ms
-    ping hyperion-game.ix.internal      (other host)  0/2, Address unreachable
-    connect hyperion-game.ix.internal:35565            No route to host
+Identical through `hyperion-proxy-1`. The path crosses hosts twice --
+hil-compute-3 to hil-compute-1 to reach the proxy, hil-compute-1 back to
+hil-compute-3 for the game server -- so this exercises the whole design: group
+name resolution, the VXLAN data path, and the proxy's mutual-TLS link to the
+game server.
 
-Same-host east-west works, cross-host east-west does not. That is
-ENG-10976/ENG-11067; the fix is ix#9073 and it is on ix main but not in the
-revision these hosts are running. Nothing in this directory affects it.
+`mcping.py` is in this directory. Run it from inside the group, where the names
+resolve; it speaks the protocol rather than asking systemd for an opinion, which
+is the difference that matters (see below).
 
-Worth knowing while reading a `systemctl` output during this: the proxy unit
-reads `active` throughout. hyperion-proxy binds its listener at startup and
-dials the game server per connection, so a completely unreachable backend is
-invisible to systemd. The unit crash-looped when the *name* would not resolve
-and is quiet now that only the *path* is broken, which inverts the usual
-relationship between how loud a failure is and how bad it is.
+The same test doubles as a check that the game server is not directly playable,
+which is the property the private segment and the client certificate exist for.
+Pointed at `hyperion-game:35565` it fails, and the raw bytes say why -- a
+plaintext handshake gets exactly seven back:
+
+    15 0303 0002 02 32
+
+A TLS record of type 21, alert, fatal, `decode_error`. The game port speaks TLS
+and refuses anything else, so reaching that port is not the same as being able
+to use it. Through the script the same thing reads as
+`expected status response (packet 0), got packet 3`.
+
+**What is missing is public ingress, and only that.** No player can reach a
+proxy from the internet: the proxies hold no public IPv4 (see below), and a
+guest's public IPv6 `/128` answers only from the host it lives on (ENG-11144).
+Every hop from a player's client to the world exists and is tested except the
+first one.
+
+Two things this run corrected that were true this morning:
+
+- **Cross-host east-west works now.** It did not. `hyperion-proxy-0` could
+  reach `hyperion-proxy-1` on the same host in 0.24 ms and got
+  `Address unreachable` for the game server one host over. ix#9073
+  (ENG-10976, ENG-11067) landed and the same ping is now 3/3 at 0.33 ms.
+- **A `systemctl` reading of `active` proved nothing while it was broken.**
+  hyperion-proxy binds its listener at startup and dials the game server per
+  connection, so a completely unreachable backend was invisible to systemd.
+  The unit crash-looped when the *name* would not resolve and went quiet when
+  only the *path* was broken, which is the wrong way round. The handshake above
+  is the check that would have caught it; nothing in the repo runs it
+  (ENG-10986).
 
 Fixed since this example landed:
 
@@ -200,53 +230,53 @@ Fixed since this example landed:
 
 Open:
 
-- **Cross-host east-west has no data path.** ENG-10976, ENG-11067. Measured
-  above; this is now the only thing between this fleet and a player joining.
-  The fix is on ix main and not deployed.
+- **Public ingress. This is the only thing left between the fleet and a
+  player.** The region's one Additional IP block, `15.204.22.192/26`, is
+  delivered nowhere: OVH reports `routedTo.serviceName = null` for it. The fix
+  is attaching it to the vRack, and that is refused because all three vRacks
+  report `resource.state = "suspended"` and every vRack call answers HTTP 460,
+  "This service is expired" -- with no billing cause. OVH ticket 713661,
+  ENG-11229, ENG-10881. Until then, taking an address from the block is worse
+  than having none: `vip-probe`, a scratch VM holding `15.204.22.195/32`, gets
+  `Destination Host Unreachable from 10.0.0.1` pinging `1.1.1.1`, while a VM
+  with no VIP answers in 0.7 ms.
+
+  The path that works needs no provider action: a DNAT from a hil host's own
+  routed `bond0` address to the proxy on it, via `services.ix.vmPublicIngress`
+  (ENG-11132). Host addresses route -- `15.204.109.254` answers a laptop in
+  21 ms. `proxy.nix` explains why that is the right shape here rather than only
+  the available one, and what it costs.
+
+  One warning if you go looking: **no ARP probe can tell delivered from
+  undelivered.** OVH answers ARP for every address on that segment, including
+  `198.51.100.7`, which is TEST-NET-2 and belongs to nobody here. A check built
+  on the gateway answering cannot fail.
+- **The name resolves to the wrong region.** ENG-11218, gated on ENG-11222.
+  Not merely missing: `*.ix.dev` is an apex wildcard pointing at
+  `40.160.30.136`, a VIN host, and asked of Cloudflare's own nameservers it
+  answers for `hyperion.apps.ix.dev`, `mc.apps.ix.dev`, `play.ix.dev`, and also
+  for `hil-compute-1.host.ix.dev` and `hil-compute-3.host.ix.dev` -- the hosts
+  that would carry the proxies. None has an A record of its own, none has any
+  AAAA. So a client told any of these opens a connection to the wrong region
+  and hangs. Explicit records win over the wildcard and are generated from
+  inventory in ix's `nix/terraform/cloudflare/dns-ix-dev.nix`; shape in
+  `proxy.nix`.
 - **A group's DNS gateway is not consistently present.** ENG-11226. On the
   `hyperion` group's bridge, `fd00:1:1f:856f::1` is on hil-compute-1 and
   hil-compute-3 and absent on hil-compute-2, which carries two members of the
-  same group. Latent while cross-host traffic is broken anyway, and a hard
-  failure for a member placed on hil-compute-2 once it is not.
-- **A public IPv4 currently disconnects the VM, so it is off.** ENG-10881. The
-  region's ingress block is not delivered to the vRack: `15.204.22.254`, the
-  block's gateway, is still `FAILED` in all three hil hosts' neighbour tables
-  as of 2026-07-29, and `ip route show table 200` still points at it. Because
-  the host source-routes VIP traffic out of that gateway, a VM that takes an
-  address from the block can send nothing at all. Measured from inside a VM
-  that holds one, today, rather than only from the host's routing table --
-  `vip-probe` is a scratch VM carrying `15.204.22.195/32` on `eth0`:
-
-  ```
-  vip-probe      (VIP 15.204.22.195/32)  ping 1.1.1.1 -> 0 received, +2 errors
-                                         From 10.0.0.1 Destination Host Unreachable
-  hyperion-game  (no VIP, 10.0.0.x)      ping 1.1.1.1 -> 2 received, 0.700ms
-  ```
-
-  The proxies themselves showed exactly this when they held VIPs, which is the
-  state that motivated turning the option off; they hold none now, so the live
-  demonstration is `vip-probe`.
-
-  `ix.networking.ipv4` is therefore off in `proxy.nix` with the reasoning in
-  place. Turn it back on and recreate the proxies once OVH delivers the block;
-  the address is allocated at create and there is no `ix vm set --ipv4`.
-
-  Public IPv6 is not a substitute: a guest's `/128` answers only from the host
-  it lives on (ENG-11144). The interim that does reach the internet is
-  `services.ix.vmPublicIngress` (ENG-11132), a DNAT from a host's own routed
-  `bond0` address, declared in that host's inventory rather than here because it
-  names a vmId and pins the VM to that host.
+  same group. It has stopped being latent now that cross-host traffic works: a
+  member placed on hil-compute-2 has no in-prefix resolver on its own host.
 - **The proxies may all be on one host and nothing can ask otherwise.**
   ENG-11225, above.
-- **No DNS name in front of the endpoint.** ENG-11218, gated on ENG-11222,
-  shape above.
 - **A fleet cannot boot its own published image.** ENG-10839. `mkFleet` renders
   one per node at `packages.<node>`, and nothing outside the private ix repo can
   build it, which is why the export cost above is per-VM rather than a single
   push into the region's CAS.
-- **Nothing in CI evaluates this example.** ENG-10986: `exampleFleetsFor` skips
-  it because it depends on an external flake, so the eval below is a command
-  someone has to remember to run rather than a gate.
+- **Nothing in CI runs either check in this directory.** ENG-10986:
+  `exampleFleetsFor` skips this example because it depends on an external flake,
+  so both the eval below and `mcping.py` are commands someone has to remember
+  rather than gates. `mcping.py` is the one that would have caught the twelve
+  hours of `active` above.
 
 ## Evaluating it without deploying
 

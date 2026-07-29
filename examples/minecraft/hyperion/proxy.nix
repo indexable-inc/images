@@ -23,53 +23,87 @@ in {
 
   ix = {
     networking = {
-      # `ipv4 = true` belongs here and is deliberately off, because in
-      # `us-west-1` today it does not add an address, it removes the VM from
-      # the network.
+      # `ipv4 = true` is off because the address does not exist to be given,
+      # not because a public address is unwanted. This fleet wants one: a Java
+      # client resolves through the JDK, which prefers IPv4, and a large share
+      # of players have no IPv6 at all.
       #
-      # The region's ingress block `15.204.22.192/26` is not delivered to the
-      # OVH vRack: its gateway `15.204.22.254` is `FAILED` in the neighbour
-      # table of all three hil hosts, re-checked 2026-07-29, while
-      # `ip route show table 200` still reads `default via 15.204.22.254`. A
-      # VM with no public address sources from `10.0.0.x`, is masqueraded, and
-      # leaves over the host's own uplink. A VM that takes one sources from the
-      # public block, matches the host's
-      # `from 15.204.22.192/26 iif br-north lookup 200` rule, and is handed
-      # that dead gateway, so everything it sends is blackholed. Both proxies
-      # came up unable to resolve, unable to substitute, and unable to complete
-      # their switch at all. ENG-10881.
+      # `15.204.22.192/26` is the region's only Additional IP block, and OVH
+      # reports `routedTo.serviceName = null` for it -- routed to no vRack and
+      # to no server, so it is delivered nowhere. Attaching it to the vRack is
+      # the fix and it cannot be done today: all three vRacks report
+      # `resource.state = "suspended"` and every vRack call answers HTTP 460,
+      # "This service is expired", with no billing cause (active lifecycle,
+      # automatic renew, $0.00 due). OVH ticket 713661, ENG-11229.
       #
-      # Still true from inside a guest, not only in the host's routing table:
-      # `vip-probe`, a scratch VM holding `15.204.22.195/32`, gets
+      # Until that clears the block is worse than absent. A VM that takes an
+      # address from it sources from the block, matches the host's
+      # `from 15.204.22.192/26 iif br-north lookup 200` rule, and is handed the
+      # dead gateway `15.204.22.254`, so everything it sends is blackholed.
+      # Measured from inside a guest, not only from the host's routing table:
+      # `vip-probe`, holding `15.204.22.195/32`, gets
       # `Destination Host Unreachable from 10.0.0.1` pinging `1.1.1.1`, while a
-      # VM with no VIP answers in 0.7 ms.
+      # VM with no VIP answers in 0.7 ms. Both proxies did exactly this when
+      # they held addresses -- unable to resolve, unable to substitute, unable
+      # to finish their switch. ENG-10881.
       #
-      # What being off costs, stated plainly: this fleet has no public IPv4,
-      # and it wants one. A Java client resolves through the JDK, which prefers
-      # IPv4, and a large share of players have no IPv6 at all. Public IPv6 is
-      # not a substitute either -- a guest's `/128` is reachable only from the
-      # host it happens to live on (ENG-11144), so it is not ingress, it is a
-      # host-local address that looks like one.
+      # Do not check delivery by probing the gateway. OVH answers ARP for every
+      # address on that segment, including `198.51.100.7`, which is TEST-NET-2
+      # and belongs to nobody here. An ARP probe therefore succeeds whether or
+      # not the block is delivered, so a check built on one cannot fail and is
+      # worth nothing. `routedTo` at the provider, and the route table on the
+      # host, are the facts that distinguish the two.
       #
-      # The one public IPv4 path that does work is `services.ix.vmPublicIngress`
-      # (ENG-11132): a DNAT from a *host's* own routed `bond0` address to a
-      # guest address, declared in that host's inventory. It is deliberately
-      # not referenced from here. It names a vmId and a guest address, so it
-      # pins the VM to one host and goes stale the moment the VM moves -- that
-      # is the region operator's allocation to make and to verify, not a
-      # property of being a proxy. Writing it here would put a fact this fleet
-      # cannot keep true into the fleet's own definition.
+      # So public ingress for this fleet comes from the host rather than from
+      # this VM: a hil host carrying a proxy translates its own routed `bond0`
+      # address on a Minecraft port to the proxy living on it, through
+      # `services.ix.vmPublicIngress` in that host's inventory. Host addresses
+      # work and need no provider action -- `15.204.109.254` answers a laptop
+      # in 21 ms.
       #
-      # Turn `ipv4` back on and recreate the proxies once OVH delivers the
-      # block. The address is allocated at create; there is no
-      # `ix vm set --ipv4`.
+      # What that costs, named here so the next reader can check it rather than
+      # discover it:
+      #
+      #   - The public address becomes a property of the host. Move a proxy and
+      #     a different address serves it.
+      #   - The forward names a `vmId` and a `10.0.0.x` guest address, both of
+      #     which are allocated at VM create. They exist only after this fleet
+      #     has been applied once, and they go stale when a VM is recreated.
+      #   - So the forward is not declared here and cannot be. This file
+      #     describes the fleet; it cannot describe facts the fleet does not
+      #     know until it has been deployed.
+      #
+      # A name in front absorbs the first two, with one record per
+      # proxy-carrying host -- see below -- which this fleet needs anyway. The
+      # third is real and unfixed: the fleet's public reachability is written
+      # in a second place with nothing comparing the two copies.
+      #
+      # Revisit when OVH 713661 clears, but do not assume the answer flips. A
+      # VM-owned address is the better shape when a client cannot be told a
+      # port, because then the address follows the thing that moves. It is not
+      # better here: SRV tells a Minecraft client the port (below), which
+      # removes the only structural objection to sharing a host's address, and
+      # one `/26` is 62 addresses for an entire region, which is a small-N
+      # convenience rather than an ingress design.
 
-      # Nothing declares a name in front of the port below, so a player is
-      # handed an address and every correct fix to where this fleet lives costs
-      # them a new one (ENG-11218; the claiming gate that has to exist before
-      # any name can be handed out is ENG-11222). The shape is decided rather
-      # than open, so it is recorded here instead of being re-derived by
-      # whoever wires it up.
+      # Nothing declares a name in front of the port below, and the situation
+      # is worse than a missing record: the names resolve, to the wrong region.
+      # `*.ix.dev` is an apex wildcard pointing at `40.160.30.136`, a VIN host,
+      # and asking Cloudflare's own nameservers rather than a resolver cache it
+      # answers for every name this fleet would want -- `hyperion.apps.ix.dev`,
+      # `mc.apps.ix.dev`, `play.ix.dev` -- and also for
+      # `hil-compute-1.host.ix.dev` and `hil-compute-3.host.ix.dev`, the two
+      # hosts that would carry the proxies. None has an A record of its own and
+      # none has any AAAA. So a client told any of these today opens a
+      # connection to the wrong region and finds nothing listening, which fails
+      # as a timeout rather than as a name error. ENG-11218; the gate that has
+      # to exist before a name can be claimed is ENG-11222.
+      #
+      # An explicit record beats the wildcard, and records are generated from
+      # inventory in ix's `nix/terraform/cloudflare/dns-ix-dev.nix`, so the fix
+      # is a derivation from inventory rather than a hand-added entry. The
+      # shape below is decided rather than open, so it is recorded here instead
+      # of being re-derived by whoever wires it up.
       #
       # One name for the fleet, declared identically by every proxy -- never
       # one name per VM. A player's endpoint has to resolve to the *role*,
