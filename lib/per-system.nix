@@ -1922,6 +1922,13 @@
             # (readiness log line, open port, real server-list ping); see
             # tests/minestom-spleef-vm.nix.
             minestom-spleef-vm = tests.minestomSpleefVm;
+            # Boots a NixOS VM and runs a real generation switch that removes
+            # a mount unit, asserting the switch returns 0 and leaves a
+            # working machine. Every other check here reads a generation it
+            # would build; this one is the only thing that watches a switch
+            # into it, which is the gap ENG-11080 went through. See
+            # tests/switch-stops-a-mount-vm.nix.
+            switch-stops-a-mount-vm = tests.switchStopsAMountVm;
             # Builds the base OCI archive and asserts its baked nix store DB
             # registers the pinned nixpkgs source as valid, so a fresh VM's first
             # `nix` command does not re-copy the tree through VCFS (ix
