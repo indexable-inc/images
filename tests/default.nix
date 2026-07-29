@@ -3543,6 +3543,43 @@
         assertion = base.cfg.shellWorkspace.enable;
         message = "base profile should enable the ix shell workspace by default";
       }
+      # A guest unit that can never start does not just fail its own boot, it
+      # fails EVERY switch: switch-to-configuration exits nonzero when a unit
+      # failed, and the node agent rejects the whole switch on any nonzero exit,
+      # so two permanently-dead units made every `ix apply` of every guest
+      # report failure while the guest had switched cleanly (ENG-11063).
+      #
+      # The units that did it were invented at RUNTIME by
+      # systemd-getty-generator: serial-getty@ttyS0 from `console=ttyS0` on the
+      # host-owned cmdline, and serial-getty@hvc0 because the generator probes
+      # /sys/class/tty/hvc0, which the virtio-console driver registers whether
+      # or not a host end is attached. No eval-time check can watch a generator
+      # run, so this holds the other half of the fix instead: that the platform
+      # keeps both instances masked. Neither device can carry a login session at
+      # all (hvc0's receiveq is deliberately never drained, ttyS0 is kernel
+      # printk plus a captured log plus a single-holder `ix serial` attach), and
+      # neither could start regardless while no .device unit ever activates in a
+      # guest (ENG-11064).
+      {
+        assertion =
+          base.config.systemd.units."serial-getty@ttyS0.service".enable
+          == false
+          && base.config.systemd.units."serial-getty@hvc0.service".enable == false;
+        message = "ix guests must mask the serial gettys systemd-getty-generator invents for ttyS0 and hvc0; either one left unmasked fails every switch (ENG-11063)";
+      }
+      {
+        # The FHS compat heal exists because /bin, /sbin and /usr were baked as
+        # absolute symlinks into the closure that built the IMAGE, which the
+        # guest's own nix-gc then collects: /bin/sh stopped existing, and
+        # dbus-broker became unstartable with 226/NAMESPACE. Naming any
+        # /nix/store path as the replacement target would rebuild exactly that
+        # bug, so the heal has to point at an indirection the system maintains.
+        # Asserting the ABSENCE of a store path rather than the presence of a
+        # literal keeps this a check on the property that matters instead of a
+        # second copy of the script.
+        assertion = !lib.hasInfix "/nix/store" base.config.system.activationScripts.fhsCompatLinks;
+        message = "the FHS compat heal must repoint at /run/current-system, never at a store path a guest nix-gc can collect (ENG-11063)";
+      }
       {
         assertion = base.config.users.users.root.shell.meta.mainProgram == "zsh";
         message = "base profile should make root land in zsh (via platform users.defaultUserShell)";
