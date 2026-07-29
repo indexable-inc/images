@@ -107,6 +107,90 @@ fn a_peer_per_agent_keeps_author_sets_singular_as_peers_accumulate() {
     assert_eq!(body.get_editor_at_unicode_pos(2), Some(peer_of(1)));
 }
 
+/// The reason `set_pane` exists: a writer can publish without holding a copy of
+/// everything else it owns, and cannot delete a neighbour's work by omission.
+///
+/// `apply_scope` reconciles a whole scope to the slice handed in, so a writer
+/// that owns three panes must re-send all three to change one. Under one shared
+/// scope that is worse than inconvenient: whoever publishes last wins and the
+/// others vanish. This is that failure, and its absence under `set_pane`.
+#[test]
+fn set_pane_touches_only_the_pane_it_names() {
+    // The old shape: two writers sharing a scope, each sending only its own
+    // pane, is data loss.
+    let reconciled = Hub::new();
+    reconciled.apply_scope("shared", &[pane_for(0, 0)]);
+    reconciled.apply_scope("shared", &[pane_for(1, 0)]);
+
+    let doc = LoroDoc::new();
+    doc.import(&reconciled.export_snapshot()).expect("snapshot");
+    let json = doc.get_deep_value().to_json();
+    assert!(
+        !json.contains("from agent 0"),
+        "apply_scope reconciles the scope, so agent 0 is gone -- this is the \
+         behaviour set_pane exists to avoid"
+    );
+
+    // The new shape: same two writers, neither aware of the other, both survive.
+    let hub = Hub::new();
+    hub.set_pane(&pane_for(0, 0));
+    hub.set_pane(&pane_for(1, 0));
+
+    let doc = LoroDoc::new();
+    doc.import(&hub.export_snapshot()).expect("snapshot");
+    let json = doc.get_deep_value().to_json();
+    assert!(json.contains("from agent 0"), "agent 0 survives");
+    assert!(json.contains("from agent 1"), "agent 1 survives");
+}
+
+/// One publish is one pane's worth of delta, and names only that pane.
+#[test]
+fn set_pane_publishes_one_pane_not_the_whole_set() {
+    let hub = Hub::new();
+    for agent in 0..WRITERS {
+        hub.set_pane(&pane_for(agent, 0));
+    }
+
+    let mut updates = hub.updates();
+    hub.set_pane(&pane_for(7, 1));
+
+    let update = updates.try_recv().expect("the update must broadcast");
+    assert_eq!(update.authors().len(), 1, "one writer");
+    assert!(
+        updates.try_recv().is_err(),
+        "changing one pane must produce exactly one delta, not one per pane held"
+    );
+
+    let doc = LoroDoc::new();
+    doc.import(&hub.export_snapshot()).expect("snapshot");
+    let json = doc.get_deep_value().to_json();
+    assert!(json.contains("measurement 1 from agent 7"), "agent 7 updated");
+    for agent in 0..WRITERS {
+        if agent != 7 {
+            assert!(
+                json.contains(&format!("measurement 0 from agent {agent}")),
+                "agent {agent} untouched by agent 7's publish"
+            );
+        }
+    }
+}
+
+/// Retiring a pane nobody has is silent: no delta, so no viewer is woken and no
+/// watching agent is roused by a write that changed nothing.
+#[test]
+fn dropping_an_unknown_pane_broadcasts_nothing() {
+    let hub = Hub::new();
+    hub.set_pane(&pane_for(0, 0));
+
+    let mut updates = hub.updates();
+    hub.drop_pane("finding-does-not-exist");
+    assert!(updates.try_recv().is_err(), "no delta for a no-op drop");
+
+    hub.drop_pane("finding-0");
+    let update = updates.try_recv().expect("a real drop does broadcast");
+    assert_eq!(update.authors().len(), 1);
+}
+
 /// Fifteen agents writing into one shared document converge, and every agent's
 /// contribution survives -- nobody's pane is reconciled away by a neighbour.
 #[test]

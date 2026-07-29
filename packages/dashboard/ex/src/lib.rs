@@ -51,7 +51,7 @@
 /// namespace (`DashboardEx`) and the OTP app (`:dashboard_ex`).
 #[unibind::export(backends(ex))]
 mod _dashboard_ex {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeSet, HashMap};
     use std::net::{Ipv4Addr, SocketAddr};
     use std::pin::Pin;
     use std::sync::{Arc, OnceLock, Weak};
@@ -67,10 +67,6 @@ mod _dashboard_ex {
     use tokio_stream::wrappers::UnboundedReceiverStream;
     use unibind_runtime::UniStream;
 
-    /// The scope every pane published from the BEAM lands under.
-    /// `Hub::apply_scope` reconciles exactly one scope, so naming ours keeps
-    /// a second producer on the same hub from deleting our panes.
-    const AGENT_SCOPE: &str = "agent-ex";
 
 
     /// Boundary failures. A document simply having no panes, or a merge
@@ -153,10 +149,11 @@ mod _dashboard_ex {
         /// lifetime is exactly this struct's: `close` removes the registry
         /// entry and the server stops with it.
         _dashboard: Dashboard,
-        /// The panes published from the BEAM, keyed by pane id. Held because
-        /// `Hub::apply_scope` reconciles a whole scope at once: a single
-        /// `set_html` has to re-send every pane we own or the others vanish.
-        panes: Mutex<BTreeMap<String, Pane>>,
+        /// Ids this side has published, so `panes/1` can answer "what did *I*
+        /// put here" in a document several agents write to. Only the ids: the
+        /// pane bodies live in the document, and `Hub::set_pane` touches one
+        /// pane at a time, so there is nothing to re-send.
+        panes: Mutex<BTreeSet<String>>,
         /// A peer of the hub's document, kept current by importing the hub's
         /// snapshot. Every read (`value`) and every watch event comes from
         /// here rather than from the hub, because Loro reports a change only
@@ -236,12 +233,16 @@ mod _dashboard_ex {
         Ok(())
     }
 
-    /// Re-send every pane this side owns and pull the result back into the
-    /// mirror, so a `value` read straight after a publish already sees it.
-    fn republish(document: &Document) -> Result<(), DashboardError> {
-        let panes: Vec<Pane> = document.panes.lock().values().cloned().collect();
-        document.hub.apply_scope(AGENT_SCOPE, &panes);
-        refresh(document)
+    /// Publish one pane and record that we own its id.
+    ///
+    /// No refresh: `Hub::set_pane` touches only this pane, the pump imports the
+    /// resulting delta, and every read that needs the mirror current
+    /// (`value/1`, `sync/1`) refreshes for itself. Refreshing here would put a
+    /// whole-document export and import back on the write path, which is what
+    /// this crate just stopped doing.
+    fn publish(document: &Document, pane: Pane) {
+        document.panes.lock().insert(pane.id.clone());
+        document.hub.set_pane(&pane);
     }
 
     /// The root container a diff happened under. A diff's `path` starts at
@@ -418,7 +419,7 @@ mod _dashboard_ex {
             hub,
             url: url.clone(),
             _dashboard: dashboard,
-            panes: Mutex::new(BTreeMap::new()),
+            panes: Mutex::new(BTreeSet::new()),
             mirror: Mutex::new(LoroDoc::new()),
         });
 
@@ -470,11 +471,8 @@ mod _dashboard_ex {
         html: String,
     ) -> Result<(), DashboardError> {
         let document = document(&doc)?;
-        document
-            .panes
-            .lock()
-            .insert(pane.clone(), Pane::html(pane, title, html));
-        republish(&document)
+        publish(&document, Pane::html(pane, title, html));
+        Ok(())
     }
 
     /// Publish (or replace) a data pane: `json` is parsed here so a
@@ -494,11 +492,8 @@ mod _dashboard_ex {
             serde_json::from_str(&json).map_err(|error| DashboardError::BadInput {
                 message: format!("data pane body is not JSON: {error}"),
             })?;
-        document
-            .panes
-            .lock()
-            .insert(pane.clone(), Pane::data(pane, title, renderer, data));
-        republish(&document)
+        publish(&document, Pane::data(pane, title, renderer, data));
+        Ok(())
     }
 
     /// Remove one pane this side published. Unknown ids are a no-op: the
@@ -507,12 +502,13 @@ mod _dashboard_ex {
     pub fn drop_pane(doc: String, pane: String) -> Result<(), DashboardError> {
         let document = document(&doc)?;
         document.panes.lock().remove(&pane);
-        republish(&document)
+        document.hub.drop_pane(&pane);
+        Ok(())
     }
 
     /// Ids of the panes this side has published into `doc`.
     pub fn panes(doc: String) -> Result<Vec<String>, DashboardError> {
-        Ok(document(&doc)?.panes.lock().keys().cloned().collect())
+        Ok(document(&doc)?.panes.lock().iter().cloned().collect())
     }
 
     /// A full Loro snapshot of the document, oplog included, so the receiver

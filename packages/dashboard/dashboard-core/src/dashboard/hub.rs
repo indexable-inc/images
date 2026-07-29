@@ -579,6 +579,63 @@ impl DocState {
         })
     }
 
+    /// Create or update exactly one pane, leaving every other entry untouched.
+    ///
+    /// The per-pane twin of [`apply_scope`](Self::apply_scope), and the right
+    /// call when several writers share one document: `apply_scope` reconciles a
+    /// whole scope to the slice it is handed, so a writer that owns three panes
+    /// has to re-send all three to change one, and has to hold a copy of them to
+    /// do it. Naming the pane makes "you can only touch what you name"
+    /// structural rather than a convention, and costs one pane per publish.
+    ///
+    /// The key is the pane id with no scope prefix. Scoped and unscoped entries
+    /// coexist in the same root map; readers already treat a key with no
+    /// separator as unscoped.
+    fn set_pane(&mut self, pane: &Pane) -> Result<Option<Delta>> {
+        let key = pane.id.clone();
+        let kind = pane.view.kind();
+
+        // Same reasoning as `apply_scope`: a reused id whose kind changed cannot
+        // be edited in place, because the stored fields mean something else now.
+        if self.panes.get(&key).is_some_and(|slot| slot.kind != kind) {
+            self.drop_keys(std::slice::from_ref(&key))?;
+        }
+
+        let fresh = !self.panes.contains_key(&key);
+        if fresh {
+            self.create_slot(&key, pane)?;
+        }
+        let changed = self.update_slot(&key, pane)?;
+
+        self.commit_delta(CommitTag {
+            on: "panes",
+            pane: Some(&pane.id),
+            add: if fresh { vec![pane.id.as_str()] } else { Vec::new() },
+            set: if changed && !fresh {
+                vec![pane.id.as_str()]
+            } else {
+                Vec::new()
+            },
+            ..CommitTag::default()
+        })
+    }
+
+    /// Remove one pane by id. Unknown ids are a no-op and broadcast nothing, so
+    /// a writer retiring something twice does not wake every viewer twice.
+    fn drop_pane(&mut self, id: &str) -> Result<Option<Delta>> {
+        let key = id.to_owned();
+        if !self.panes.contains_key(&key) {
+            return Ok(None);
+        }
+        self.drop_keys(std::slice::from_ref(&key))?;
+        self.commit_delta(CommitTag {
+            on: "panes",
+            pane: Some(id),
+            del: vec![id],
+            ..CommitTag::default()
+        })
+    }
+
     /// Create the Loro containers for a new pane and cache them. The scalars and
     /// text fields are written by the [`update_slot`](Self::update_slot) call
     /// that always follows; this only establishes the map, the `kind`, the
@@ -1267,6 +1324,24 @@ impl Hub {
     /// Drop every pane under `scope` and broadcast the delta.
     pub fn remove_scope(&self, scope: &str) {
         let delta = self.state.lock().remove_scope(scope);
+        self.broadcast(delta);
+    }
+
+    /// Create or update one pane, leaving every other entry untouched.
+    ///
+    /// Prefer this to [`apply_scope`](Self::apply_scope) when more than one
+    /// writer shares the document: it touches only the pane it names, so a
+    /// writer needs no copy of everything else it owns in order to change one
+    /// thing. See the module docs for which parts of a pane merge and which do
+    /// not.
+    pub fn set_pane(&self, pane: &Pane) {
+        let delta = self.state.lock().set_pane(pane);
+        self.broadcast(delta);
+    }
+
+    /// Remove one pane by id. An unknown id is a no-op that broadcasts nothing.
+    pub fn drop_pane(&self, id: &str) {
+        let delta = self.state.lock().drop_pane(id);
         self.broadcast(delta);
     }
 
