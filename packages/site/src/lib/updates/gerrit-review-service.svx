@@ -1,0 +1,191 @@
+---
+id: gerrit-review-service
+postedAt: 2026-07-29T07:15:00-07:00
+title: "code review moves to Gerrit, because jj and Gerrit agree about what a review is"
+tags: [ci, infra, review]
+---
+
+There is now a Gerrit Code Review server in the fleet, at `review.ix.dev`,
+reachable only over the tailnet. Forgejo is gone. Neither of those changes what
+gates a merge today: GitHub Actions is still the merge gate, and Gerrit is off
+on every host until the loop has been proven on real changes.
+
+## Why Gerrit rather than another forge
+
+The two models disagree about what a review is. GitHub reviews a branch, so a
+fix during review is another commit and the branch accumulates "address review
+comment" noise. Gerrit reviews a commit, and a corrected version of that commit
+is filed as patch set 2 of the same change.
+
+jj works the same way. A jj change carries an identity that survives being
+rewritten, so amending it leaves it the same change. That is the same idea as
+Gerrit's `Change-Id`, which is why `jj gerrit upload` exists. On GitHub the
+equivalent rewrite is a force-push, and the review thread loses its anchor.
+
+Checked rather than assumed, on hydra:
+
+```
+$ jj --version
+jj 0.43.0
+$ jj gerrit --help
+Interact with Gerrit Code Review
+Commands:
+  upload  Upload changes to Gerrit for code review, or update existing changes
+```
+
+That command arrived in jj 0.34.0 on 2025-10-01 marked experimental, and no
+release between then and 0.43.0 declares it stable. It works by synthesizing a
+Gerrit `Change-Id` footer from the jj change id at push time. Gerrit reading
+jj's native `change-id` git header is designed in a Gerrit design doc and **not
+shipped**; that doc's own status line says no implementation is planned yet. So
+the footer stays load-bearing, and nothing here depends on unshipped work.
+
+## CI parity turned out to be structural
+
+The risk in this was CI. A second review surface usually means a second,
+hand-mirrored job list that drifts from the first.
+
+It does not here, because this repository does not define its checks in YAML.
+Every required check is aggregated into one Nix package, `.#required-ci-checks`,
+with the lint set as `.#ci-lint-checks`. The GitHub workflow is a wrapper that
+shells out to a script that builds them. So a Gerrit-side runner builds **the
+identical derivation**. Add a check and both surfaces get it, because there is
+only one gate.
+
+Two of the gate's own scripts turned out to be forge-agnostic already:
+`check-merge-integrity.sh` takes a plain `BASE HEAD` pair of shas and is called
+both from CI and from a local pre-push hook, and `check-vcfs-freeze.sh` accepts a
+synthetic file list on stdin. Both run against a Gerrit patch set unmodified.
+
+## Not `stream-events`, and not hooks either
+
+For learning about a new patch set, the reconciler polls Gerrit's Changes REST
+API and reconciles against the desired state, which is that every patch set
+carries a `Verified` vote.
+
+`ssh gerrit stream-events` was the obvious choice and is the wrong one: it has
+no replay, so a dropped connection loses everything that fired while it was
+down. Wikimedia phabricator T419009 (2026-03-04) records Zuul losing its stream,
+queuing 1393 events, and permanently losing a couple of thousand, requiring
+patches to be rechecked by hand.
+
+Server-side hooks look like the fix, since they cannot lose a subscription. They
+also fire exactly once with no retry, so a hook whose target is down silently
+never verifies that patch set. Prow, Kubernetes' Gerrit integration, uses
+neither and says so in its docs; it polls with a saved watermark. Polling turns
+"deliver every event" into "make the world match the desired state", which
+self-heals across any downtime and needs no extra Gerrit plugin. The cost is
+latency between upload and the check starting, bounded by the poll interval.
+
+The `checks` plugin, which most Gerrit CI tutorials still recommend, was
+discontinued by the Gerrit team at Google. What survives is a client-side
+JavaScript UI that fetches from your own CI. For a small instance that is
+strictly more work than voting on a label.
+
+## Authentication is a header, so the header has no default
+
+Gerrit's `auth.type = HTTP` takes the username from an HTTP header and trusts it
+completely. There was no shared identity layer for tailnet services here to plug
+into: Grafana runs anonymous-admin, and Forgejo did its own GitHub OAuth login.
+
+So `services.ix.gerrit.auth.identityHeader` ships with **no default**, and
+enabling Gerrit without an identity source fails at eval naming the option. The
+module system enforces that rather than a hand-written assertion, so there is no
+null to coerce and no path that skips it. Proven by breaking it:
+
+```
+error: The option `services.ix.gerrit.auth.identityHeader' was accessed but
+has no value defined. Try setting the option.
+```
+
+The producer is a new loopback service, `ix-tailnet-identity`. It answers nginx
+`auth_request` subrequests by asking the local tailscaled who the connecting
+peer is, and returns either the username or 401 with nothing. It fails closed:
+no fallback identity, no "unknown" account. `auth.httpTrustedProxyNetworks` is
+set to loopback, because a header identity is spoofable by anything that can
+reach Gerrit's port without passing through nginx, and upstream added that
+setting for exactly this. nginx also blanks the header inbound, so a client
+cannot supply its own.
+
+Two details that would have been wrong if guessed at, and were instead read off
+a live host:
+
+- The identity is the **local part** of the tailnet login name, for one domain
+  only. Passing the whole login name would have given Gerrit
+  `andrew@ix.dev@ix.dev` as an account email. Restricting to one domain is what
+  makes the local part unique, and the cost is that a member signing in through
+  another domain cannot authenticate at all.
+- In this tailnet, a **tagged node's** login name is its own MagicDNS name,
+  which reads like a perfectly plausible person. The resolver branches on the
+  node's tags to refuse it.
+
+## Forgejo was already off
+
+The removal is 5436 lines across 64 files: the module, Woodpecker, the Rust
+reconciler, the custom themes, the port claims, the DNS names, a golden-value
+check, and the docs that named them.
+
+It cost nothing to remove because it was already inert. `server.enable`
+defaulted to `false` with a "Decommissioned on the compute fleet" comment, and
+no host overrode it. A 1200-line module was imported onto every host and did
+nothing on any of them.
+
+Two dependency chains went with it, checked rather than assumed: the `pierrejo`
+flake input and the `services.pierre-ssr` service, because Forgejo's module was
+the only consumer of each. The freed ports, 3006, 2222, 3008 and 3009, are left
+unassigned with a comment saying what they used to be. Handing one of them to
+Gerrit in the same change would be a trap for anything holding a stale
+reference.
+
+## Two things this found that were not Gerrit's fault
+
+**A false green in the CI gate.** The required-CI scope map sends everything
+under `nix/modules/` to the Nix-config class. Five cargo workspace members live
+under `nix/modules/`, so a Rust-only change to any of them classified as a
+Nix-config change and skipped the Rust lane entirely. The gate then reported
+green having never compiled the code in front of it. ENG-11247, being fixed by
+deriving the Rust class from the cargo workspace members rather than a
+hand-written path list.
+
+**A DNS mirror that had already drifted.** The set of tailnet-only hostnames is
+written down twice by hand, in the Cloudflare zone and in the fleet's own
+authoritative DNS, with no check that the copies agree. The Gerrit change added
+`review.ix.dev` to the first and not the second, so the name resolved from
+outside the fleet and returned nothing inside it. Lint passed, all 12 node
+toplevels evaluated cleanly, and all three required checks went green. It was
+found because an agent reviewing a different pull request noticed by eye, which
+is a coincidence and not a control.
+
+They had drifted before that: `otel.ix.dev` is in the Cloudflare list only and
+`kpi.ix.dev` in the internal one only. Whether that asymmetry is deliberate is
+an open question, and it blocks the real fix, which is one list both consumers
+derive from. ENG-11249.
+
+## What is not done
+
+- **Nothing has been deployed.** All of this is eval and lint. Gerrit would be
+  this fleet's first JVM service, so its memory behaviour under the cgroup
+  envelope is an estimate; the heap option says so in its own description. A
+  dev-node deploy is the next step before any enable lands.
+- **No backups.** With NoteDb, Gerrit's review history and its repository data
+  are the same blob, so losing one loses both, and nothing ships it off-host.
+  Not urgent while the service is off everywhere; urgent the moment it is
+  enabled. ENG-11245.
+- **The identity resolver has never run against a real tailscaled.** Its
+  protocol facts came from a live host, but the service itself has not.
+- **No replication to GitHub**, and GitHub remains canonical.
+
+## One argument that appeared along the way
+
+This repository's list of required checks does not exist in this repository. It
+is a GitHub ruleset configured outside the tree, with no artifact anyone can
+review, and there is already a workaround in the tree built because it cannot be
+edited from here. We hit it directly: `gh pr merge --admin` is refused on green
+local checks with "3 of 3 required status checks are expected".
+
+Gerrit's equivalent is a `submit-requirement` on the `refs/meta/config` branch.
+In git, in a diff, reviewable, revertible. That is a better property than the jj
+ergonomics that started this, and it holds regardless of which client anyone
+uses.
+
+Tracked as ENG-11215.
