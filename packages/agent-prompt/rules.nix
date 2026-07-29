@@ -544,10 +544,11 @@
     subagentVerification = {
       topics = ["tooling" "verification"];
       text = ''
-        Verification belongs in a context that did not do the work: before
-        calling a change done, spawn a fresh subagent to check it against
-        the requirement and report what it found. Scale it to the change:
-        a one-line fix does not need one.
+        Verification belongs in a context that did not do the work: spawn
+        a fresh subagent to check a change against its requirement when
+        the change spans more than one file, or when you cannot name the
+        failure mode you checked for. Otherwise verify inline and say what
+        you ran.
       '';
       reason = ''
         Requested 2026-07-28 (index#4338): the delegation rules covered
@@ -556,9 +557,12 @@
         convinced itself. The threshold is not decoration: hooks.nix ships
         alwaysOnReview = false because an always-armed Stop gate turned a
         one-line fix into a four-agent fan-out, so an unconditional mandate
-        here would reinstate by prose what that default withholds. Dropped
-        a sentence telling the agent to A/B a fan-out against an inline
-        attempt; experiments gates rollouts behind "only when asked".
+        here would reinstate by prose what that default withholds. It is
+        two checkable conditions rather than "scale it to the change",
+        which is the same judgment-call carve-out defineAcronyms rejects.
+        Dropped a sentence telling the agent to race a fan-out against an
+        inline attempt; experiments gates rollouts behind "only when
+        asked".
       '';
     };
   }
@@ -727,11 +731,12 @@
     defineAcronyms = {
       topics = ["writing"];
       text = ''
-        Expand an acronym, initialism, or coined shorthand at first use, or
-        do not use it: "pressure stall information (PSI)", then PSI after.
-        Only these stay bare:
-        ${bareAcronymList}. Anything else gets expanded even when you are
-        sure the reader knows it.
+        Expand an acronym or coined shorthand at first use, or do not use
+        it: "pressure stall information (PSI)", then PSI after. Only these
+        stay bare:
+        ${bareAcronymList}.
+        Anything else gets expanded even when you are sure the reader
+        knows it.
       '';
       reason = ''
         Requested 2026-07-28, reopening index#1616 (previously closed not
@@ -866,21 +871,19 @@
       text = ''
         Reason from the mechanism, not from precedent: derive what must be
         true from how the system works, then check the established practice
-        against that. Where a decision rests on what the surrounding code
-        already does, name the constraint that produced the pattern and
-        check it still holds; if you cannot name it, say the pattern is
-        unexplained instead of citing it as a reason. Naming and layout
-        conventions are matched, not relitigated.
+        against that. Where a claim about behavior rests on what the
+        surrounding code already does, name the constraint that produced
+        the pattern and check it still holds; if you cannot name it, say
+        the pattern is unexplained instead of citing it as a reason.
       '';
       reason = ''
         Requested 2026-07-28 (index#4338). redesignAtTheRoot covers judging
         a system's shape once you are designing it; this covers the step
         before, where an answer is inherited from the nearest example
         instead of derived. That is how a wrong convention survives every
-        review that only asks whether a change matches its neighbors. The
-        last sentence keeps this off collision course with style ("match
-        nearby style"): the behavioral claim gets derived, the formatting
-        does not.
+        review that only asks whether a change matches its neighbors.
+        Scoped to claims about behavior so it does not collide with style
+        ("match nearby style"), which owns naming and layout.
       '';
     };
   }
