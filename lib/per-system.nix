@@ -2007,14 +2007,18 @@
       claude-plugin = claudePluginDir;
       # CI tools are pinned to the flake's nixpkgs so workflows resolve exact
       # executables with `nix build .#<tool>` instead of trusting runner PATH.
-      # cache-push uses attic/jq/xargs/gh; cve-scan uses curl/jq/tar, and its
-      # PR gate uses node for ratchet-cli.mjs.
       # This avoids depending on a tool being on the runner PATH or a floating
       # `nixpkgs#` registry reference. The self-hosted runner PATH carries
       # coreutils + nix but not findutils, jq, gh, or node, so the bare
-      # commands are `command not found` (cve-scan run 28598889924 died on
-      # exactly that; the regression gate's ratchet step died the same way on
+      # commands are `command not found` (the now-removed cve-scan run
+      # 28598889924 died on exactly that; its ratchet step died the same way on
       # bare `node` in run 29196909666).
+      #
+      # cache-push is the only remaining consumer and uses attic/jq/findutils.
+      # curl, gnutar, igzip-as-gzip, nodejs, coreutils and gh lost their last
+      # workflow consumer when the CVE scan was removed; they stay as ordinary
+      # flake outputs rather than being deleted in that change, tracked in
+      # ENG-11181.
       inherit
         (pkgs)
         attic-client
