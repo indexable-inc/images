@@ -455,11 +455,11 @@
         "rust-overlay": "rust-overlay_2"
       },
       "locked": {
-        "lastModified": 1785214220,
-        "narHash": "sha256-dduwTZkCtmxqNnt9T5/BcJY3ioY7n7RpM5eKzZreB9k=",
+        "lastModified": 1785307788,
+        "narHash": "sha256-u3w3I/fz+pit0Y7RuwDMl78jut2YMzTucKBlvswkMaQ=",
         "owner": "hyperion-mc",
         "repo": "hyperion",
-        "rev": "778cf120fb55751ef1edee4922639ffa7384abba",
+        "rev": "dd8311fe18ab0fb967eb6626d1bd8c9785c3db60",
         "type": "github"
       },
       "original": {
