@@ -22,6 +22,9 @@
 {
   # Product name rendered into identity- and disclosure-bearing rules.
   agentName,
+  # The closed exception list `defineAcronyms` renders and ./default.nix
+  # asserts against, comma-joined.
+  bareAcronymList,
 }: [
   {
     identity = {
@@ -277,7 +280,7 @@
         (assignee or claim comment); if none, post a claim comment naming
         your session, then dispatch. An issue already claimed gets watched,
         not re-dispatched. The kernel's issue-filed feed is off by default
-        (opt-in via IX_MCP_ISSUE_WATCH_OWNERS).
+        (opt-in via `IX_MCP_ISSUE_WATCH_OWNERS`).
       '';
       reason = ''
         Every listening session dispatched its own fixer: ix#8156 got two
@@ -396,14 +399,15 @@
         Fork repos are jj-maintained megamerges: every patch is a commit
         whose parents are its true dependencies, the `ix-patched` bookmark
         sits on the megamerge commit (tree = the full series applied
-        linearly, parents = the DAG heads), and the flake input pins that
-        commit, so consumers never need jj. jj rebases rewrite history, so
-        any rev flake.lock has ever pinned must stay reachable: every
-        bookmark push carries a permanent `refs/pins/<date>-<sha12>` ref in
-        the same operation that bumps the lock. Never push a conflicted jj
-        commit; git readers (GitHub, fetchers) cannot parse jj's conflict
-        encoding. Locally jj is the sanctioned frontend as a colocated
-        clone (`jj git init --colocate`); the remote stays plain git;
+        linearly, parents = the heads of the patch dependency graph), and
+        the flake input pins that commit, so consumers never need jj. jj
+        rebases rewrite history, so any rev flake.lock has ever pinned must
+        stay reachable: every bookmark push carries a permanent
+        `refs/pins/<date>-<sha12>` ref in the same operation that bumps the
+        lock. Never push a conflicted jj commit; git readers (GitHub,
+        fetchers) cannot parse jj's conflict encoding. Locally jj is the
+        sanctioned frontend as a colocated clone
+        (`jj git init --colocate`); the remote stays plain git;
         recover with `jj op log` / `jj op restore`, not reflog spelunking.
         A bare `jj workspace add` workspace has no `.git`, so flake eval
         falls back to the unfiltered path fetcher until the vendored jj
@@ -440,10 +444,10 @@
         dumps. Attach before launching: the user runs Chrome with
         `--remote-debugging-port=9222`, so try `--auto-connect` (or
         `connect 9222`) first and act in their session; launch a fresh
-        browser only when no CDP Chrome answers. Read
-        `agent-browser skills get core` before the first command; the CLI
-        serves guides matched to its own version (`skills list` for
-        electron, slack, dogfood and friends).
+        browser only when no Chrome DevTools Protocol (CDP) instance
+        answers. Read `agent-browser skills get core` before the first
+        command; the CLI serves guides matched to its own version
+        (`skills list` for electron, slack, dogfood and friends).
       '';
       reason = ''
         agent-browser ships in every dev environment (lib/dev/base) and the
@@ -540,19 +544,25 @@
     subagentVerification = {
       topics = ["tooling" "verification"];
       text = ''
-        Verify with a separate agent, not with the context that did the
-        work: after finishing a change, spawn a fresh subagent to check it
-        against the requirement and report what it found. A context that
-        just produced the work shares its blind spots. Where the right
-        decomposition is unclear, run the fan-out and the inline attempt
-        and compare, rather than reasoning about which would have won.
+        Verification belongs in a context that did not do the work: spawn
+        a fresh subagent to check a change against its requirement when
+        the change spans more than one file, or when you cannot name the
+        failure mode you checked for. Otherwise verify inline and say what
+        you ran.
       '';
       reason = ''
         Requested 2026-07-28 (index#4338): the delegation rules covered
         spawning agents to do work and said nothing about spawning them to
-        check it, so verification stayed inside the context that had
-        already convinced itself. Pairs with validate (evidence at the
-        strongest source) and experiments (baseline, one change, compare).
+        check it, so verification stayed in the context that had already
+        convinced itself. The threshold is not decoration: hooks.nix ships
+        alwaysOnReview = false because an always-armed Stop gate turned a
+        one-line fix into a four-agent fan-out, so an unconditional mandate
+        here would reinstate by prose what that default withholds. It is
+        two checkable conditions rather than "scale it to the change",
+        which is the same judgment-call carve-out defineAcronyms rejects.
+        Dropped a sentence telling the agent to race a fan-out against an
+        inline attempt; experiments gates rollouts behind "only when
+        asked".
       '';
     };
   }
@@ -712,7 +722,32 @@
         two rounds of clarification. Three faults in eleven words: a share
         with no denominator, a ratio of a ratio, and "slice" used as though
         it were a defined term. "An eighth of the eval, 12s of 97s" says the
-        same thing and needs no reply (index#4301).
+        same thing and needs no reply (index#4301). The third fault, an
+        undefined coined term, moved to defineAcronyms on 2026-07-28.
+      '';
+    };
+  }
+  {
+    defineAcronyms = {
+      topics = ["writing"];
+      text = ''
+        Expand an acronym or coined shorthand at first use, or do not use
+        it: "pressure stall information (PSI)", then PSI after. Only these
+        stay bare:
+        ${bareAcronymList}.
+        Anything else gets expanded even when you are sure the reader
+        knows it.
+      '';
+      reason = ''
+        Requested 2026-07-28, reopening index#1616 (previously closed not
+        planned): agent prose kept introducing project-local initialisms
+        with no expansion, and a reader outside the originating thread
+        cannot look them up. The exception list is closed and rendered from
+        the same data ./default.nix asserts against, since a "well known
+        enough" carve-out is decided by the same calibration that shipped
+        bare CDP and DAG in this file. readableQuantities owned the
+        coined-shorthand half of this; that sentence moved here so
+        definition-at-first-use is stated once.
       '';
     };
   }
@@ -809,26 +844,6 @@
     };
   }
   {
-    defineAcronyms = {
-      topics = ["writing"];
-      text = ''
-        Expand an acronym, initialism, or coined shorthand at first use and
-        use the short form after: "pressure stall information (PSI)", never
-        a bare `PSI`. This covers every surface you write, including labels
-        you invent for one document. Only forms a general programmer reads
-        without expanding (`CPU`, `HTTP`, `JSON`) stay bare.
-      '';
-      reason = ''
-        Requested 2026-07-28, reopening index#1616 (previously closed not
-        planned): agent prose kept introducing project-local initialisms
-        with no expansion, and a reader outside the originating thread
-        cannot look them up. readableQuantities owned the coined-shorthand
-        half of this; that sentence moved here so definition-at-first-use
-        is stated once.
-      '';
-    };
-  }
-  {
     byteExact = {
       topics = ["writing"];
       text = ''
@@ -852,13 +867,14 @@
   }
   {
     firstPrinciples = {
-      topics = ["agency" "verification"];
+      topics = ["architecture" "agency"];
       text = ''
         Reason from the mechanism, not from precedent: derive what must be
-        true from how the system actually works, then check the established
-        practice against that. A convention, an analogy, or what the
-        surrounding code already does is a hypothesis to test, never an
-        argument for keeping it.
+        true from how the system works, then check the established practice
+        against that. Where a claim about behavior rests on what the
+        surrounding code already does, name the constraint that produced
+        the pattern and check it still holds; if you cannot name it, say
+        the pattern is unexplained instead of citing it as a reason.
       '';
       reason = ''
         Requested 2026-07-28 (index#4338). redesignAtTheRoot covers judging
@@ -866,6 +882,8 @@
         before, where an answer is inherited from the nearest example
         instead of derived. That is how a wrong convention survives every
         review that only asks whether a change matches its neighbors.
+        Scoped to claims about behavior so it does not collide with style
+        ("match nearby style"), which owns naming and layout.
       '';
     };
   }
