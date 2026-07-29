@@ -8,7 +8,7 @@
 // worse than no test, because it argues for changing correct code.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {compile, cronsIn, evaluate, recentFires} from './scheduled-heartbeat.mjs';
+import {compile, cronsIn, evaluate, exemptionIn, recentFires} from './scheduled-heartbeat.mjs';
 
 const MIN = 60 * 1000;
 const NOW = new Date('2026-07-29T11:00:00Z');
@@ -20,9 +20,9 @@ const WEEKLY = '17 4 * * 1';
 
 const fireBack = (cron, n) => recentFires([compile(cron)], n, NOW)[n - 1];
 
-const world = ({cron = HOURLY, state = 'active', created = '2026-01-01T00:00:00Z', run}) => ({
+const world = ({cron = HOURLY, state = 'active', created = '2026-01-01T00:00:00Z', run, accept = ''}) => ({
   workflows: [{path: '.github/workflows/subject.yml', id: 1, state, created_at: created}],
-  readFile: async () => `on:\n  schedule:\n    - cron: "${cron}"\n`,
+  readFile: async () => `on:\n${accept}  schedule:\n    - cron: "${cron}"\n`,
   latestScheduledRun: async () => run,
   now: NOW,
 });
@@ -63,13 +63,15 @@ test('hourly: one missed fire is the slack, not a fault', async () => {
   assert.equal(await reported({run}), false);
 });
 
-test('hourly: five hours of silence is under the jitter floor', async () => {
-  const run = {id: 1, created_at: new Date(NOW - 5 * 60 * MIN).toISOString()};
+test('hourly: twenty hours of silence is under the stale floor', async () => {
+  // Under the floor on purpose. This fails a pull request belonging to someone
+  // who did not cause it, so latency is the cheap side of the trade.
+  const run = {id: 1, created_at: new Date(NOW - 20 * 60 * MIN).toISOString()};
   assert.equal(await reported({run}), false);
 });
 
-test('hourly: seven hours of silence is over the jitter floor', async () => {
-  const run = {id: 1, created_at: new Date(NOW - 7 * 60 * MIN).toISOString()};
+test('hourly: twenty-six hours of silence is over the stale floor', async () => {
+  const run = {id: 1, created_at: new Date(NOW - 26 * 60 * MIN).toISOString()};
   assert.equal(await reported({run}), true);
 });
 
@@ -140,4 +142,60 @@ test('a workflow with no schedule at all is ignored', async () => {
   });
   assert.deepEqual(problems, []);
   assert.equal(checked, 0);
+});
+
+const ACCEPT = (fields) => `  # heartbeat-accepted-stale: ${fields}\n`;
+const dead = {id: 1, created_at: new Date(NOW - 12 * 24 * 60 * MIN).toISOString()};
+
+test('an exemption is parsed into owner, until and reason', () => {
+  const e = exemptionIn('on:\n  # heartbeat-accepted-stale: owner=@a until=2026-08-15 reason=ENG-1\n');
+  assert.equal(e.owner, '@a');
+  assert.equal(e.until, '2026-08-15');
+  assert.equal(e.reason, 'ENG-1');
+  assert.equal(exemptionIn('on:\n  schedule:\n'), null);
+});
+
+test('a live exemption silences a dead cron', async () => {
+  const {problems, skipped} = await evaluate(world({
+    run: dead, accept: ACCEPT('owner=@a until=2026-08-15 reason=ENG-1'),
+  }));
+  assert.deepEqual(problems, []);
+  assert.match(skipped[0], /accepted by @a until 2026-08-15/);
+});
+
+test('a lapsed exemption over a still-dead cron is one finding, not two', async () => {
+  const {problems, expired} = await evaluate(world({
+    run: dead, accept: ACCEPT('owner=@a until=2026-07-01 reason=ENG-1'),
+  }));
+  assert.deepEqual(problems, []);
+  assert.equal(expired.length, 1);
+  assert.match(expired[0], /still not firing, and the acceptance by @a ran out on 2026-07-01/);
+});
+
+test('a lapsed exemption over a recovered cron is not a finding at all', async () => {
+  // Untidy, not a reason to fail somebody's unrelated pull request.
+  const {problems, expired} = await evaluate(world({
+    run: {id: 1, created_at: NOW.toISOString()},
+    accept: ACCEPT('owner=@a until=2026-07-01 reason=ENG-1'),
+  }));
+  assert.deepEqual(problems, []);
+  assert.deepEqual(expired, []);
+});
+
+test('an exemption without an owner or an expiry is rejected', async () => {
+  for (const fields of ['reason=ENG-1', 'owner=@a', 'owner=@a until=soon']) {
+    const {problems} = await evaluate(world({run: dead, accept: ACCEPT(fields)}));
+    assert.equal(problems.length, 1, fields);
+    assert.match(problems[0], /needs `owner=` and `until=YYYY-MM-DD`/);
+  }
+});
+
+test('an exemption does not silence a healthy workflow into a skip', async () => {
+  // Exempt but alive: still skipped rather than checked, which is fine, but it
+  // must not be counted as a problem.
+  const {problems} = await evaluate(world({
+    run: {id: 1, created_at: NOW.toISOString()},
+    accept: ACCEPT('owner=@a until=2026-08-15'),
+  }));
+  assert.deepEqual(problems, []);
 });

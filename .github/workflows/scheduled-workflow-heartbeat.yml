@@ -1,52 +1,38 @@
 name: Scheduled workflow heartbeat
 
-# A scheduled workflow that stops firing looks exactly like one with nothing to
-# do. The reasoning, the measured jitter numbers behind the tolerance, and the
-# cron handling all live in .github/scripts/scheduled-heartbeat.mjs, next to
-# the tests that hold them (scheduled-heartbeat.test.mjs, run by the
-# `scheduled-heartbeat` package's passthru tests).
+# Does every scheduled workflow in this repository still fire? A cron that
+# stops records nothing -- no run, no annotation, no event -- so the only
+# evidence is a hole in a list nobody reads.
 #
-# Deliberately NOT a generalisation of cache-push-watchdog.yml: that one asks
-# whether a specific pipeline has wedged itself on a concurrency group or left
-# its pin behind, which is three lane-specific signals over one workflow. This
-# asks one question of every workflow -- did your cron fire at all -- and
-# derives the list from the workflow files, because a hand-maintained array of
-# workflow names is a list that goes stale, which is the same defect one layer
-# up.
+# This runs on pull requests, not on a schedule, and files no ticket. That is
+# the whole design decision and the reasoning is in
+# .github/scripts/scheduled-heartbeat.mjs: this repository has three separate
+# proofs that a correct, visible, out-of-band alarm changes nothing, and one
+# observation that cost landing on somebody mid-task produces a decision inside
+# a day. Detection was the easy half.
 #
-# Its own liveness. This workflow is itself scheduled, so it cannot report its
-# own death, and a second watchdog watching it is turtles. Instead it also runs
-# on every push to main and includes ITSELF in the sweep, so its dead schedule
-# is caught by an event that is not a schedule -- this repository merges to main
-# many times a day. The residual gap, stated rather than papered over: if main
-# goes quiet AND this workflow's schedule dies, nothing catches either. That is
-# where the turtles stop. An external dead-man's-switch is the only real fix and
-# is not worth a third-party dependency at this size.
+# It also means this workflow has no cron of its own to die silently, which is
+# the self-liveness problem every watchdog otherwise has.
 
 on:
-  schedule:
-    - cron: "7 * * * *"
-  # Not about the commit that triggered it. See "Its own liveness" above: a
-  # non-schedule trigger is what makes this workflow's own cron failure
-  # detectable.
-  push:
+  pull_request:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
-  issues: write
 
 concurrency:
-  group: scheduled-workflow-heartbeat
+  group: scheduled-workflow-heartbeat-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
-    # One API sweep over ~10 workflows, the same shape as the sibling watchdogs
-    # which run well under a minute. 10m floor.
+    # One API sweep over ~10 workflows; the sibling watchdogs of this shape run
+    # well under a minute. 10m floor.
     timeout-minutes: 10
     steps:
       - name: Checkout repository

@@ -27,14 +27,53 @@ export const WINDOW_MINUTES = 21 * 24 * 60;
 //   weekly  median 10080m  max 10090m   (nominal 10080m)
 //
 // GitHub honours crons of an hour or more and drops roughly two fires in three
-// of a `*/15`. Two periods would therefore report `cache-push-watchdog`
-// constantly, and an hourly workflow at its observed 123-minute worst case
-// would trip a 120-minute deadline. A check that cries wolf whenever GitHub is
-// busy is a check people mute, and a muted check is what hid the outage this
-// exists to catch. Six hours clears every observed gap with room and still
-// catches a multi-day stoppage within a working morning; for daily and weekly
-// crons the two-fire rule dominates and the floor never binds.
-export const JITTER_FLOOR_MS = 6 * 60 * 60 * 1000;
+// of a `*/15`. Two periods alone would report `cache-push-watchdog` constantly,
+// and an hourly workflow at its observed 123-minute worst case would trip a
+// 120-minute deadline.
+//
+// Six hours would clear all of that. This is twenty-four, because of where the
+// finding now goes: it fails a pull request belonging to someone who did not
+// cause it. The cost of a false block is a person's afternoon and, worse, the
+// credibility of the check; the cost of eighteen more hours of latency on a
+// dead cron is close to nothing next to the twelve-day outage this exists to
+// catch. When the two are not symmetric, buy the quiet.
+export const STALE_FLOOR_MS = 24 * 60 * 60 * 1000;
+
+// An accepted, dated, owned exemption, declared next to the schedule it
+// excuses:
+//
+//   on:
+//     # heartbeat-accepted-stale: owner=@someone until=2026-08-15 reason=ENG-11184
+//     schedule:
+//       - cron: "*/15 * * * *"
+//
+// This exists because the alternative to a legitimate escape hatch is not
+// compliance, it is someone deleting the check. Three alarms in this repository
+// were correct, visible and ignored; the useful thing a gate can do is convert
+// "ignore it" into "record a decision", which is what today's CVE removal was.
+// So accepting a dead schedule is one line, in the file it is about, carrying a
+// name and an expiry -- and the expiry is enforced, because an exemption that
+// never lapses is a mute button.
+const EXEMPTION = /^\s*#\s*heartbeat-accepted-stale:\s*(.+?)\s*$/;
+
+export const exemptionIn = (source) => {
+  for (const line of source.split('\n')) {
+    const m = EXEMPTION.exec(line);
+    if (!m) continue;
+    const fields = Object.fromEntries(
+      m[1].split(/\s+/).flatMap((pair) => {
+        const at = pair.indexOf('=');
+        return at === -1 ? [] : [[pair.slice(0, at), pair.slice(at + 1)]];
+      }));
+    return {
+      owner: fields.owner || null,
+      until: fields.until || null,
+      reason: fields.reason || null,
+      raw: m[1],
+    };
+  }
+  return null;
+};
 
 // One cron field to the set of values it admits. Handles `*`, `a`, `a-b`, and
 // any of those with a `/step`, comma-joined. Returns null on anything it does
@@ -135,6 +174,7 @@ export const cronsIn = (source) =>
 export async function evaluate({workflows, readFile, latestScheduledRun, now}) {
   const problems = [];
   const skipped = [];
+  const expired = [];
   let checked = 0;
 
   for (const workflow of workflows) {
@@ -168,7 +208,29 @@ export async function evaluate({workflows, readFile, latestScheduledRun, now}) {
       continue;
     }
     const deadline = new Date(
-      Math.min(fireTimes[1].getTime(), now.getTime() - JITTER_FLOOR_MS));
+      Math.min(fireTimes[1].getTime(), now.getTime() - STALE_FLOOR_MS));
+
+    // A live exemption short-circuits before the run query, so an accepted dead
+    // cron costs nothing. A lapsed one does NOT short-circuit and does not
+    // report on its own either: it only matters if the thing it excused is
+    // still broken, so it changes what the staleness finding says rather than
+    // adding a second one beside it. An exemption that lapsed after the
+    // workflow recovered is untidy, not a reason to fail somebody's pull
+    // request.
+    let lapsed = null;
+    const excuse = exemptionIn(source);
+    if (excuse) {
+      const until = excuse.until ? Date.parse(`${excuse.until}T23:59:59Z`) : NaN;
+      if (!excuse.owner || Number.isNaN(until)) {
+        problems.push(`\`${workflow.path}\`: heartbeat-accepted-stale needs \`owner=\` and \`until=YYYY-MM-DD\`, got \`${excuse.raw}\``);
+        continue;
+      }
+      if (until >= now.getTime()) {
+        skipped.push(`\`${workflow.path}\`: staleness accepted by ${excuse.owner} until ${excuse.until}${excuse.reason ? ` (${excuse.reason})` : ''}`);
+        continue;
+      }
+      lapsed = excuse;
+    }
 
     // Younger than the deadline: it has not had two chances yet. Not a fault,
     // but say so rather than counting it as healthy.
@@ -180,18 +242,53 @@ export async function evaluate({workflows, readFile, latestScheduledRun, now}) {
     const latest = await latestScheduledRun(workflow);
     checked += 1;
     const iso = deadline.toISOString();
-    if (!latest) {
-      problems.push(`\`${workflow.path}\`: no scheduled run has ever been recorded, and its cron has fired at least twice (most recently ${iso})`);
-    } else if (Date.parse(latest.created_at) < deadline.getTime()) {
-      problems.push(`\`${workflow.path}\`: cron has come round twice with nothing since. Last scheduled run ${latest.created_at} ([${latest.id}](${latest.html_url})), expected one at or after ${iso}`);
+    const stale = !latest || Date.parse(latest.created_at) < deadline.getTime();
+    if (!stale) continue;
+
+    const detail = latest
+      ? `last scheduled run ${latest.created_at} ([${latest.id}](${latest.html_url})), expected one at or after ${iso}`
+      : `no scheduled run has ever been recorded, and its cron has fired at least twice (most recently ${iso})`;
+    if (lapsed) {
+      expired.push(`\`${workflow.path}\`: still not firing, and the acceptance by ${lapsed.owner} ran out on ${lapsed.until}${lapsed.reason ? ` (${lapsed.reason})` : ''} -- ${detail}`);
+    } else {
+      problems.push(`\`${workflow.path}\`: ${detail}`);
     }
   }
 
-  return {problems, skipped, checked};
+  return {problems, skipped, expired, checked};
 }
 
-export const MARKER = '<!-- scheduled-workflow-heartbeat -->';
-
+// Where the finding goes, which is the hard half.
+//
+// Detection is easy; being read is not. This repository has three proofs that
+// a correct, visible alarm changes nothing:
+//
+//   - fork-sync failed for four days, red on every run, logs legible. It was
+//     found by an agent watching #4032's post-merge CI for another reason.
+//   - The CVE watchdog failed 100+ consecutive times, correctly, filing and
+//     updating #3834 hourly for eight days. Nothing happened until someone was
+//     told to go and look.
+//   - #4045 and #4276 are the same root cause filed six days apart. The second
+//     spells out that an org owner must grant one permission, and it is still
+//     open.
+//
+// The Actions tab and the issue tracker are both channels this repository has
+// learned to ignore, and the third proof rules out "write a better ticket" as
+// the fix. So this files nothing and sets no scheduled red. It runs on pull
+// requests and fails the check there, because the one thing observed to produce
+// a decision inside a day is cost landing on somebody who is already trying to
+// get something done -- the CVE ratchet was measured and turned off within a day
+// of costing 2,465s per PR, while the watchdog's ticket sat for eight.
+//
+// Honest about the decay mode: that decision may well be "disable this". A
+// legitimate, owned, dated exemption is therefore built in, so the cheap move
+// is recording the acceptance rather than deleting the gate. Converting
+// "ignore" into "a decision with a name on it" is the most this mechanism can
+// honestly claim, and it is what today's CVE removal was.
+//
+// Running on pull_request also removes the turtle problem: a heartbeat with no
+// cron of its own has no schedule that can silently die. If nobody is opening
+// pull requests, nobody is working, and a stale cron is not the urgent thing.
 export default async function heartbeat({github, context, core}) {
   const fs = await import('node:fs/promises');
   const {owner, repo} = context.repo;
@@ -199,7 +296,7 @@ export default async function heartbeat({github, context, core}) {
   const workflows = await github.paginate(
     github.rest.actions.listRepoWorkflows, {owner, repo, per_page: 100});
 
-  const {problems, skipped, checked} = await evaluate({
+  const {problems, skipped, expired, checked} = await evaluate({
     workflows,
     now: new Date(),
     readFile: (p) => fs.readFile(p, 'utf8'),
@@ -213,59 +310,43 @@ export default async function heartbeat({github, context, core}) {
 
   for (const note of skipped) core.notice(`heartbeat skipped ${note}`);
 
-  // Filtered by label rather than sweeping every issue: this runs hourly AND
-  // on every push to main, and an unfiltered `state: 'all'` paginate is ~60
-  // calls a time to read one bit.
-  const issues = await github.rest.issues.listForRepo({
-    owner, repo, state: 'all', labels: 'github_actions', per_page: 100,
-  });
-  const issue = issues.data.find((candidate) =>
-    !candidate.pull_request && (candidate.body || '').includes(MARKER));
-
-  if (problems.length === 0) {
-    if (issue && issue.state === 'open') {
-      await github.rest.issues.createComment({
-        owner, repo, issue_number: issue.number,
-        body: `Every scheduled workflow has fired within its own period again (${checked} checked). Closing automatically.\n\n(sent by the scheduled workflow heartbeat)`,
-      });
-      await github.rest.issues.update({
-        owner, repo, issue_number: issue.number, state: 'closed',
-      });
-    }
+  const findings = [...problems, ...expired];
+  if (findings.length === 0) {
     core.notice(`${checked} scheduled workflows checked, all firing`);
     return;
   }
 
-  const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
-  const body = [
-    MARKER,
-    '## A scheduled workflow has stopped firing',
-    '',
-    'Each entry below has had its cron come round at least twice, and at least',
-    'six hours pass, with no scheduled run since. GitHub records nothing when a',
-    'cron does not fire, so this is the only signal there is.',
-    '',
-    ...problems.map((p) => `- ${p}`),
-    '',
-    ...(skipped.length ? ['Not decidable this run:', '', ...skipped.map((s) => `- ${s}`), ''] : []),
-    `Observed by the scheduled workflow heartbeat: ${runUrl}`,
-    '',
-    'The cause of the twelve-day outage that motivated this check is still',
-    'unexplained; see ENG-11174.',
-    '',
-    '(sent by the scheduled workflow heartbeat)',
-  ].join('\n');
+  // Written to the step summary as well as the failure, so the detail is on the
+  // PR's checks page rather than only inside a log nobody opens.
+  await core.summary
+    .addHeading('A scheduled workflow has stopped firing')
+    .addRaw([
+      'This is **not about your change.** A cron in this repository has not fired',
+      'for at least a day, and this check runs on pull requests because that is the',
+      'only place a finding in this repository has ever been acted on.',
+      '',
+      ...findings.map((f) => `- ${f}`),
+      '',
+      'Clear it by doing one of these:',
+      '',
+      '1. Fix the workflow, or re-dispatch it and confirm the schedule resumes.',
+      '2. Delete its `schedule:` trigger if it should not be running.',
+      '3. Accept it, in the workflow file, next to the schedule:',
+      '',
+      '   ```yaml',
+      '   on:',
+      '     # heartbeat-accepted-stale: owner=@you until=2026-08-15 reason=ENG-1234',
+      '     schedule:',
+      '       - cron: "..."',
+      '   ```',
+      '',
+      'The expiry is enforced. An exemption that has lapsed is reported the same',
+      'way a dead cron is, so accepting is a decision with a name and a date on it',
+      'rather than a mute button.',
+    ].join('\n'))
+    .write();
 
-  if (issue) {
-    await github.rest.issues.update({
-      owner, repo, issue_number: issue.number, body,
-      ...(issue.state === 'closed' ? {state: 'open'} : {}),
-    });
-  } else {
-    await github.rest.issues.create({
-      owner, repo, title: 'A scheduled workflow has stopped firing',
-      body, labels: ['bug', 'github_actions'],
-    });
-  }
-  core.setFailed(`${problems.length} scheduled workflow(s) have stopped firing`);
+  core.setFailed(
+    `${findings.length} scheduled workflow(s) have stopped firing (not caused by this PR): ` +
+    findings.map((f) => f.split(':')[0]).join(', '));
 }
