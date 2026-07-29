@@ -37,6 +37,7 @@ in {
     casks = [
       "1password-cli"
       "beeper"
+      "cardhop"
       "chatgpt"
       "chatgpt-atlas"
       "claude"
