@@ -31,14 +31,33 @@ defmodule IxMcp.FleetAlertsTest do
     "peak_rss_gb" => 1.69
   }
 
+  # One CI job that absorbed kernel OOM kills and reported green anyway, shaped
+  # like the real rows: on 2026-07-26 three `push (shard N)` jobs on
+  # vin-compute-1 did exactly this and all reported success.
+  @ci_oom_row %{
+    "node_id" => "vin-compute-1",
+    "comm" => "nix-eval-jobs",
+    "kills" => 9,
+    "job_names" => ["push (shard 0)", "push (shard 1)", "push (shard 2)"],
+    "units" => ["ix-ci-job-index-30185401611-89749023189.service"],
+    "conclusions" => ["success"]
+  }
+
   # A stub standing in for ClickHouse: answers the kernel_storage query with
   # rows and everything else with none, so exactly one predicate fires.
   defp only_kernel_storage(sql) do
     if String.contains?(sql, "journald_logs"), do: {:ok, [@xfs_row]}, else: {:ok, []}
   end
 
+  # Both OOM predicates read logs.oom_kills, so the table name does not
+  # identify either. The burst query is the one that buckets by hour; the CI
+  # query is the one that joins kpi.ci_jobs.
   defp only_oom(sql) do
-    if String.contains?(sql, "oom_kills"), do: {:ok, [@oom_row]}, else: {:ok, []}
+    if String.contains?(sql, "toStartOfHour"), do: {:ok, [@oom_row]}, else: {:ok, []}
+  end
+
+  defp only_ci_oom(sql) do
+    if String.contains?(sql, "kpi.ci_jobs"), do: {:ok, [@ci_oom_row]}, else: {:ok, []}
   end
 
   defp quiet_fleet(_sql), do: {:ok, []}
@@ -81,6 +100,25 @@ defmodule IxMcp.FleetAlertsTest do
       assert_received {:announced, [^hit]}
     end
 
+    test "a CI job that absorbed OOM kills and reported success is named loudly", %{log: log} do
+      result =
+        Watch.run_poll("warning",
+          query_fun: &only_ci_oom/1,
+          action_log: log,
+          notify: fn _ -> :ok end
+        )
+
+      assert [hit] = result.announced
+      assert hit.predicate == "ci_oom_success"
+      assert hit.level == "critical"
+      assert hit.summary =~ "reported SUCCESS"
+      assert hit.summary =~ "push (shard 0)"
+      # The attribution caveat travels with the alert rather than living only in
+      # a moduledoc, because the reader has to know 9 is distinct kills and the
+      # job list is candidates.
+      assert hit.summary =~ "attribution is by unit lifetime"
+    end
+
     test "a quiet fleet announces nothing at all", %{log: log} do
       me = self()
 
@@ -118,7 +156,7 @@ defmodule IxMcp.FleetAlertsTest do
 
       # Same predicate, new hour bucket: a fresh burst, so it is news.
       next_hour = fn sql ->
-        if String.contains?(sql, "oom_kills"),
+        if String.contains?(sql, "toStartOfHour"),
           do: {:ok, [%{@oom_row | "hour" => "2026-07-26 04:00:00"}]},
           else: {:ok, []}
       end

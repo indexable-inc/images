@@ -45,6 +45,7 @@ defmodule IxMcp.Fleet.Watch do
   alias IxMcp.ActionLog
   alias IxMcp.Fleet.Alerts
   alias IxMcp.Fleet.ClickHouse
+  alias IxMcp.Fleet.Digest
   alias IxMcp.MCP.Notifier
 
   # Fleet faults are minutes-scale, and every poll is an ssh round trip to the
@@ -70,10 +71,54 @@ defmodule IxMcp.Fleet.Watch do
   @spec poll_now() :: %{announced: [map()], suppressed: non_neg_integer(), errors: [String.t()]}
   def poll_now, do: GenServer.call(__MODULE__, :poll_now, 120_000)
 
+  # Default digest period. 60s is the operator's opening suggestion, and the
+  # measurement in IxMcp.Fleet.Digest supports it: the median minute carries 33
+  # notable lines, which is a readable one-liner. It is settable because 87.1%
+  # of minutes are non-empty, so this default costs roughly 1,250 lines a day
+  # and whoever pays that should be able to change it.
+  @default_digest_s Application.compile_env(:ix_mcp, :fleet_digest_period_s, 60)
+
+  @doc """
+  Build and send a digest now, returning what was sent. `{:ok, nil}` means the
+  window was empty and nothing was said.
+  """
+  @spec digest_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def digest_now, do: GenServer.call(__MODULE__, :digest_now, 120_000)
+
+  @doc """
+  Change the digest period, in seconds. Minimum 10s -- below that the query
+  cost stops being negligible and the line stops being readable.
+  """
+  @spec set_digest_period(pos_integer()) :: :ok | {:error, String.t()}
+  def set_digest_period(seconds) when is_integer(seconds) do
+    if seconds >= 10 do
+      GenServer.cast(__MODULE__, {:digest_period, seconds})
+    else
+      {:error, "digest period must be at least 10s, got #{seconds}"}
+    end
+  end
+
+  @doc "The current digest period in seconds, and the last window summarised."
+  @spec digest_state() :: %{period_s: pos_integer(), last: map() | nil}
+  def digest_state, do: GenServer.call(__MODULE__, :digest_state)
+
+  # Whether the timers are armed. The process always starts -- callers need the
+  # level and digest-period state, and the tests drive run_poll/2 and
+  # run_digest/2 directly -- but polling is off in the test environment and in
+  # any sandboxed build, because a poll is an ssh to a production host. A test
+  # suite that reaches out to hil-compute-2 is wrong whether or not it passes,
+  # and in a nix build it would fail with no network and read as a fleet
+  # outage.
+  @poll_enabled Application.compile_env(:ix_mcp, :fleet_watch_enabled, true)
+
   @impl true
   def init(_opts) do
-    Process.send_after(self(), :poll, @initial_delay_ms)
-    {:ok, %{level: "warning"}}
+    if @poll_enabled do
+      Process.send_after(self(), :poll, @initial_delay_ms)
+      Process.send_after(self(), :digest, @initial_delay_ms + 5_000)
+    end
+
+    {:ok, %{level: "warning", digest_s: @default_digest_s, last_digest: nil}}
   end
 
   @doc """
@@ -92,11 +137,26 @@ defmodule IxMcp.Fleet.Watch do
   @impl true
   def handle_cast({:set_level, level}, state), do: {:noreply, %{state | level: level}}
 
+  def handle_cast({:digest_period, seconds}, state),
+    do: {:noreply, %{state | digest_s: seconds}}
+
   @impl true
   def handle_call(:level, _from, state), do: {:reply, state.level, state}
 
   def handle_call(:poll_now, _from, state) do
     {:reply, run_poll(state.level), state}
+  end
+
+  def handle_call(:digest_state, _from, state) do
+    {:reply, %{period_s: state.digest_s, last: state.last_digest}, state}
+  end
+
+  def handle_call(:digest_now, _from, state) do
+    case run_digest(state.digest_s) do
+      {:ok, nil} -> {:reply, {:ok, nil}, state}
+      {:ok, digest} -> {:reply, {:ok, digest}, %{state | last_digest: digest}}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
@@ -106,7 +166,94 @@ defmodule IxMcp.Fleet.Watch do
     {:noreply, state}
   end
 
+  def handle_info(:digest, state) do
+    state =
+      case run_digest(state.digest_s) do
+        {:ok, nil} -> state
+        {:ok, digest} -> %{state | last_digest: digest}
+        # A digest that could not be read is announced by the alert path's
+        # observability_blind predicate, not twice from here.
+        {:error, _reason} -> state
+      end
+
+    Process.send_after(self(), :digest, state.digest_s * 1_000)
+    {:noreply, state}
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
+
+  # -- digest ------------------------------------------------------------------
+
+  @doc """
+  Build one digest and announce it unless muted. Public for the same reason
+  `run_poll/2` is: the suppression and anomaly behaviour has to be testable
+  without a broken fleet to hand.
+  """
+  @spec run_digest(pos_integer(), keyword()) :: {:ok, map() | nil} | {:error, String.t()}
+  def run_digest(period_s, opts \\ []) do
+    query_fun = Keyword.get(opts, :query_fun, &ClickHouse.query/1)
+    log = Keyword.get(opts, :action_log, ActionLog)
+    notify = Keyword.get(opts, :notify, &announce_digest/1)
+
+    muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
+
+    if "digest" in muted do
+      {:ok, nil}
+    else
+      with {:ok, digest} when digest != nil <- Digest.build(period_s, query_fun) do
+        emit(drop_muted_levels(digest, muted), notify)
+      end
+    end
+  end
+
+  # Dropping every counted level leaves nothing to say, and a line reading
+  # "0 notable" every minute is the thing mutes exist to stop.
+  defp emit(%{total: 0}, _notify), do: {:ok, nil}
+
+  defp emit(digest, notify) do
+    notify.(digest)
+    {:ok, digest}
+  end
+
+  # Per-category mute: "digest:warning" removes warnings from the count rather
+  # than silencing the whole line, which is what the operator asked for when
+  # they said mute a category inside it.
+  defp drop_muted_levels(digest, muted) do
+    dropped =
+      for "digest:" <> level <- muted, level != "", into: MapSet.new() do
+        if level == "warning", do: "warn", else: level
+      end
+
+    counts = Map.reject(digest.counts, fn {level, _n} -> MapSet.member?(dropped, level) end)
+    %{digest | counts: counts, total: counts |> Map.values() |> Enum.sum()}
+  end
+
+  # An anomalous minute is rendered loudly, a boring one quietly, and the
+  # distinction is in `severity` so a harness can style them differently. The
+  # boring case is meant to become furniture -- that is what makes the
+  # anomalous one visible -- so it stays to one line with no hint text. The
+  # pointers only appear when there is something to point at.
+  defp announce_digest(digest) do
+    severity = if digest.anomalies == [], do: "info", else: "failure"
+
+    content =
+      case digest.anomalies do
+        [] ->
+          "fleet: " <> Digest.render(digest)
+
+        _marked ->
+          "fleet: " <>
+            Digest.render(digest) <>
+            "\nFleet.digest() expands this window; Fleet.mute(\"digest\") or " <>
+            "Fleet.mute(\"digest:warning\") stops it."
+      end
+
+    Notifier.channel(content, %{
+      "source" => "fleet_digest",
+      "severity" => severity,
+      "total" => Integer.to_string(digest.total)
+    })
+  end
 
   # -- polling -----------------------------------------------------------------
 

@@ -24,4 +24,9 @@ if config_env() == :test do
   # load, so it is not arbitrarily small.
   config :ix_mcp, notify_coalesce_ms: 150
   config :ix_mcp, watch_poll_ms: 100
+  # The fleet watcher polls ClickHouse over ssh (ENG-11209). Tests drive
+  # Watch.run_poll/2 and Watch.run_digest/2 directly with stubbed queries; the
+  # timers stay disarmed so no test reaches a production host, and so the
+  # sandboxed nix check does not read a missing network as a fleet outage.
+  config :ix_mcp, fleet_watch_enabled: false
 end

@@ -30,18 +30,33 @@ defmodule IxMcp.MCP.Tools do
                                             session's finishes here (own jobs
                                             already announce; session ids:
                                             Sessions.list())
-      Fleet.check()                         poll the fleet for alert conditions now;
-                                            .errors non-empty means part of it
-                                            could NOT be read, which is not the
-                                            same as healthy
-      Fleet.mute("oom_burst")               UNSUBSCRIBE: silence one fleet alert
-                                            durably (survives reconnect) when it
-                                            is spamming you; Fleet.unmute/1 undoes
-                                            it, Fleet.alerts() shows what is muted
-                                            and what is standing, and the MCP
+      Fleet.digest()                        expand the last per-minute fleet digest
+                                            into what it counted (host, level, unit,
+                                            sample message)
+      Fleet.digest_period()                 read the digest period; pass seconds to
+                                            change it (default 60, minimum 10). The
+                                            median fleet minute holds 33 warning-or-
+                                            worse lines and 87% of minutes are
+                                            non-empty, so 60s is ~1,250 lines/day
+      Fleet.check()                         poll for discrete alert conditions now;
+                                            .errors non-empty means part of the
+                                            fleet could NOT be read, which is not
+                                            the same as healthy
+      Fleet.mute("digest")                  UNSUBSCRIBE, three granularities, all
+                                            durable across reconnects:
+                                              "digest"          the per-minute line
+                                              "digest:warning"  one category inside
+                                                                it (also error, crit,
+                                                                alert, emerg)
+                                              "oom_burst"       one discrete alert
+                                            Fleet.unmute/1 undoes any of them,
+                                            Fleet.mutable() lists them all, and
+                                            Fleet.alerts() shows what is muted plus
+                                            what is standing. The MCP
                                             logging/setLevel request raises the
-                                            level floor for all of them at once.
-                                            Ids: kernel_storage, oom_burst,
+                                            severity floor for discrete alerts in
+                                            one go. Discrete ids: kernel_storage,
+                                            ci_oom_success, oom_burst,
                                             observability_blind
       Fleet.topology()                      which hosts the BEAM is on (also in
                                             this server's connect instructions)

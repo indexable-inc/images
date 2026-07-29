@@ -109,10 +109,34 @@ defmodule IxMcp.Fleet.Alerts do
   # userspace process logging the word "corruption" cannot fire this, and
   # signatures to filesystem and block-layer damage -- the class where the
   # kernel is telling you the disk lost data, not that an application is sad.
+  # Recency is part of the predicate, not the reader's job (ENG-11210). A
+  # 24-hour lookback surfaced a five-hour-old finished operation as a live
+  # incident. The window is now the recent past only.
+  #
+  # `device` is extracted and carried into the notification because "XFS
+  # corruption on hil-compute-2" and "XFS corruption on a detached loopback
+  # volume somebody was inspecting" are the same log line and different events.
+  #
+  # Two suppressions, both from that false alarm:
+  #
+  #  * Transient devices are excluded. loop*, nbd*, dm-* are disk images,
+  #    network block devices and device-mapper targets -- guest volumes and
+  #    inspection mounts. A host filesystem lives on sd*, nvme*, vd* or md*.
+  #  * A device is dropped when the same window contains a `no-recovery` mount
+  #    of it. That phrase is an operator saying "I know this is broken and I am
+  #    looking at it anyway", and the corruption lines that follow are its
+  #    consequence rather than news.
   @kernel_storage_sql """
-  SELECT node_id, level, message
+  WITH deliberate AS (
+    SELECT DISTINCT node_id, extract(message, 'XFS \\\\(([a-z0-9-]+)\\\\)') AS device
+    FROM logs.journald_logs
+    WHERE timestamp > now() - INTERVAL 30 MINUTE
+      AND message LIKE '%no-recovery mode%'
+  )
+  SELECT node_id, level, message,
+         extract(message, '\\\\(([a-z0-9-]+)\\\\)') AS device
   FROM logs.journald_logs
-  WHERE timestamp > now() - INTERVAL 24 HOUR
+  WHERE timestamp > now() - INTERVAL 15 MINUTE
     AND level IN ('alert', 'emerg')
     AND systemd_unit = ''
     AND (
@@ -121,6 +145,10 @@ defmodule IxMcp.Fleet.Alerts do
       OR match(message, '(?i)(I/O error, dev [a-z0-9]+, sector)')
       OR match(message, '(?i)md/raid[0-9]*: (Disk failure|too many failures)')
     )
+    -- Host storage only: loop/nbd/dm are images, guest volumes and mapper
+    -- targets, and none of them is this host's filesystem degrading.
+    AND NOT match(message, '\\\\((loop|nbd|dm-)[0-9]+\\\\)')
+    AND (node_id, extract(message, '\\\\(([a-z0-9-]+)\\\\)')) NOT IN (SELECT node_id, device FROM deliberate)
   ORDER BY timestamp
   LIMIT 200
   """
@@ -148,9 +176,63 @@ defmodule IxMcp.Fleet.Alerts do
   LIMIT 100
   """
 
+  # The predicate the operator named as already justified: a CI job absorbed
+  # kernel OOM kills and reported success anyway.
+  #
+  # `logs.oom_kills` has no cgroup column and `raw_message` carries none
+  # either ("Memory cgroup out of memory: Killed process ..." and nothing about
+  # which memcg), so "the victim is in an ix-ci-job-* cgroup" is not directly
+  # expressible. Correlating on host and time alone is worthless: CI runs on
+  # these hosts essentially always, so 21 of 22 kills have a CI job nearby and
+  # the test discriminates nothing.
+  #
+  # What does work is job identity. `metrics.systemd_unit_health` carries the
+  # cgroup and the unit name embeds the GitHub job id
+  # (ix-ci-job-<repo>-<run>-<job>.service), so a kill inside a unit's observed
+  # lifetime can be joined to `kpi.ci_jobs.conclusion`. The signal is then not
+  # "an OOM happened" but "an OOM happened inside a job that reported success",
+  # which is the thing nobody can currently see.
+  #
+  # The attribution caveat, stated because it changes how the result reads:
+  # several CI units run concurrently on one host, and a kill inside the
+  # lifetime of four of them is attributed to all four. So the notification
+  # reports the DISTINCT kill count and the candidate job set, never a per-job
+  # count -- summing per-job attributions turns 10 real kills into 57.
+  @ci_oom_success_sql """
+  WITH ci_units AS (
+    SELECT node, unit,
+           toUInt64OrZero(extract(unit, '-(\\\\d+)\\\\.service$')) AS gh_job_id,
+           min(timestamp) AS first_seen, max(timestamp) AS last_seen
+    FROM metrics.systemd_unit_health
+    WHERE unit LIKE 'ix-ci-job-%' AND timestamp > now() - INTERVAL 6 HOUR
+    GROUP BY node, unit, gh_job_id
+  ),
+  kills AS (
+    SELECT timestamp, node_id, comm
+    FROM logs.oom_kills
+    WHERE timestamp > now() - INTERVAL 2 HOUR
+      AND signal = 'CGROUP_OOM'
+      AND comm NOT LIKE 'vhost-%'
+  )
+  SELECT k.node_id AS node_id,
+         k.comm AS comm,
+         countDistinct(k.timestamp) AS kills,
+         groupUniqArray(j.job_name) AS job_names,
+         groupUniqArray(u.unit) AS units,
+         groupUniqArray(j.conclusion) AS conclusions
+  FROM kills AS k
+  INNER JOIN ci_units AS u ON u.node = k.node_id
+     AND k.timestamp BETWEEN u.first_seen AND u.last_seen
+  INNER JOIN kpi.ci_jobs AS j ON j.job_id = u.gh_job_id
+  WHERE j.conclusion = 'success'
+  GROUP BY node_id, comm
+  ORDER BY kills DESC
+  LIMIT 20
+  """
+
   @doc "Every predicate id in the catalog, for validating a mute request."
   @spec ids() :: [String.t()]
-  def ids, do: ["kernel_storage", "oom_burst", "observability_blind"]
+  def ids, do: ["kernel_storage", "ci_oom_success", "oom_burst", "observability_blind"]
 
   @doc """
   The level each predicate reports at, as an RFC 5424 name.
@@ -161,6 +243,9 @@ defmodule IxMcp.Fleet.Alerts do
   """
   @spec level(String.t()) :: String.t()
   def level("kernel_storage"), do: "critical"
+  # A job that reported green while the kernel killed things inside it is a
+  # lie in the CI record, which is worse than a job that failed loudly.
+  def level("ci_oom_success"), do: "critical"
   def level("oom_burst"), do: "warning"
   def level("observability_blind"), do: "warning"
 
@@ -178,6 +263,7 @@ defmodule IxMcp.Fleet.Alerts do
     reads =
       %{
         "kernel_storage" => {@kernel_storage_sql, &kernel_storage_hit/1},
+        "ci_oom_success" => {@ci_oom_success_sql, &ci_oom_success_hit/1},
         "oom_burst" => {@oom_burst_sql, &oom_burst_hit/1}
       }
       |> Map.drop(muted)
@@ -224,14 +310,39 @@ defmodule IxMcp.Fleet.Alerts do
   defp kernel_storage_hit(row) do
     node = row["node_id"]
     message = row["message"] || ""
+    device = row["device"] || "?"
 
     %{
       level: level("kernel_storage"),
-      # Deliberately not keyed on the day or the timestamp: a disk that is
-      # still corrupt tomorrow is the same news, and re-announcing it daily is
-      # how a channel earns its mute. Clear it with Fleet.forget/1.
-      fingerprint: "kernel_storage:#{node}:#{hash(normalize(message))}",
-      summary: "#{node}: #{String.slice(message, 0, 220)}"
+      # Keyed on the device, not just the host, and deliberately not on the day:
+      # a disk still corrupt tomorrow is the same news, and re-announcing it
+      # daily is how a channel earns its mute. Clear it with Fleet.forget/1.
+      fingerprint: "kernel_storage:#{node}:#{device}:#{hash(normalize(message))}",
+      summary: "#{node} device #{device}: #{String.slice(message, 0, 200)}"
+    }
+  end
+
+  defp ci_oom_success_hit(row) do
+    node = row["node_id"]
+    comm = row["comm"]
+    jobs = row["job_names"] |> List.wrap() |> Enum.reject(&(&1 in [nil, ""])) |> Enum.sort()
+    kills = row["kills"]
+
+    named =
+      case jobs do
+        [] -> "job name unresolved"
+        names -> Enum.join(names, ", ")
+      end
+
+    %{
+      level: level("ci_oom_success"),
+      # Keyed on the job set rather than a time bucket: the same jobs still
+      # showing kills on the next poll is the same news, a different job is not.
+      fingerprint: "ci_oom_success:#{node}:#{comm}:#{hash(Enum.join(jobs, ","))}",
+      summary:
+        "#{node}: #{kills} CGROUP_OOM kill(s) of #{comm} inside CI job(s) that reported SUCCESS " <>
+          "-- #{named} (candidate jobs; concurrent units mean attribution is by unit lifetime, " <>
+          "not by cgroup)"
     }
   end
 

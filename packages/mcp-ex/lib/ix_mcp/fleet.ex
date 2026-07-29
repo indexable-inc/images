@@ -52,6 +52,7 @@ defmodule IxMcp.Fleet do
 
   alias IxMcp.ActionLog
   alias IxMcp.Fleet.Alerts
+  alias IxMcp.Fleet.Digest
   alias IxMcp.Fleet.Topology
   alias IxMcp.Fleet.Watch
 
@@ -108,7 +109,7 @@ defmodule IxMcp.Fleet do
   """
   @spec mute(String.t(), String.t() | nil) :: :ok | {:error, String.t()}
   def mute(predicate, reason \\ nil) when is_binary(predicate) do
-    if predicate in Alerts.ids() do
+    if predicate in mutable() do
       case ActionLog.mute_fleet_predicate(predicate, reason) do
         :disabled ->
           {:error,
@@ -119,9 +120,22 @@ defmodule IxMcp.Fleet do
           :ok
       end
     else
-      known = Enum.join(Alerts.ids(), ", ")
+      known = Enum.join(mutable(), ", ")
       {:error, "unknown predicate #{inspect(predicate)}; known: #{known}"}
     end
+  end
+
+  @doc """
+  Everything that can be muted: each discrete alert predicate, the whole
+  digest, and one severity category inside the digest. Three granularities
+  because they answer different asks -- "this specific alarm is wrong", "stop
+  the per-minute line", and "the line is fine but I do not care about
+  warnings".
+  """
+  @spec mutable() :: [String.t()]
+  def mutable do
+    Alerts.ids() ++
+      ["digest"] ++ for(level <- ~w(warning error crit alert emerg), do: "digest:" <> level)
   end
 
   @doc """
@@ -150,6 +164,38 @@ defmodule IxMcp.Fleet do
       level: Watch.level()
     }
   end
+
+  @doc """
+  Expand the last digest into what was actually counted: the top host, level
+  and unit combinations in that exact window, with a sample message each.
+
+  The digest line is a pointer, not the content. Without this, getting curious
+  means writing ClickHouse by hand at precisely the moment attention is
+  available.
+  """
+  @spec digest() :: {:ok, [map()]} | {:error, String.t()}
+  def digest, do: expand(Watch.digest_state())
+
+  defp expand(%{last: nil}),
+    do: {:error, "no digest has been sent yet; Fleet.digest_now() builds one"}
+
+  defp expand(%{last: %{from: from, to: to}}), do: Digest.detail(from, to)
+
+  @doc "Build and send a digest immediately. `{:ok, nil}` if the window is empty."
+  @spec digest_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def digest_now, do: Watch.digest_now()
+
+  @doc """
+  Read or set the digest period in seconds (default 60, minimum 10).
+
+  The default is not a measured optimum, it is the operator's opening
+  suggestion supported by one number: the median minute across the fleet
+  carries 33 warning-or-worse lines. 87.1% of minutes are non-empty, so 60s
+  costs roughly 1,250 digest lines a day.
+  """
+  @spec digest_period(pos_integer() | nil) :: pos_integer() | :ok | {:error, String.t()}
+  def digest_period(nil), do: Watch.digest_state().period_s
+  def digest_period(seconds) when is_integer(seconds), do: Watch.set_digest_period(seconds)
 
   @doc """
   Forget standing alerts so they announce again: `:all`, or one predicate id.
