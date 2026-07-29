@@ -509,8 +509,88 @@ pub struct TerminalOptions {
     pub cols: u16,
     /// Number of rows (height in cells).
     pub rows: u16,
-    /// Maximum number of lines to keep in scrollback history.
-    pub max_scrollback: usize,
+    /// Memory budget for the grid — scrollback plus active screen — in
+    /// **bytes**.
+    ///
+    /// Bytes, not rows, whatever `ghostty/vt/terminal.h` says about
+    /// `max_scrollback` ("Maximum number of lines to keep in scrollback
+    /// history"; the header comment is wrong, ix#9031). The C field goes
+    /// straight to ghostty's `Screen.init`, whose own doc comment reads
+    /// "max_scrollback is the amount of scrollback to keep in bytes", and
+    /// from there to `PageList.init`'s `max_size`, "the maximum number of
+    /// bytes that will be allocated for pages". ghostty's user-facing config
+    /// agrees: `scrollback-limit` is "the size of the scrollback buffer in
+    /// bytes", default 10MB.
+    ///
+    /// Two consequences a caller has to know:
+    ///
+    /// - A budget too small to hold the active area is silently raised to fit
+    ///   it — `PageList.maxSize` returns `@max(explicit_max_size,
+    ///   min_max_size)` — so a row count passed here is not rejected, it is
+    ///   ignored. That is the whole of ix#9031: `10_000` and `100_000` both
+    ///   land under the floor and buy the same ~1000 rows.
+    /// - Zero means *no scrollback at all*, not unlimited.
+    ///
+    /// Size this from a row count with [`scrollback_bytes_for_lines`].
+    pub max_scrollback_bytes: usize,
+}
+
+/// Bytes of grid data one row occupies at `cols` columns.
+///
+/// ghostty's `Row` and `Cell` are both `packed struct(u64)`
+/// (`terminal/page.zig`), and `Capacity.adjust` fits rows into a page at
+/// exactly `@bitSizeOf(Row) + @bitSizeOf(Cell) * cols` bits each.
+const fn row_grid_bytes(cols: u16) -> usize {
+    const ROW_BYTES: usize = 8;
+    const CELL_BYTES: usize = 8;
+    ROW_BYTES + CELL_BYTES * cols as usize
+}
+
+/// What a retained row actually costs against the budget, as a percentage of
+/// its grid data.
+///
+/// A page's style, grapheme, string and hyperlink arenas are laid out from its
+/// end and the grid only gets what is left
+/// (`Capacity.availableBitsForGrid`) — the string arena takes the largest
+/// share — so a budget buys fewer rows than [`row_grid_bytes`] predicts. The
+/// factor does not depend on the column count: `Capacity.adjust` changes only
+/// a page's row count, never its arenas.
+///
+/// Measured against libghostty-vt 1.3.2 between 168% and 184% from 80 to 400
+/// columns; 250% is that with room for ghostty to grow an arena.
+/// `scrollback_bytes_for_lines_delivers_the_rows_it_promises` is what fails if
+/// it ever grows past this — checked by setting this to 100, which keeps 5,451
+/// rows where 10,000 were asked for.
+const ROW_BUDGET_COST_PERCENT: usize = 250;
+
+/// The [`TerminalOptions::max_scrollback_bytes`] budget that holds at least
+/// `lines` rows of grid on a terminal `cols` columns wide.
+///
+/// ghostty budgets the grid in bytes, not rows (see
+/// [`TerminalOptions::max_scrollback_bytes`]), so a row count only becomes a
+/// byte count once the width is known: 10,000 rows of 80 columns and 10,000
+/// rows of 400 columns differ by 5x. `lines` counts the whole scrollable area
+/// the way ghostty's `scrollback-limit` does ("this also includes the active
+/// screen"), so it is what [`Scrollbar::total`] reports rather than the rows
+/// above the viewport.
+///
+/// The result is a floor, not a target: ghostty prunes a page at a time and
+/// the budget is deliberately generous, so the terminal keeps somewhere
+/// between `lines` and about 1.4x `lines`. A caller that wants a hard memory
+/// cap wants [`TerminalOptions::max_scrollback_bytes`] directly.
+///
+/// The width is the one passed here, and libghostty-vt has no option for
+/// changing the budget afterwards (`GhosttyTerminalOption` has no entry for
+/// it), so a terminal that is later [`resize`]d wider than `cols` holds
+/// proportionally fewer rows than it was sized for.
+///
+/// [`resize`]: Terminal::resize
+#[must_use]
+pub const fn scrollback_bytes_for_lines(lines: usize, cols: u16) -> usize {
+    row_grid_bytes(cols)
+        .saturating_mul(lines)
+        .saturating_mul(ROW_BUDGET_COST_PERCENT)
+        / 100
 }
 
 /// A terminal VT engine instance.
@@ -592,21 +672,25 @@ const FOCUS_EVENT: sys::GhosttyMode = 1004;
 const SYNCHRONIZED_OUTPUT: sys::GhosttyMode = 2026;
 
 impl Terminal {
-    /// Create a terminal sized `rows` by `cols` with `scrollback` lines of
-    /// history.
+    /// Create a terminal sized `rows` by `cols` whose grid — scrollback plus
+    /// active screen — may occupy `max_scrollback_bytes`.
     ///
-    /// The argument order is `(rows, cols, scrollback)` to read like a screen
-    /// size; the underlying C struct stores `cols`/`rows` separately, so there
-    /// is no ambiguity once constructed.
+    /// Bytes, not rows; [`scrollback_bytes_for_lines`] converts, and
+    /// [`TerminalOptions::max_scrollback_bytes`] explains why the distinction
+    /// is not cosmetic.
+    ///
+    /// The argument order is `(rows, cols, ...)` to read like a screen size;
+    /// the underlying C struct stores `cols`/`rows` separately, so there is no
+    /// ambiguity once constructed.
     ///
     /// # Errors
     /// Returns an [`Error`] if ghostty cannot allocate the terminal (see
     /// [`Self::with_options`]).
-    pub fn new(rows: u16, cols: u16, scrollback: usize) -> Result<Self> {
+    pub fn new(rows: u16, cols: u16, max_scrollback_bytes: usize) -> Result<Self> {
         Self::with_options(TerminalOptions {
             cols,
             rows,
-            max_scrollback: scrollback,
+            max_scrollback_bytes,
         })
     }
 
@@ -620,7 +704,7 @@ impl Terminal {
         let opts = sys::GhosttyTerminalOptions {
             cols: options.cols,
             rows: options.rows,
-            max_scrollback: options.max_scrollback,
+            max_scrollback: options.max_scrollback_bytes,
         };
         // Passing a null allocator selects the default (libc malloc/free).
         check(unsafe { sys::ghostty_terminal_new(ptr::null(), &raw mut raw, opts) })?;
