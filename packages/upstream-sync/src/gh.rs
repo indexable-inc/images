@@ -2,7 +2,8 @@
 //! degrade-instead-of-fail forge reads.
 
 use anstream::eprintln;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
+use lazy_regex::regex;
 use serde::Deserialize;
 
 use crate::cmd;
@@ -26,14 +27,24 @@ struct RollupEntry {
     state: Option<String>,
 }
 
-/// Refresh a tracked PR's live state, or `None` if the PR can no longer be
-/// read (deleted/renamed).
+/// Refresh a tracked PR's live state, or `None` if the PR is genuinely gone
+/// (deleted, renamed, or the repo no longer resolves).
 ///
 /// The result's `state` collapses gh's separate `state` (OPEN/CLOSED/MERGED)
 /// and `isDraft` into one of open|draft|merged|closed.
 ///
+/// `None` is reserved for the forge ANSWERING that the PR is not there, and
+/// nothing else. It used to mean "the read failed for any reason at all",
+/// and the difference is not academic: in run 30443012384 an expired
+/// `UPSTREAM_PR_TOKEN` made every read return `HTTP 401: Bad credentials`,
+/// and the caller wrote "tracked PR #9718 no longer readable, deleted or
+/// renamed" into the committed status file for two PRs that were, and are,
+/// open. A wrong fact recorded silently is worse than a red run, so a read
+/// that failed for any reason other than "not there" is now fatal.
+///
 /// # Errors
-/// Fails only when `gh` cannot be spawned.
+/// Fails when `gh` cannot be spawned, and when the read failed for any
+/// reason other than the PR being absent.
 pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -59,11 +70,27 @@ pub fn refresh_pr(slug: &Slug, number: u64) -> Result<Option<Pr>> {
         ],
     )?;
     if !res.ok() {
-        return Ok(None);
+        // gh answers a missing PR or repo with GraphQL's own resolution
+        // error; every other failure (401, 403, 5xx, no network) says
+        // nothing about whether the PR exists.
+        if res.stderr.contains("Could not resolve to a") {
+            return Ok(None);
+        }
+        return Err(eyre!(
+            "upstream-sync: cannot read {}/{}#{number}: {}. Refusing to record this as a \
+             deleted PR: the forge did not say the PR is gone, it failed to answer.",
+            slug.owner,
+            slug.repo,
+            res.stderr.trim()
+        ));
     }
-    let Ok(view) = serde_json::from_str::<View>(&res.stdout) else {
-        return Ok(None);
-    };
+    let view = serde_json::from_str::<View>(&res.stdout).map_err(|err| {
+        eyre!(
+            "upstream-sync: {}/{}#{number}: gh returned unparseable JSON: {err}",
+            slug.owner,
+            slug.repo
+        )
+    })?;
     let state = match view.state.as_str() {
         "MERGED" => "merged",
         "CLOSED" => "closed",
@@ -132,7 +159,11 @@ fn tally(entries: &[RollupEntry]) -> Option<Checks> {
 /// branch of the same name would be adopted as ours.
 ///
 /// # Errors
-/// Fails only when `gh` cannot be spawned.
+/// Fails when `gh` cannot be spawned, and when the list read fails. A
+/// swallowed failure here answers "we have no PR for this patch", and the
+/// caller acts on that by opening one -- on a repo we do not own. An
+/// unreadable list is not evidence of absence, and the cost of guessing
+/// wrong is an outward act we cannot take back.
 pub fn find_ours(slug: &Slug, fork_owner: &str, branch: &str) -> Result<Option<Pr>> {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -165,11 +196,22 @@ pub fn find_ours(slug: &Slug, fork_owner: &str, branch: &str) -> Result<Option<P
         ],
     )?;
     if !res.ok() {
-        return Ok(None);
+        return Err(eyre!(
+            "upstream-sync: cannot list PRs from {}/{} head {branch}: {}. Refusing to treat an \
+             unreadable list as \"no PR of ours\": the next step would open a duplicate on a \
+             repo we do not own.",
+            slug.owner,
+            slug.repo,
+            res.stderr.trim()
+        ));
     }
-    let Ok(hits) = serde_json::from_str::<Vec<Listed>>(&res.stdout) else {
-        return Ok(None);
-    };
+    let hits = serde_json::from_str::<Vec<Listed>>(&res.stdout).map_err(|err| {
+        eyre!(
+            "upstream-sync: {}/{} head {branch}: gh returned unparseable JSON: {err}",
+            slug.owner,
+            slug.repo
+        )
+    })?;
     let mut hits: Vec<Listed> = hits
         .into_iter()
         .filter(|h| {
@@ -269,30 +311,129 @@ pub fn find_duplicates(slug: &Slug, subject: &str) -> Result<Vec<Duplicate>> {
         .collect())
 }
 
-/// A `gh api` read that DEGRADES instead of failing: a forge error becomes a
-/// stderr warning and an unknown cell, so one unreachable forge cannot take
-/// the whole drift table down.
+/// The HTTP status `gh` reports in its own error line, e.g.
+/// `gh: No commit found for SHA: abc (HTTP 422)`. `None` when the failure
+/// never reached HTTP at all (DNS, TLS, connection refused), which is the
+/// most unreachable case of the lot.
+fn http_status(stderr: &str) -> Option<u16> {
+    regex!(r"\(HTTP (\d{3})\)")
+        .captures(stderr)
+        .and_then(|c| c[1].parse().ok())
+}
+
+/// A forge answered, and the answer was that the object is not there.
+///
+/// Kept apart from an unreachable forge because the two want opposite
+/// handling, and conflating them is what made ENG-11160 unreadable: the
+/// operator was told "unreachable" about a forge that had replied in
+/// milliseconds with a precise reason.
+pub struct Absent {
+    pub status: u16,
+    /// The forge's own words, e.g. `No commit found for SHA: c1b4a88a...`.
+    pub detail: String,
+}
+
+/// The outcome of a drift probe: a value, or a definitive "not here".
+pub enum Read {
+    Value(String),
+    Absent(Absent),
+}
+
+/// A `gh api` read for the drift report.
+///
+/// 404 and 422 are answers, not failures: the forge is up and is telling us
+/// something durable about our own pin (a rev the upstream repo has never
+/// heard of, because the fork shares no object store with it, or because the
+/// pin was GC'd). Those degrade to an unknown cell, which is the documented
+/// contract -- the table must still render its other rows.
+///
+/// Everything else is fatal, and deliberately so. A 401, a 403 or a 502
+/// yields no information whatsoever, and a drift table built from no
+/// information does not read as "unknown", it reads as "no drift". That is
+/// the silent-success failure mode, and it is worse than a red run: run
+/// 30443012384 carried a `notify` step dying on `HTTP 401: Bad credentials`
+/// against the same API this probe uses, so an expired token is a live
+/// possibility, not a hypothetical.
 ///
 /// # Errors
-/// Fails only when `gh` cannot be spawned.
-pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Option<String>> {
+/// Fails when `gh` cannot be spawned, and when the forge could not be
+/// reached or refused the read.
+pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Read> {
     let res = cmd::complete("gh", &["api", path, "--jq", jq])?;
-    if !res.ok() {
-        eprintln!(
-            "{}",
-            paint(
-                YELLOW,
-                &format!("upstream-sync: drift: {ctx}: gh api {path} failed; cell left unknown")
-            )
-        );
-        return Ok(None);
+    if res.ok() {
+        return Ok(Read::Value(res.stdout.trim().to_owned()));
     }
-    Ok(Some(res.stdout.trim().to_owned()))
+    let detail = res.stderr.trim().to_owned();
+    let status = http_status(&detail);
+    if !matches!(status, Some(404 | 422)) {
+        return Err(eyre!(
+            "upstream-sync: drift: {ctx}: cannot reach the forge for `gh api {path}`: {}. \
+             This is fatal rather than an unknown cell: a drift table computed without the \
+             forge reads as \"no drift\", not as \"unknown\". Check GH_TOKEN and the forge's \
+             status, then re-run.",
+            if detail.is_empty() {
+                format!("gh exited {}", res.status)
+            } else {
+                detail.clone()
+            }
+        ));
+    }
+    let absent = Absent {
+        // Checked immediately above.
+        status: status.unwrap_or_default(),
+        detail,
+    };
+    eprintln!(
+        "{}",
+        paint(
+            YELLOW,
+            &format!(
+                "upstream-sync: drift: {ctx}: `gh api {path}` answered HTTP {}: {}. The pinned \
+                 rev is not present upstream -- either the fork repo is not a GitHub fork of the \
+                 upstream (they share no object store, so a megamerge sha can never resolve \
+                 there) or the rev was garbage-collected. Cell left unknown.",
+                absent.status, absent.detail
+            )
+        )
+    );
+    Ok(Read::Absent(absent))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The real stderr of the two reads that went unexplained for four days
+    // (ENG-11160), plus the credential failure that must NOT be mistaken for
+    // one of them.
+    #[test]
+    fn http_status_is_read_from_ghs_own_error_line() {
+        assert_eq!(
+            http_status("gh: No commit found for SHA: c1b4a88a (HTTP 422)"),
+            Some(422)
+        );
+        assert_eq!(http_status("gh: Not Found (HTTP 404)"), Some(404));
+        assert_eq!(http_status("gh: Bad credentials (HTTP 401)"), Some(401));
+        // A failure that never reached HTTP carries no status, and so falls
+        // on the fatal side rather than being read as a missing object.
+        assert_eq!(
+            http_status("dial tcp: lookup api.github.com: no such host"),
+            None
+        );
+    }
+
+    #[test]
+    fn only_404_and_422_degrade_to_an_unknown_cell() {
+        let degrades = |stderr: &str| matches!(http_status(stderr), Some(404 | 422));
+        assert!(degrades("gh: Not Found (HTTP 404)"));
+        assert!(degrades("gh: No commit found for SHA: c1b4a88a (HTTP 422)"));
+        // Credentials and forge outages yield no information, so a drift
+        // table built from them would read as "no drift".
+        assert!(!degrades("gh: Bad credentials (HTTP 401)"));
+        assert!(!degrades("gh: Forbidden (HTTP 403)"));
+        assert!(!degrades("gh: Bad Gateway (HTTP 502)"));
+        assert!(!degrades("connection refused"));
+    }
 
     #[test]
     fn tokens_drop_stopwords_short_words_and_dupes() {

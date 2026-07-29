@@ -255,23 +255,35 @@ jobs:
       # again), the job died there, and the contribution lane below never
       # ran at all. `!cancelled()` rather than `always()` so a cancelled run
       # still stops.
+      # The lane file is written on EVERY exit path, including the failing
+      # one. Two `!cancelled()` steps hand it between them, and that is what
+      # makes the guarantee load-bearing: `!cancelled()` opts out of the
+      # default "a failed step skips the ones after it", so the consumer below
+      # runs even when this step died. ENG-11160 was exactly that -- this step
+      # failed on a mesa duplicate subject BEFORE its `echo`, and four days of
+      # runs then ended on `cat: upstream-lane.md: No such file or directory`,
+      # burying three real errors under a missing-file message that named
+      # none of them. The trap costs one line and makes the class impossible;
+      # the step still fails, and now it fails on its own error.
       - name: Open authorized upstream PRs
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN }}
         run: |
           set -euo pipefail
+          lane="$RUNNER_TEMP/upstream-lane.md"
+          echo "**The upstream contribution lane did not complete.** \`upstream-sync --auto --open\` exited nonzero; its error is in the \"Open authorized upstream PRs\" step log above, and it is the failure to read." > "$lane"
           if [ -z "${GH_TOKEN:-}" ]; then
             {
               echo "**The upstream contribution lane is inert.** \`UPSTREAM_PR_TOKEN\` is not set, so no upstream PR was opened or updated this run."
               echo ""
               echo "It cannot be a \`GITHUB_TOKEN\` or a GitHub App token: opening or editing a PR on a repo we do not own needs \`pull_requests: write\` on THAT repo, and an App installation only carries permissions for repos in its own installation. It has to be a user PAT with \`public_repo\`, and PRs then carry that person's name, which is what upstreams like NixOS/nix ask for anyway."
-            } > "$RUNNER_TEMP/upstream-lane.md"
+            } > "$lane"
             echo "::warning::UPSTREAM_PR_TOKEN is not configured; the upstream contribution lane did nothing."
             exit 0
           fi
           nix run .#upstream-sync -- --auto --open --check-stale
-          echo "Upstream contribution lane ran with \`--auto --open\`." > "$RUNNER_TEMP/upstream-lane.md"
+          echo "Upstream contribution lane ran with \`--auto --open\`." > "$lane"
 
       # Keep the team @-mention current on every PR we track. Change-gated on
       # the rendered block, so an unchanged PR costs one read and no write:
