@@ -283,3 +283,10 @@ So folding the two copy-pasted proxy nodes into `replicas: 3` and deleting the
 resolved DNS workaround changed no existing node's system at all -- re-applying
 switches and restarts nothing, and the only new closure is the third proxy.
 Worth doing before any apply that claims to be a no-op.
+
+The same trick checks that the replicas really are interchangeable rather than
+merely evaluating. `nix derivation show` on two of them differs in 2 of 17 input
+derivations, `etc` and `activate`, and in exactly two attributes, `name` and the
+`buildCommand` that embeds the `etc` path. `system-path` and every package under
+it are the same store path. The only thing separating one proxy from the next is
+its hostname, which is what "interchangeable" has to mean to be worth saying.
