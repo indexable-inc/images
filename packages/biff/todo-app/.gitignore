@@ -1,0 +1,6 @@
+.clj-kondo/.cache/
+.lsp/
+.nrepl-port
+config.env
+config.prod.env
+storage/

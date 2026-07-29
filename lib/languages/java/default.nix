@@ -239,4 +239,14 @@ in {
 
   # Repo-default JVM major (single source of truth, from `./jvm-defaults.nix`).
   inherit defaultJvmVersion;
+
+  /**
+  The JDK a caller gets when it does not pin one: the OpenJDK headless
+  build of the major in [`../jvm-defaults.nix`](../jvm-defaults.nix).
+  Shared with `ix.languages.scala`'s default and `ix.profiles.jvm`, so a
+  consumer that resolves both pulls one JDK into its closure rather than
+  two. Exported for builders that need the default without restating the
+  version, such as [`lib/build/clj-unit.nix`](../../build/clj-unit.nix).
+  */
+  inherit defaultJdkFor;
 }

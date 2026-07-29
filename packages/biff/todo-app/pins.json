@@ -1,0 +1,20 @@
+{
+  "datastar": {
+    "url": "https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.1/bundles/datastar.js",
+    "version": "1.0.1",
+    "prefetch": "file",
+    "hash": "sha256-VHaM80mFvgIpxyKfHflGn70y4qDAm0o/HoGtjE1oQNo="
+  },
+  "tailwindcss-linux-x64": {
+    "url": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-linux-x64",
+    "version": "4.3.0",
+    "prefetch": "file",
+    "hash": "sha256-c/DlRZBU5c+qirbzuUDz++DxPMf9g7wk58ZVAzwgNAA="
+  },
+  "tailwindcss-macos-arm64": {
+    "url": "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-macos-arm64",
+    "version": "4.3.0",
+    "prefetch": "file",
+    "hash": "sha256-VrS7xi29xGFKeJMNnGmGQjouxj5OZAFEpZpdlckUMi4="
+  }
+}

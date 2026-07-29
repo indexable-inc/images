@@ -48,6 +48,17 @@
       paths
       ;
   };
+  # The two Biff 2 applications booted under their service modules. Same deal
+  # again: each boots a qemu VM, so each is its own check
+  # (`checks.<system>.biff-{reading-list,todo-app}-vm`). The todo-app script
+  # lives beside its package because it ships a Selenium driver script
+  # (`browser-test.py`) the VM installs into /etc.
+  biffReadingListVmTest = import ./biff-reading-list-vm.nix {
+    inherit ix paths pkgs;
+  };
+  biffTodoAppVmTest = import (paths.packagesRoot + "/biff/todo-app/vm-test.nix") {
+    inherit ix paths pkgs;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
@@ -84,6 +95,7 @@
   # an explicit `ix apply` line, single- and multi-VM alike, with no stale
   # references to the pre-`default.ix` config name.
   applyReadmes = [
+    "biff/reading-list"
     "declared/groups"
     "dev/vm"
     "east-west/firewall"
@@ -2127,6 +2139,68 @@
     timer = config.systemd.timers.daily-scraper;
   };
 
+  # The reading-list example is a plain `mkVm` that enables the auto-discovered
+  # `services.biff-reading-list` module, so this eval covers the same package
+  # the deployed VM runs: the application resolves off the repo overlay through
+  # the module's `package` option rather than being threaded in as an argument.
+  biffReadingListExample = let
+    fleet = ix.importIx (paths.examples + "/biff/reading-list/default.ix") {
+      index = {lib = ix;};
+    };
+    config = fleet.nodes.biff-reading-list;
+  in {
+    inherit fleet config;
+    package = repoPackages.biff-reading-list;
+    plan = fleet.planValue.nodes.biff-reading-list;
+    service = config.systemd.services.biff-reading-list;
+  };
+
+  # Todo App is a package plus a service module, not an example: there is no
+  # `default.ix` and therefore no fleet plan, so the module goes through the
+  # same image evaluator every VM uses and the checks read off `config`
+  # directly (`ix.healthChecks` is where a plan's `healthChecks` come from).
+  biffTodoApp = let
+    config = evalConfig [{services.biff-todo-app.enable = true;}];
+  in {
+    inherit config;
+    package = repoPackages.biff-todo-app;
+    service = config.systemd.services.biff-todo-app;
+  };
+
+  # Both services can share one image when their ports differ. Their listener
+  # keys and Unix identities must remain distinct so Nix can merge the modules
+  # and neither process can read the other's 0400 secret or SQLite state.
+  biffCombined = evalConfig [
+    {
+      services.biff-reading-list = {
+        enable = true;
+        port = 8081;
+      };
+      services.biff-todo-app = {
+        enable = true;
+        port = 8082;
+      };
+    }
+  ];
+
+  biffReadingListBound = evalConfig [
+    {
+      services.biff-reading-list = {
+        enable = true;
+        host = "192.0.2.10";
+      };
+    }
+  ];
+
+  biffTodoAppBound = evalConfig [
+    {
+      services.biff-todo-app = {
+        enable = true;
+        host = "192.0.2.11";
+      };
+    }
+  ];
+
   nginxLifecycleExample = let
     fleet = ix.importIx (paths.examples + "/nginx/lifecycle/default.ix") {
       index = {
@@ -3925,6 +3999,202 @@
           ]
           && dailyScraperS3.service.serviceConfig.EnvironmentFile == "%d/aws-env";
         message = "python-daily-scraper service should support S3 sync through systemd credentials";
+      }
+    ];
+
+    biff-reading-list = [
+      {
+        inherit (cljSourceIndependence) assertion;
+        message =
+          "Clojure derivations must not depend on the whole repository source, "
+          + "or one edit rebuilds every namespace unit; offenders: "
+          + lib.concatStringsSep ", " cljSourceIndependence.offenders;
+      }
+      {
+        assertion =
+          biffReadingListExample.config.networking.hostName
+          == "biff-reading-list"
+          && biffReadingListExample.plan.snapshot
+          && !biffReadingListExample.plan.ipv4;
+        message = "biff reading-list should remain a private, stateful mkVm target";
+      }
+      {
+        assertion =
+          biffReadingListExample.service.serviceConfig.User
+          == "biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.StateDirectory == "biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.StateDirectoryMode == "0750"
+          && biffReadingListExample.service.serviceConfig.WorkingDirectory == "/var/lib/biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.ProtectSystem == "strict"
+          && biffReadingListExample.service.serviceConfig.NoNewPrivileges
+          && biffReadingListExample.service.serviceConfig.PrivateDevices
+          && biffReadingListExample.service.serviceConfig.SuccessExitStatus == [143]
+          && biffReadingListExample.service.serviceConfig.ExecStart == lib.getExe' biffReadingListExample.package "biff-reading-list";
+        message = "biff reading-list should run as a hardened, durable systemd service";
+      }
+      {
+        assertion =
+          biffReadingListExample.config.users.users.biff-reading-list.isSystemUser
+          && biffReadingListExample.config.users.users.biff-reading-list.group == "biff-reading-list"
+          && biffReadingListExample.config.users.groups ? biff-reading-list
+          && biffReadingListExample.service.serviceConfig.Group == "biff-reading-list"
+          && biffReadingListExample.service.serviceConfig.Restart == "on-failure"
+          && biffReadingListExample.service.serviceConfig.RestartSec == "2s"
+          && lib.hasSuffix "/bin/biff-reading-list-cookie-secret" biffReadingListExample.service.serviceConfig.ExecStartPre
+          && lib.any (package: lib.getName package == "sqldef") biffReadingListExample.service.path
+          && builtins.elem "multi-user.target" biffReadingListExample.service.wantedBy;
+        message = "biff reading-list should provision a least-privilege identity, deterministic migration tool, and restart policy";
+      }
+      {
+        assertion = let
+          claim = biffReadingListExample.config.ix.networking.portClaims.biff-reading-list;
+        in
+          claim.protocol
+          == "tcp"
+          && claim.port == 8080
+          && builtins.elem 8080 biffReadingListExample.config.networking.firewall.allowedTCPPorts
+          && biffReadingListExample.service.environment.HOST == "0.0.0.0"
+          && biffReadingListExample.service.environment.PORT == "8080"
+          && biffReadingListExample.service.environment.COOKIE_SECRET_FILE == "/var/lib/biff-reading-list/cookie-secret"
+          && biffReadingListExample.service.environment.SQLITE_DB_PATH == "/var/lib/biff-reading-list/reading-list.db"
+          && biffReadingListExample.service.environment.SQLITE_SCHEMA_PATH == "/var/lib/biff-reading-list/schema.sql"
+          && builtins.elem "network.target" biffReadingListExample.service.after;
+        message = "biff reading-list should declare its listener and keep mutable state outside the store";
+      }
+      {
+        assertion = let
+          unit = biffReadingListExample.plan.healthChecks.biff-reading-list;
+          http = biffReadingListExample.plan.healthChecks.biff-reading-list-http;
+        in
+          unit.from
+          == "guest"
+          && unit.command
+          == [
+            (lib.getExe' biffReadingListExample.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "biff-reading-list.service"
+          ]
+          && http.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head http.command)
+          && builtins.tail http.command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/"
+          ];
+        message = "biff reading-list should expose unit and functional HTTP deployment health checks";
+      }
+    ];
+
+    biff-todo-app = [
+      {
+        # The module ships in the auto-discovered registry, so every image
+        # evaluates it. An image that does not ask for the Todo App must not
+        # get its unit or the shared `biff` identity.
+        assertion =
+          !(base.config.systemd.services ? biff-todo-app)
+          && !(base.config.users.users ? biff-todo-app)
+          && !(base.config.users.groups ? biff-todo-app);
+        message = "services.biff-todo-app should stay inert until enabled";
+      }
+      {
+        assertion =
+          biffTodoApp.service.serviceConfig.User
+          == "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.Group == "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.StateDirectory == "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.StateDirectoryMode == "0750"
+          && biffTodoApp.service.serviceConfig.WorkingDirectory == "/var/lib/biff-todo-app"
+          && biffTodoApp.service.serviceConfig.UMask == "0077"
+          && biffTodoApp.service.serviceConfig.ProtectSystem == "strict"
+          && biffTodoApp.service.serviceConfig.NoNewPrivileges
+          && biffTodoApp.service.serviceConfig.PrivateDevices
+          && biffTodoApp.service.serviceConfig.SuccessExitStatus == [143];
+        message = "biff todo-app should run as a hardened, durable systemd service";
+      }
+      {
+        assertion =
+          biffTodoApp.config.users.users.biff-todo-app.isSystemUser
+          && biffTodoApp.config.users.users.biff-todo-app.group == "biff-todo-app"
+          && biffTodoApp.config.users.groups ? biff-todo-app
+          && biffTodoApp.service.serviceConfig.Restart == "on-failure"
+          && biffTodoApp.service.serviceConfig.RestartSec == "2s"
+          && lib.hasSuffix "/bin/biff-todo-app-cookie-secret" biffTodoApp.service.serviceConfig.ExecStartPre
+          && biffTodoApp.service.serviceConfig.ExecStart == lib.getExe' biffTodoApp.package "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.EnvironmentFile == "-/var/lib/biff-todo-app/config.env"
+          && lib.any (package: lib.getName package == "sqldef") biffTodoApp.service.path
+          && builtins.elem "multi-user.target" biffTodoApp.service.wantedBy;
+        message = "biff todo-app should provision a least-privilege identity, persistent secret, migration tool, and restart policy";
+      }
+      {
+        assertion = let
+          claim = biffTodoApp.config.ix.networking.portClaims.biff-todo-app;
+          env = biffTodoApp.service.environment;
+        in
+          claim.protocol
+          == "tcp"
+          && claim.port == 8080
+          && builtins.elem 8080 biffTodoApp.config.networking.firewall.allowedTCPPorts
+          && env.HOST == "0.0.0.0"
+          && env.PORT == "8080"
+          && env.BASE_URL == "http://localhost:8080"
+          && env.SECURE == "false"
+          && env.BIFF_AUTH_SKIP_CAPTCHA == "true"
+          && env.COOKIE_SECRET_FILE == "/var/lib/biff-todo-app/cookie-secret"
+          && env.SQLITE_DB_PATH == "/var/lib/biff-todo-app/todo-app.db"
+          && env.SQLITE_SCHEMA_PATH == "/var/lib/biff-todo-app/schema.sql"
+          && !(env ? COOKIE_SECRET)
+          && builtins.elem "network.target" biffTodoApp.service.after;
+        message = "biff todo-app should declare its listener, mutable state, and private-demo auth boundary without exporting its cookie secret";
+      }
+      {
+        # `ix.healthChecks` is what a fleet plan's `healthChecks` is built
+        # from (lib/image/fleet.nix `planHealthChecks`), so asserting the
+        # derived argv here covers the same contract the example's plan did.
+        assertion = let
+          unit = biffTodoApp.config.ix.healthChecks.biff-todo-app;
+          http = biffTodoApp.config.ix.healthChecks.biff-todo-app-http;
+        in
+          unit.from
+          == "guest"
+          && unit.command
+          == [
+            (lib.getExe' biffTodoApp.config.systemd.package "systemctl")
+            "is-active"
+            "--quiet"
+            "biff-todo-app.service"
+          ]
+          && http.from == "guest"
+          && lib.hasSuffix "/bin/curl" (builtins.head http.command)
+          && builtins.tail http.command
+          == [
+            "--fail"
+            "--silent"
+            "--show-error"
+            "http://127.0.0.1:8080/"
+          ];
+        message = "biff todo-app should expose unit and functional HTTP deployment health checks";
+      }
+      {
+        assertion =
+          biffCombined.ix.networking.portClaims.biff-reading-list.port
+          == 8081
+          && biffCombined.ix.networking.portClaims.biff-todo-app.port == 8082
+          && biffCombined.systemd.services.biff-reading-list.serviceConfig.User
+          == "biff-reading-list"
+          && biffCombined.systemd.services.biff-todo-app.serviceConfig.User
+          == "biff-todo-app";
+        message = "both Biff modules should coexist with distinct exposure keys and service identities";
+      }
+      {
+        assertion =
+          lib.last biffReadingListBound.ix.healthChecks.biff-reading-list-http.command
+          == "http://192.0.2.10:8080/"
+          && lib.last biffTodoAppBound.ix.healthChecks.biff-todo-app-http.command
+          == "http://192.0.2.11:8080/";
+        message = "Biff health checks should probe a configured concrete bind address";
       }
     ];
 
@@ -6692,6 +6962,151 @@
     cargoUnitPrebuiltScript;
 
   imageRegistryPinTest = mkTest "image-registry-pin" imageRegistryPinAssertions "";
+
+  # No Clojure derivation may depend on the whole repository source.
+  #
+  # This is a gate, not a spot check. Three separate times while building
+  # clj-unit, a store path leaked into a derivation and quietly tied every
+  # namespace unit to every file in the repo, so editing one .clj rebuilt all
+  # 16 of todo-app's units instead of the 3 that depend on it. Each leak came
+  # from somewhere different and none of them looked like a dependency:
+  #
+  #   1. a COMMENT inside a Nix indented string that named the source root
+  #      while explaining why the source root must not be an input;
+  #   2. an error message interpolating the lock's path;
+  #   3. the same message after `unsafeDiscardStringContext`, which drops the
+  #      dependency but leaves the store path in the builder's bytes, so the
+  #      derivation still moved whenever the repo's source hash did.
+  #
+  # Reviewing for this by eye does not work: (1) and (3) both read as correct.
+  #
+  # The builder TEXT is what to inspect, not the string context.
+  # `builtins.getContext "${drv}"` sees only the derivation itself, never its
+  # inputs, so it cannot see a leak at all; and leak (3) had no context left
+  # yet still moved the derivation, because the store path was still in the
+  # bytes.
+  #
+  # Read EVERY string attribute, not just `buildCommand`. An earlier version
+  # read only that, and missed a real leak: `ix.writeRustApplication` passes
+  # the launcher's Rust source through `text` with `passAsFile`, so its
+  # `buildCommand` is only `rustc ... "$textPath"` and a store path in the
+  # Rust body is invisible. A derivation carrying no string attribute at all
+  # throws rather than passing, because a check that silently finds nothing
+  # to look at is the failure mode this whole gate exists to prevent.
+  cljSourceIndependence = let
+    # Two whole-tree paths, both of which a unit must be independent of: the
+    # repository root (what leaked through clj-lock's error messages) and the
+    # package's own filtered source (what leaked through clj-unit's comment).
+    # Both are store paths ending in `-source`, so checking only one of them
+    # misses half the class.
+    #
+    # Context discarded on both, and that is not cosmetic: a plain
+    # `toString` of a source path carries its context into this test's own
+    # derivation, and the eval fails with "the string ... is not allowed to
+    # refer to a store path". The gate against store-path leaks leaks a store
+    # path if you write it the obvious way.
+    forbidden = package:
+      map (path: builtins.unsafeDiscardStringContext (builtins.toString path)) [
+        paths.root
+        package.passthru.src
+      ];
+    builderStrings = label: drv: let
+      strings = lib.filter lib.isString (lib.attrValues (drv.drvAttrs or {}));
+    in
+      if strings == []
+      then throw "cljSourceIndependence: ${label} has no string attributes to scan; the gate would pass it vacuously"
+      else strings;
+    leaks = package: entry:
+      lib.any (
+        text: lib.any (path: lib.hasInfix path text) (forbidden package)
+      ) (builderStrings entry.label entry.drv);
+    # `writeRustApplication` names the launcher through `name`, not `pname`,
+    # so read both or the failure message says `?` and helps nobody.
+    labelOf = package: package.pname or package.name or "unnamed";
+    checked = package:
+      [
+        {
+          label = "${labelOf package} (launcher)";
+          drv = package;
+        }
+        {
+          label = "${labelOf package} (dependency classpath)";
+          drv = package.passthru.classpath;
+        }
+        {
+          label = "${labelOf package} (runtime classpath)";
+          drv = package.passthru.runtimeClasspath;
+        }
+        # The graph render is deliberately absent. It is the one derivation
+        # that must read the whole source, because its job is to walk the tree
+        # for `ns` forms. It is content-addressed instead, so an edit leaving
+        # every `ns` form alone renders identical JSON and resolves to the same
+        # output, and no unit sees a changed input.
+        {
+          label = "${labelOf package} (smoke)";
+          drv = package.passthru.smoke;
+        }
+      ]
+      ++ lib.mapAttrsToList (namespace: unit: {
+        label = "${labelOf package}: ${namespace}";
+        drv = unit;
+      }) (package.passthru.units or {});
+    # Todo App is where the graph actually has edges, so it is the one that
+    # matters most here. It is absent from the package set off x86_64-linux
+    # (its lock carries a Linux-only brotli native), hence the `?` guard
+    # rather than a hardcoded system check.
+    gated =
+      [repoPackages.biff-reading-list]
+      ++ lib.optional (repoPackages ? biff-todo-app) repoPackages.biff-todo-app;
+    offenders =
+      lib.concatMap (
+        package: map (entry: entry.label) (lib.filter (leaks package) (checked package))
+      )
+      gated;
+  in {
+    inherit offenders;
+    assertion = offenders == [];
+  };
+
+  # Clojure's launcher class name uses the complete `munge` mapping, not
+  # only hyphen-to-underscore. Keep this fixture synchronized with
+  # clojure.core/munge; punctuation in a legal namespace must still launch.
+  cljLauncherMungeTest = let
+    cljUnit = ix.cljUnitFor pkgs;
+    expected = lib.concatStrings [
+      "a_PLUS_b_QMARK_c_BANG_d_STAR_e_SLASH_f_PERCENT_g_AMPERSAND_h_EQ_i"
+      "_GT_j_LT_k_COLON_l_SHARP_m_CIRCA_n_TILDE_o_CARET_p_BAR_q_LBRACE_r"
+      "_RBRACE_s_LBRACK_t_RBRACK_u_BSLASH_v_DOUBLEQUOTE_w"
+    ];
+    actual = cljUnit.mungeNamespaceForTest "a+b?c!d*e/f%g&h=i>j<k:l#m@n~o^p|q{r}s[t]u\\v\"w";
+  in
+    pkgs.runCommand "ix-test-clj-launcher-munge" {} ''
+      test ${lib.escapeShellArg actual} = ${lib.escapeShellArg expected}
+      mkdir -p "$out"
+    '';
+
+  # The namespace graph `nix-clj-unit` renders from the real Biff todo-app
+  # tree, diffed against a committed golden. 16 namespaces with real edges
+  # between them, which is the only tree in this repo where the Clojure unit
+  # graph is more than one node.
+  #
+  # It lives here rather than as a `#[test]` in the crate because cargo-unit
+  # scopes each crate's source to its own package directory, so
+  # packages/biff/todo-app/src is not reachable from a test derivation
+  # (ENG-10990). The crate's own tests cover the parsing shapes against
+  # synthetic trees; this covers the one real tree.
+  cljUnitTodoAppGraphTest =
+    pkgs.runCommand "ix-test-clj-unit-todo-app-graph" {
+      nativeBuildInputs = [pkgs.diffutils];
+      strictDeps = true;
+    } ''
+      # Rendered from inside the tree so the recorded paths are relative,
+      # which is what makes a golden comparison stable across store paths.
+      cd ${paths.packagesRoot + "/biff/todo-app"}
+      ${lib.getExe repoPackages.nix-clj-unit} render --src src --out "$TMPDIR/graph.json"
+      diff -u ${./fixtures/clj-unit-todo-app-graph.json} "$TMPDIR/graph.json"
+      mkdir -p "$out"
+    '';
 in {
   inherit
     groupTests
@@ -6707,6 +7122,9 @@ in {
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
+  biffReadingListVm = biffReadingListVmTest;
+  biffTodoAppVm = biffTodoAppVmTest;
+  cljUnitTodoAppGraph = cljUnitTodoAppGraphTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
 
@@ -6720,6 +7138,8 @@ in {
       portableServicesTest
       provenanceTest
       cargoUnitPrebuiltTest
+      cljUnitTodoAppGraphTest
+      cljLauncherMungeTest
     ]
   );
 }
