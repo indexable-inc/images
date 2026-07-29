@@ -180,7 +180,7 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 8e83dba8 (54 patches on 2c6d06e9387c): the 53-patch series
+      # Megamerge 0f356d7c (54 patches on 2c6d06e9387c): the 53-patch series
       # that 5ab172cd carries, plus `don't let Darwin discard a fast-exiting
       # builder's log` (ENG-11172). On macOS a builder that writes its
       # diagnostic and exits at once during a parallel build produced no log at
@@ -191,7 +191,7 @@
       # downstream. Nix now holds a slave fd for the build's lifetime and takes
       # the end of the build from a liveness pipe the builder inherits, so the
       # pty is never torn down with unread output in it.
-      url = "github:indexable-inc/nix/8e83dba82bfb4c0f1286502d0ddf3451fbc9a902";
+      url = "github:indexable-inc/nix/0f356d7cf513ca074a2122079defeb95810b6a91";
       flake = false;
     };
 
