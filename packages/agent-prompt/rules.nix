@@ -215,6 +215,43 @@
     };
   }
   {
+    noOpChecks = {
+      topics = ["verification"];
+      text = ''
+        A check must fail differently from a check that did not run. Before
+        trusting a green, name what the no-op path looks like and confirm it
+        is not this one: a skipped test that returns Ok, a grep whose subject
+        changed shape, a rollup field that reads pending as passing, a
+        verifier absent from the host it was meant to check. Where a check
+        can be skipped, make the skip an outcome something counts, never
+        silence. Where it reads another tool, read that tool's state and not
+        its rendering. Report the share of subjects the check reached and the
+        share that then passed; either number alone is how this goes wrong.
+      '';
+      reason = ''
+        2026-07-29: one sweep found eleven checks across two repos, all
+        landed in a single day, that passed or failed for a reason unrelated
+        to what they verify. Every one was caught by a person who already
+        knew the answer, none by a gate. The worst was a correctness bug and
+        not only a blind spot: nox fingerprints a dirty tree by hashing `git
+        diff --binary HEAD`, and this repo sets `diff.external difft`, so
+        that prints `Binary file modified (old: 2 KiB, new: 2 KiB)`, which is
+        byte-identical for two different binaries of the same size. The eval
+        and NAR caches then served the wrong tree's digest under a module
+        header promising never a wrong hit.
+
+        Deliberately its own rule. validate covers a wrapper reporting zero
+        for a check that did run, and classOverInstance covers preferring a
+        gate to a patch; neither covers a check that never ran, or a rendered
+        summary read in place of the state behind it. The coverage clause
+        generalises past continuous integration: the house rules already
+        carry that shape for ClickHouse joins, where an unmatched ASOF row
+        fills with zeros rather than nulls, and reporting one number instead
+        of two produced three confidently wrong measurements.
+      '';
+    };
+  }
+  {
     rootCause = {
       topics = ["verification"];
       text = ''

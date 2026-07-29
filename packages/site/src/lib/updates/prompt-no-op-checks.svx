@@ -1,0 +1,50 @@
+---
+id: prompt-no-op-checks
+postedAt: 2026-07-29T09:30:00-07:00
+title: "House prompt: a check must fail differently from a check that did not run"
+tags: [agent, prompt, verification]
+links:
+  - label: rules
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent-prompt/rules.nix
+---
+
+The house prompt gains a `noOpChecks` rule. Before trusting a green, name what
+the no-op path looks like and confirm it is not this one: a skipped test that
+returns Ok, a grep whose subject changed shape, a rollup field that reads
+pending as passing, a verifier absent from the host it was meant to check.
+Where a check can be skipped, the skip is an outcome something counts, never
+silence. Where a check reads another tool, it reads that tool's state and not
+its rendering. Coverage gets reported two ways: the share of subjects the
+check reached, and the share that then passed.
+
+## Why now
+
+A sweep found eleven checks across two repos, all landed on one day, that
+passed or failed for a reason unrelated to what they verify. Every one was
+caught by a person who already knew the answer. None was caught by a gate.
+
+The worst was not a blind spot but a correctness bug. `nox` fingerprints a
+dirty tree by hashing `git diff --binary HEAD`. This repo sets
+`diff.external difft`, so that command prints
+
+```
+Binary file modified (old: 2 KiB, new: 2 KiB)
+```
+
+which is byte-identical for two different binaries of the same size. The eval
+cache and the NAR cache served the wrong tree's digest, under a module header
+promising never a wrong hit.
+
+## Why it is not folded into an existing rule
+
+`validate` already says the terminal artifact is the outcome and not a
+wrapper's zero exit. That is a wrapper lying about a check that ran. This is a
+check that never ran, or a rendered summary read in place of the state behind
+it. `classOverInstance` is about preferring a gate to a patch and says nothing
+about whether the gate fires.
+
+The last clause is the part that generalises past continuous integration. The
+house ClickHouse rules already carry it: an unmatched `ASOF JOIN` row fills
+with defaults rather than nulls, so a join that covered almost nothing reads
+as a join that found zeros everywhere, and reporting one number instead of two
+produced three confidently wrong measurements.
