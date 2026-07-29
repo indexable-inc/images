@@ -5,6 +5,8 @@ defmodule IxMcp.MCP.Server do
   surface itself lives in `IxMcp.MCP.Tools`.
   """
 
+  alias IxMcp.Fleet.Topology
+  alias IxMcp.Fleet.Watch
   alias IxMcp.MCP.Tools
 
   @protocol_version "2025-06-18"
@@ -33,6 +35,16 @@ defmodule IxMcp.MCP.Server do
 
       {"ping", id} when id != nil ->
         result(id, %{})
+
+      # The `logging` capability has been advertised since this server existed,
+      # but the method it promises was never handled -- a conforming client
+      # asking to turn the volume down got "method not found" for a capability
+      # we claimed. It is the specification's own coarse unsubscribe, so fleet
+      # alerts honour it as their level floor (ENG-11209). Note the delivery
+      # method is still notifications/claude/channel, not
+      # notifications/message: see IxMcp.Fleet.Watch for why.
+      {"logging/setLevel", id} when id != nil ->
+        set_log_level(id, params)
 
       {"tools/list", id} when id != nil ->
         result(id, %{"tools" => Tools.list()})
@@ -81,6 +93,22 @@ defmodule IxMcp.MCP.Server do
 
   defp handle_tool_call(id, _params), do: error(id, -32_602, "tools/call requires a name")
 
+  defp set_log_level(id, %{"level" => level}) when is_binary(level) do
+    if level in Watch.levels() do
+      Watch.set_level(level)
+      result(id, %{})
+    else
+      error(
+        id,
+        -32_602,
+        "unknown level #{inspect(level)}; expected one of: #{Enum.join(Watch.levels(), ", ")}"
+      )
+    end
+  end
+
+  defp set_log_level(id, _params),
+    do: error(id, -32_602, "logging/setLevel requires a string level")
+
   # Every tools/call lands one `running` row in the action log BEFORE it
   # executes (#3536), so a reader sees in-flight calls and a crash mid-call
   # leaves a visible running row rather than nothing. Asking the session for
@@ -110,8 +138,27 @@ defmodule IxMcp.MCP.Server do
     persistent workspace (bindings survive across calls), each cell in its
     own supervised BEAM process.
 
+    #{fleet_preamble()}
     #{Tools.surface_guide()}
     """
+  end
+
+  # The operator asked to see the BEAM hosts on connect, and `instructions` is
+  # the right affordance for it rather than a notification (ENG-11209). It is
+  # delivered exactly once, as part of the handshake, before any tool call --
+  # so it cannot become a stream no matter what the fleet does, which is the
+  # property every other candidate lacked. A server-initiated notification
+  # would have to pick a moment to fire and would fire again on every
+  # reconnect; a resource would need the client to think of reading it.
+  #
+  # Probing costs one concurrent ping sweep. It is bounded, but it is not
+  # free, so it happens here (once per session) and nowhere else.
+  defp fleet_preamble do
+    Topology.render(Topology.summary())
+  rescue
+    # A handshake must not fail because a liveness probe did. Saying the
+    # topology is unavailable is honest; refusing to connect is not.
+    error -> "BEAM mesh: topology unavailable (#{Exception.message(error)})."
   end
 
   defp intent(%{"intent" => intent}) when is_binary(intent), do: intent

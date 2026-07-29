@@ -50,6 +50,12 @@ defmodule IxMcp.Fleet do
   behavior.
   """
 
+  alias IxMcp.ActionLog
+  alias IxMcp.Fleet.Alerts
+  alias IxMcp.Fleet.Digest
+  alias IxMcp.Fleet.Topology
+  alias IxMcp.Fleet.Watch
+
   @nodes_env "IX_BEAM_NODES"
   @cookie_env "IX_BEAM_COOKIE"
   @cookie_file_env "IX_BEAM_COOKIE_FILE"
@@ -76,6 +82,148 @@ defmodule IxMcp.Fleet do
     # astlog-ignore: no-unsafe-to-atom
     |> Enum.map(&String.to_atom/1)
   end
+
+  @doc """
+  Which hosts the BEAM is actually on, probed now: reachable, unreachable, or
+  unknown-because-distribution-is-down. This is the same summary the server
+  puts in its `initialize` instructions.
+  """
+  @spec topology() :: Topology.t()
+  def topology, do: Topology.summary()
+
+  @doc """
+  Poll the fleet for alert conditions right now and say what happened.
+
+  Returns `%{announced: hits, suppressed: n, errors: reasons}`. A non-empty
+  `errors` means part of the fleet could not be read -- which is NOT the same
+  as a healthy fleet, and is why it is a separate key rather than an empty
+  `announced`.
+  """
+  @spec check() :: %{announced: [map()], suppressed: non_neg_integer(), errors: [String.t()]}
+  def check, do: Watch.poll_now()
+
+  @doc """
+  Silence one alert predicate durably. Survives reconnects and restarts.
+  Valid ids come from `Alerts.ids/0`; an unknown id is refused
+  rather than accepted into a mute list that then does nothing.
+  """
+  @spec mute(String.t(), String.t() | nil) :: :ok | {:error, String.t()}
+  def mute(predicate, reason \\ nil) when is_binary(predicate) do
+    if predicate in mutable() do
+      case ActionLog.mute_fleet_predicate(predicate, reason) do
+        :disabled ->
+          {:error,
+           "the action log is degraded, so the mute was not stored and " <>
+             "#{predicate} will keep announcing"}
+
+        _stored ->
+          :ok
+      end
+    else
+      known = Enum.join(mutable(), ", ")
+      {:error, "unknown predicate #{inspect(predicate)}; known: #{known}"}
+    end
+  end
+
+  @doc """
+  Everything that can be muted.
+
+  * a discrete predicate id -- "this specific alarm is wrong"
+  * `"heartbeat"` -- stop the hourly baseline line
+  * `"anomaly"` -- stop the immediate out-of-band line
+  * `"digest"` -- both of the above
+  * `"digest:warning"` and friends -- keep the line, drop one category from it
+
+  Five shapes rather than one, because they answer genuinely different asks and
+  an operator who can only mute everything will mute everything.
+  """
+  @spec mutable() :: [String.t()]
+  def mutable do
+    Alerts.ids() ++
+      ["digest", "heartbeat", "anomaly"] ++
+      for(level <- ~w(warning error crit alert emerg), do: "digest:" <> level)
+  end
+
+  @doc """
+  Un-silence one alert predicate. `{:error, _}` when the log is degraded and
+  the change could not be stored.
+  """
+  @spec unmute(String.t()) :: :ok | {:error, String.t()}
+  def unmute(predicate) when is_binary(predicate) do
+    case ActionLog.unmute_fleet_predicate(predicate) do
+      :disabled -> {:error, "the action log is degraded, so the unmute was not stored"}
+      _ok -> :ok
+    end
+  end
+
+  @doc """
+  What is currently muted, and what alerts are standing. A condition that
+  fired once and is still true lives here rather than being re-announced, so
+  this is where to look when the channel has gone quiet and you want to know
+  whether that means "fine" or "already told you".
+  """
+  @spec alerts() :: %{muted: [map()], standing: [map()], level: String.t()}
+  def alerts do
+    %{
+      muted: ActionLog.fleet_mutes(),
+      standing: ActionLog.fleet_alerts_seen(),
+      level: Watch.level()
+    }
+  end
+
+  @doc """
+  Expand the last heartbeat window into what was actually counted: the top
+  host, level and unit combinations, with a sample message each.
+
+  The line is a pointer, not the content. Without this, getting curious means
+  writing ClickHouse by hand at precisely the moment attention is available.
+  """
+  @spec digest() :: {:ok, [map()]} | {:error, String.t()}
+  def digest, do: expand(Watch.digest_state())
+
+  defp expand(%{last: nil}),
+    do: {:error, "no heartbeat has been sent yet; Fleet.heartbeat_now() builds one"}
+
+  defp expand(%{last: %{from: from, to: to}}), do: Digest.detail(from, to)
+
+  @doc "Send a heartbeat immediately. `{:ok, nil}` if the window was empty."
+  @spec heartbeat_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def heartbeat_now, do: Watch.heartbeat_now()
+
+  @doc """
+  Check the last complete minute for an anomaly immediately. `{:ok, nil}` means
+  in band, which is the answer roughly 99.5% of the time by construction.
+  """
+  @spec anomaly_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def anomaly_now, do: Watch.anomaly_now()
+
+  @doc """
+  Read or set the heartbeat period in seconds (default 3600, minimum 60).
+
+  Hourly rather than per-minute for a measured reason: 87.1% of minutes are
+  non-empty, so a 60s heartbeat costs roughly **1,250 lines a day** while an
+  hourly one costs 24. Anomalies do not wait for the hour -- they emit within
+  a minute of detection, at a measured 10.3 a day.
+  """
+  @spec heartbeat_period(pos_integer() | nil) :: pos_integer() | :ok | {:error, String.t()}
+  def heartbeat_period(seconds \\ nil)
+  def heartbeat_period(nil), do: Watch.digest_state().period_s
+  def heartbeat_period(seconds) when is_integer(seconds), do: Watch.set_heartbeat_period(seconds)
+
+  @doc """
+  The anomaly threshold in force for the current clock hour, and the quantile
+  it is taken at. Useful for answering "why did that not fire".
+  """
+  @spec anomaly_threshold() :: map() | nil
+  def anomaly_threshold, do: Watch.digest_state().threshold
+
+  @doc """
+  Forget standing alerts so they announce again: `:all`, or one predicate id.
+  Use after fixing something, to confirm the fix by silence rather than by
+  assumption.
+  """
+  @spec forget(:all | String.t()) :: integer()
+  def forget(scope \\ :all), do: ActionLog.forget_fleet_alerts(scope)
 
   @doc """
   Ensure distributed Erlang is running on this node, starting it (and setting

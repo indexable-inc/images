@@ -30,6 +30,45 @@ defmodule IxMcp.MCP.Tools do
                                             session's finishes here (own jobs
                                             already announce; session ids:
                                             Sessions.list())
+      Fleet.digest()                        expand the last fleet heartbeat window
+                                            into what it counted (host, level, unit,
+                                            sample message)
+      Fleet.heartbeat_period()              read the heartbeat period; pass seconds
+                                            to change it (default 3600, minimum 60).
+                                            Hourly is measured, not arbitrary: 87% of
+                                            minutes are non-empty, so a per-minute
+                                            line costs ~1,250/day where hourly costs
+                                            24. Anomalies do not wait for the hour;
+                                            they emit within a minute, ~10/day
+      Fleet.anomaly_threshold()             the count this clock hour has to exceed,
+                                            and the quantile it comes from -- answers
+                                            "why did that not fire"
+      Fleet.check()                         poll for discrete alert conditions now;
+                                            .errors non-empty means part of the
+                                            fleet could NOT be read, which is not
+                                            the same as healthy
+      Fleet.mute("anomaly")                 UNSUBSCRIBE, five shapes, all durable
+                                            across reconnects:
+                                              "heartbeat"       the hourly baseline
+                                              "anomaly"         the immediate
+                                                                out-of-band line
+                                              "digest"          both of those
+                                              "digest:warning"  keep the line, drop
+                                                                one category (also
+                                                                error, crit, alert,
+                                                                emerg)
+                                              "oom_burst"       one discrete alert
+                                            Fleet.unmute/1 undoes any of them,
+                                            Fleet.mutable() lists them all, and
+                                            Fleet.alerts() shows what is muted plus
+                                            what is standing. The MCP
+                                            logging/setLevel request raises the
+                                            severity floor for discrete alerts in
+                                            one go. Discrete ids: kernel_storage,
+                                            ci_oom_success, oom_burst,
+                                            observability_blind
+      Fleet.topology()                      which hosts the BEAM is on (also in
+                                            this server's connect instructions)
       Read.file(path)                       a file; Read.file(path, first, last) slices
                                             a 1-based inclusive line range
       Edit.replace(path, old, new)          exact-string find/replace with native
@@ -168,6 +207,12 @@ defmodule IxMcp.MCP.Tools do
   persist -- code ships as source strings), and darwin-specific behavior.
   Fleet.nodes() == [] means no fleet is configured (helpers return
   {:error, :no_nodes}); the remote env is minimal (shell-outs limited).
+
+  Fleet notifications (heartbeat, anomaly, discrete alerts) ride
+  notifications/claude/channel, which is a Claude Code extension rather than
+  standard MCP: a non-Claude MCP client receives none of them, and for those
+  clients the initialize `instructions` field is the only surface that reaches
+  the reader (#3785).
   """
 
   @doc "The in-language surface cheat sheet (also shipped as server instructions)."

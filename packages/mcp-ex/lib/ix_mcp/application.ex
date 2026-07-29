@@ -62,6 +62,11 @@ defmodule IxMcp.Application do
         # sessions viewing that document.
         IxMcp.Dashboard.Bridge,
         IxMcp.Jobs.Reaper,
+        # After the notifier it pushes through (ENG-11209). Polls the fleet on a
+        # timer, so it is started always rather than only under stdio: a kernel
+        # driven by a test or a sibling instance still wants the mute state and
+        # the standing-alert ledger warm.
+        IxMcp.Fleet.Watch,
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},
         # The depth-1 subagent surface (index#3700): harness first, then the
