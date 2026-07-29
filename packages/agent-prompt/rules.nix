@@ -208,7 +208,9 @@
         only through an environment variable holding a store path is a rebuild
         nobody asked for. The ranking is cost per change and cannot see how
         often a node moves, so confirm the top entry is built here before
-        calling it a defect; a pinned upstream one is free.
+        calling it a defect; a pinned upstream one is free. The `nix-debugger`
+        skill carries the rest of that loop, down to the generation diff that
+        tells a real unit change from a store path moving under it.
       '';
       reason = ''
         Store paths injected into every cargo unit's env cost 4,477 rebuilds
@@ -217,7 +219,11 @@
         rule only has to say which column to read. The volatility clause is
         there because the same session then read the ranking straight and
         filed ENG-10662 against a JDK that is pinned to nixpkgs and costs
-        nothing; retracted after checking `nativeCcEnv`.
+        nothing; retracted after checking `nativeCcEnv`. The skill pointer was
+        added 2026-07-29: on hil-compute-2 the cas fabric server unit
+        changed in 34 of 59 consecutive generation pairs and 29 of those 34
+        normalized to byte identical, so most of the handoff cost that caps
+        fleet auto-deploy at a 6 hour timer is a store path moving.
       '';
     };
   }
