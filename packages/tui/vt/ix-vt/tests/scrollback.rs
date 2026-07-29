@@ -48,7 +48,7 @@ fn a_row_count_in_the_byte_field_buys_the_same_floor_whatever_it_says() {
 
     assert!(
         kept[0] < 2_000,
-        "10000 bytes is 15 rows of 80 columns; keeping {} rows would mean the \
+        "1000 bytes is one row of 80 columns; keeping {} rows would mean the \
          field had become a row count and scrollback_bytes_for_lines is now \
          over-budgeting by 1000x",
         kept[0]
