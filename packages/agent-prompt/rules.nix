@@ -197,6 +197,35 @@
     };
   }
   {
+    costFloor = {
+      topics = ["verification"];
+      text = ''
+        Before calling something slow, derive its floor from the machine:
+        bytes moved over measured throughput, work units over cores times
+        measured per-unit cost. Report the floor and the ratio, not the
+        observed time. "872s against a 60s floor, 14x" says how much is
+        recoverable and when to stop; "872s" says neither, and near 1x there
+        is nothing to recover. Measure the constants on the device
+        (throughput to that disk and that endpoint, core count, memory
+        bandwidth), or the floor is a guess with arithmetic on it. Name the
+        resource you think is limiting: a floor from the wrong bottleneck is
+        worse than none, and an observed time below your floor means the
+        model is wrong.
+      '';
+      reason = ''
+        Requested 2026-07-28. Durations were reported bare, so a reader could
+        not separate a run near its physical limit from one with a defect,
+        and neither could the agent that wrote the number. Sits beside
+        nixPlanShape because that rule is this judgment applied to one tool,
+        and general before specific is the order a reader wants. Distinct
+        from firstPrinciples, which scopes itself to claims about behavior:
+        this one says which number to compute and report. Dropped a clause
+        asking for the breakdown as a stacked bar, since generativeUiOutput
+        already owns the response surface.
+      '';
+    };
+  }
+  {
     nixPlanShape = {
       topics = ["verification" "tooling"];
       text = ''
