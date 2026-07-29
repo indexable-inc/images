@@ -355,12 +355,25 @@
         cost, type safety, and a single deployable binary count for more.
         Reach for Python or JS only where the ecosystem forces it (a library
         with no Rust equivalent, an existing app in that language) and say
-        why.
+        why. The same goes for shell: a script that branches or handles
+        errors belongs in Rust, whichever shell it is written in. Shell is
+        still right where a script is a short run of literal commands with
+        no logic of its own, such as a few-line wrapper, a `just` recipe, a
+        git hook, or a `writeShellApplication` gluing two store paths. A
+        script that outgrows that gets ported, not extended.
       '';
       reason = ''
         New backend code kept landing in Python and JS for authoring
         convenience that does not apply when an agent writes it; performance
         and single-binary deploys matter more (Andrew, 2026-07-23).
+
+        Extended 2026-07-29 at the user's request to cover shell, which the
+        first version left out and which agents reach for by reflex. The
+        argument is the one already stated above: an agent's write cost is
+        near zero and the script's runtime cost is not. Extended rather than
+        written beside, because a second rule carrying that same reasoning
+        is what the header forbids. The exception list is named because a
+        default with no stated boundary reads as absolute and gets ignored.
       '';
     };
   }
