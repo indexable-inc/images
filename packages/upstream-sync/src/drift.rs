@@ -114,11 +114,11 @@ fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
     let branch = match &fork.upstream_ref {
         Some(configured) => configured.clone(),
         None => match gh::read(&fork.name, &repo, ".default_branch")? {
-            Some(branch) => branch,
-            None => return Ok(None),
+            gh::Read::Value(branch) => branch,
+            gh::Read::Absent(_) => return Ok(None),
         },
     };
-    let Some(n) = gh::read(
+    let gh::Read::Value(n) = gh::read(
         &fork.name,
         &format!("{repo}/compare/{rev}...{branch}"),
         ".ahead_by",
@@ -136,43 +136,63 @@ fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
 /// the range (thousands on a months-old mesa pin), so the cheap
 /// single-commit lookup is the reliable unauthenticated read and
 /// commits-behind stays unknown (the RFC allows exactly this degradation).
-fn gitlab_base_date(url: &str, rev: &str) -> Option<String> {
-    let caps = regex!(r"^https?://([^/]+)/(.+)$").captures(url)?;
+///
+/// # Errors
+/// Fails when the GitLab host cannot be reached or refuses the read, on the
+/// same reasoning as [`gh::read`]: no answer is not the same as the answer
+/// "not here", and only the latter may become an unknown cell.
+fn gitlab_base_date(name: &str, url: &str, rev: &str) -> Result<Option<String>> {
+    let Some(caps) = regex!(r"^https?://([^/]+)/(.+)$").captures(url) else {
+        return Ok(None);
+    };
     let host = &caps[1];
     let path = caps[2].trim_start_matches('/').trim_end_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
-    // Percent-encode every byte (the API wants the project path as ONE
-    // segment; encoding alphanumerics too is legal and matches `url encode
-    // --all` in the nu predecessor).
-    let project = path.bytes().fold(String::new(), |mut acc, b| {
-        use std::fmt::Write as _;
-        let _ = write!(acc, "%{b:02X}");
-        acc
-    });
+    // The API wants the project path as ONE path segment, so the separating
+    // slash has to be %2F. Only the slash: the nu predecessor used `url
+    // encode --all` and encoded every byte, which is equally legal (verified:
+    // `projects/%6D%65%73%61%2F%6D%65%73%61` returns the same 200 as
+    // `projects/mesa%2Fmesa`) but rendered the endpoint unreadable in exactly
+    // the error messages someone debugging is reading. ENG-11160 was misread
+    // as an encoding bug for that reason alone.
+    let project = path.replace('/', "%2F");
     let endpoint = format!("https://{host}/api/v4/projects/{project}/repository/commits/{rev}");
 
-    let warn = || {
-        eprintln!(
-            "{}",
-            paint(
-                YELLOW,
-                &format!("upstream-sync: drift: {endpoint} unreachable; base age left unknown")
-            )
-        );
+    let mut res = match ureq::get(&endpoint).call() {
+        Ok(res) => res,
+        // ureq surfaces a non-2xx as an error carrying the response, so an
+        // answered 404 has to be dug back out before it is called a
+        // connection problem.
+        Err(ureq::Error::StatusCode(code)) if matches!(code, 404 | 422) => {
+            eprintln!(
+                "{}",
+                paint(
+                    YELLOW,
+                    &format!(
+                        "upstream-sync: drift: {name}: {endpoint} answered HTTP {code}. The \
+                         pinned rev is not present upstream -- mesa-style forks live on GitHub \
+                         while the upstream is GitLab, so the two share no object store and a \
+                         megamerge sha can never resolve there. Base age left unknown."
+                    )
+                )
+            );
+            return Ok(None);
+        }
+        Err(err) => {
+            return Err(eyre!(
+                "upstream-sync: drift: {name}: cannot reach {endpoint}: {err}. This is fatal \
+                 rather than an unknown cell: a drift table computed without the forge reads as \
+                 \"no drift\", not as \"unknown\"."
+            ));
+        }
     };
-    let Ok(mut res) = ureq::get(&endpoint).call() else {
-        warn();
-        return None;
-    };
-    let Ok(v) = res.body_mut().read_json::<serde_json::Value>() else {
-        warn();
-        return None;
-    };
-    let date = v.get("committed_date").and_then(serde_json::Value::as_str);
-    if date.is_none() {
-        warn();
-    }
-    date.map(str::to_owned)
+    let v = res
+        .body_mut()
+        .read_json::<serde_json::Value>()
+        .wrap_err_with(|| format!("upstream-sync: drift: {name}: {endpoint} is not JSON"))?;
+    Ok(v.get("committed_date")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned))
 }
 
 fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result<Option<String>> {
@@ -182,8 +202,12 @@ fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result
             &fork.name,
             &format!("repos/{}/{}/commits/{rev}", slug.owner, slug.repo),
             ".commit.committer.date",
-        ),
-        "gitlab" => Ok(gitlab_base_date(&fork.upstream_url, rev)),
+        )
+        .map(|read| match read {
+            gh::Read::Value(date) => Some(date),
+            gh::Read::Absent(_) => None,
+        }),
+        "gitlab" => gitlab_base_date(&fork.name, &fork.upstream_url, rev),
         _ => Ok(None),
     }
 }
