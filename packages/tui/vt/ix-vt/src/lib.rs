@@ -516,7 +516,7 @@ pub struct TerminalOptions {
     /// `max_scrollback` ("Maximum number of lines to keep in scrollback
     /// history"; the header comment is wrong, ix#9031). The C field goes
     /// straight to ghostty's `Screen.init`, whose own doc comment reads
-    /// "max_scrollback is the amount of scrollback to keep in bytes", and
+    /// "`max_scrollback` is the amount of scrollback to keep in bytes", and
     /// from there to `PageList.init`'s `max_size`, "the maximum number of
     /// bytes that will be allocated for pages". ghostty's user-facing config
     /// agrees: `scrollback-limit` is "the size of the scrollback buffer in
