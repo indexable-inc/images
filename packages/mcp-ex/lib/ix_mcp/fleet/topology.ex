@@ -41,7 +41,18 @@ defmodule IxMcp.Fleet.Topology do
   """
   @spec summary() :: t()
   def summary do
-    configured = Fleet.nodes()
+    summary(Fleet.nodes())
+  end
+
+  # No nodes configured means no ping can tell us anything, so this must not
+  # call ensure_dist/0: the answer is already known, and starting distribution
+  # to discover it would add latency to every MCP handshake and break Fleet's
+  # stated contract that distribution stays lazy so sandboxed builds never open
+  # an epmd listen socket.
+  defp summary([]),
+    do: %{configured: [], nodes: [], distribution: :ok, local: Node.self()}
+
+  defp summary(configured) do
     dist = Fleet.ensure_dist()
 
     %{

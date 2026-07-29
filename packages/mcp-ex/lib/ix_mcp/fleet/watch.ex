@@ -69,7 +69,10 @@ defmodule IxMcp.Fleet.Watch do
   and by the tests, which must not sleep for a poll interval.
   """
   @spec poll_now() :: %{announced: [map()], suppressed: non_neg_integer(), errors: [String.t()]}
-  def poll_now, do: GenServer.call(__MODULE__, :poll_now, 120_000)
+  # Above the sum of the three predicate reads' own timeouts (3 x 60s in
+  # ClickHouse), or a slow leader makes Fleet.check/0 raise while the poll it
+  # is waiting on is still making progress.
+  def poll_now, do: GenServer.call(__MODULE__, :poll_now, 200_000)
 
   # Heartbeat period: the visible baseline, at 24 lines a day. Hourly rather
   # than per-minute because the measured cost of per-minute is ~1,250 lines a
@@ -77,11 +80,11 @@ defmodule IxMcp.Fleet.Watch do
   # wallpaper becomes when there is too much of it.
   @default_heartbeat_s Application.compile_env(:ix_mcp, :fleet_heartbeat_period_s, 3_600)
 
-  # Anomaly detection cadence. Measurement is per-minute because that is the
-  # granularity the distribution supports; only emission is rare, and it is
-  # rare by construction rather than by hope -- see IxMcp.Fleet.Digest on why
-  # the threshold is a quantile and not a ratio.
-  @anomaly_interval_s 60
+  # Anomaly detection runs once a minute, aligned to the wall clock by
+  # next_minute_ms/0. Measurement is per-minute because that is the granularity
+  # the distribution supports; only emission is rare, and it is rare by
+  # construction rather than by hope -- see IxMcp.Fleet.Digest on why the
+  # threshold is a quantile and not a ratio.
 
   @doc """
   Send a heartbeat now. `{:ok, nil}` means the window was empty and nothing
@@ -216,13 +219,18 @@ defmodule IxMcp.Fleet.Watch do
 
   def handle_info(:anomaly, state) do
     {_reply, state} = anomaly_cycle(state)
-    Process.send_after(self(), :anomaly, @anomaly_interval_s * 1_000)
+    # To the wall-clock boundary, not `now + 60s`. Rescheduling after the cycle
+    # makes the true period 60s plus query latency (measured ~450ms over ssh),
+    # which drifts a whole minute every ~2 hours and silently skips it.
+    Process.send_after(self(), :anomaly, next_minute_ms())
     {:noreply, state}
   end
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  # -- digest ------------------------------------------------------------------
+  defp next_minute_ms do
+    60_000 - rem(System.system_time(:millisecond), 60_000) + 2_000
+  end
 
   # -- heartbeat and anomaly ---------------------------------------------------
 
@@ -258,7 +266,7 @@ defmodule IxMcp.Fleet.Watch do
     query_fun = Keyword.get(opts, :query_fun, &ClickHouse.query/1)
     log = Keyword.get(opts, :action_log, ActionLog)
     notify = Keyword.get(opts, :notify, &announce_anomaly/1)
-    hour = Keyword.get(opts, :hour, current_hour())
+    hour = Keyword.get(opts, :hour, Digest.measured_hour())
 
     muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
 
@@ -296,8 +304,6 @@ defmodule IxMcp.Fleet.Watch do
         {:error, reason}
     end
   end
-
-  defp current_hour, do: DateTime.utc_now().hour
 
   # "digest" mutes both rates, because that is what somebody typing it means;
   # "heartbeat" and "anomaly" mute one each.
@@ -375,32 +381,75 @@ defmodule IxMcp.Fleet.Watch do
     log = Keyword.get(opts, :action_log, ActionLog)
     notify = Keyword.get(opts, :notify, &announce/1)
 
+    deliverable = Keyword.get(opts, :deliverable, deliverable?())
+
     muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
     outcomes = Alerts.evaluate(muted, query_fun)
 
     errors = for {_id, {:error, reason}} <- outcomes, do: reason
 
     hits =
-      outcomes
-      |> Enum.flat_map(fn
+      Enum.flat_map(outcomes, fn
         {_id, {:ok, hits}} -> hits
         {_id, {:error, _reason}} -> []
       end)
-      |> Enum.filter(&at_or_above?(&1.level, threshold))
 
-    # Newness is decided for every hit, including the ones the level filter
-    # will drop, so raising the threshold cannot cause a later lowering to
-    # replay a backlog of faults the operator already lived through.
+    # Nothing is recorded as seen unless it can actually be delivered. The
+    # fingerprint write is durable and one-way, so recording it while no
+    # transport is attached would bury the fault forever -- the fleet path has
+    # no outbox replay the way jobs do (#3839), so "announced" here has to mean
+    # announced. With no listener we simply do not decide, and the next poll
+    # sees the same fault fresh.
+    if deliverable do
+      decide(hits, threshold, log, notify, errors)
+    else
+      %{announced: [], suppressed: 0, errors: errors}
+    end
+  end
+
+  # A blind fingerprint has no time bucket, so without this a second outage is
+  # silent forever: the heartbeat and anomaly paths deliberately swallow their
+  # own errors on the grounds that observability_blind will announce them, and
+  # if it cannot, an outage becomes indistinguishable from a healthy hour.
+  defp rearm_blind(errors, log) do
+    if errors == [], do: ActionLog.forget_fleet_alerts("observability_blind", log)
+  end
+
+  defp decide(hits, threshold, log, notify, errors) do
+    rearm_blind(errors, log)
+    # Newness is decided for EVERY hit, before the level filter, so that
+    # raising the floor and later lowering it cannot replay a backlog of faults
+    # the operator already lived through. The previous version filtered first
+    # and the comment claiming otherwise sat directly above the bug.
     {fresh, suppressed} =
       Enum.split_with(
         hits,
         &ActionLog.fleet_alert_new?(&1.fingerprint, &1.predicate, &1.summary, log)
       )
 
-    if fresh != [], do: notify.(fresh)
+    # "I cannot see the fleet" is exempt from the level floor. It is a warning
+    # so that ordinary noise-reduction does not treat it as an outage, but the
+    # natural response to noise -- raise the floor to error -- must not be the
+    # thing that hides blindness.
+    announce_now =
+      Enum.filter(
+        fresh,
+        &(&1.predicate == "observability_blind" or at_or_above?(&1.level, threshold))
+      )
 
-    %{announced: fresh, suppressed: length(suppressed), errors: errors}
+    if announce_now != [], do: notify.(announce_now)
+
+    %{
+      announced: announce_now,
+      suppressed: length(suppressed) + length(fresh) - length(announce_now),
+      errors: errors
+    }
   end
+
+  # Whether any transport is attached to receive a channel event. Tests inject
+  # `deliverable: true` because they assert on the return value rather than on
+  # the wire.
+  defp deliverable?, do: Notifier.transports() > 0
 
   defp announce(hits) do
     content =

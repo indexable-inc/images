@@ -840,13 +840,13 @@ defmodule IxMcp.ActionLog do
   else: a mute that evaporates when the client reconnects is not a mute.
   Idempotent -- re-muting keeps the original `muted_at`.
   """
-  @spec mute_fleet_predicate(String.t(), String.t() | nil, GenServer.server()) :: :ok
+  @spec mute_fleet_predicate(String.t(), String.t() | nil, GenServer.server()) :: :ok | :disabled
   def mute_fleet_predicate(id, reason \\ nil, server \\ __MODULE__) when is_binary(id) do
     call(server, {:mute_fleet_predicate, id, reason, now()})
   end
 
   @doc "Unmute fleet predicate `id`. Unmuting something never muted is `:ok`."
-  @spec unmute_fleet_predicate(String.t(), GenServer.server()) :: :ok
+  @spec unmute_fleet_predicate(String.t(), GenServer.server()) :: :ok | :disabled
   def unmute_fleet_predicate(id, server \\ __MODULE__) when is_binary(id) do
     call(server, {:unmute_fleet_predicate, id})
   end
@@ -1658,9 +1658,12 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:mute_fleet_predicate, _id, _reason, _at}), do: :disabled
   defp disabled_reply({:unmute_fleet_predicate, _id}), do: :disabled
   defp disabled_reply(:fleet_mutes), do: []
-  # No ledger means no dedup record, so every poll would re-announce. Say
-  # "not new" instead: a degraded log must not turn one fault into a stream.
-  defp disabled_reply({:fleet_alert_seen, _fp, _pred, _summary, _at}), do: false
+  # No ledger means no dedup record. Answering `false` -- "already seen" --
+  # reads as harmless caution and is not: it marks EVERY hit as suppressed, so
+  # a degraded log silently turns the entire fleet-alert channel off, including
+  # the alert that says telemetry is unreadable. Answering `true` risks
+  # repeating one fault; that is the right side of this trade.
+  defp disabled_reply({:fleet_alert_seen, _fp, _pred, _summary, _at}), do: true
   defp disabled_reply(:fleet_alerts_seen), do: []
   defp disabled_reply({:forget_fleet_alerts, _scope}), do: 0
   defp disabled_reply({:heartbeat_session, _session_id, _at}), do: :ok

@@ -22,6 +22,7 @@ defmodule IxMcp.Fleet.Alerts do
   | id | condition | measured healthy-day rate |
   |---|---|---|
   | `kernel_storage` | kernel `alert`/`emerg` naming filesystem or block-device corruption | **1 day in 30** |
+  | `ci_oom_success` | OOM kills inside a CI job that reported `success` | **2 days of the 4 that exist** |
   | `oom_burst` | 3+ `CGROUP_OOM` kills of one `node`+`comm` inside an hour | **1 day in 4** (see caveat) |
   | `observability_blind` | the ClickHouse read itself failed | 0 by construction |
 
@@ -42,6 +43,12 @@ defmodule IxMcp.Fleet.Alerts do
   unnoticed for four days. The burst threshold is what makes it rare: bare
   `signal = 'CGROUP_OOM'` fires on **3 of those 4 days** and does not qualify.
   Revisit the threshold once the table has a month of history.
+
+  One more caveat on `oom_burst`: it buckets by `toStartOfHour`, not a sliding
+  hour, so a burst straddling a boundary (two kills at 03:59, two at 04:01)
+  never reaches `HAVING kills >= 3`. That makes the measured rate a slight
+  under-count and the predicate a slight under-detector; both err in the safe
+  direction, but read the prose "3+ inside an hour" as "inside one clock hour".
 
   VM-guest memory pressure is excluded from `oom_burst`, and the way it is
   excluded matters. On 2026-07-29 a VM named `golden` and its paired
@@ -111,30 +118,51 @@ defmodule IxMcp.Fleet.Alerts do
   # kernel is telling you the disk lost data, not that an application is sad.
   # Recency is part of the predicate, not the reader's job (ENG-11210). A
   # 24-hour lookback surfaced a five-hour-old finished operation as a live
-  # incident. The window is now the recent past only.
+  # incident, so the window is now the recent past only.
   #
-  # `device` is extracted and carried into the notification because "XFS
+  # `device` is extracted and carried into the notification, because "XFS
   # corruption on hil-compute-2" and "XFS corruption on a detached loopback
   # volume somebody was inspecting" are the same log line and different events.
   #
-  # Two suppressions, both from that false alarm:
+  # Two suppressions, and the first draft got BOTH wrong in ways only
+  # re-measuring caught. Recorded here because the failure mode is the one this
+  # module exists to prevent:
   #
-  #  * Transient devices are excluded. loop*, nbd*, dm-* are disk images,
-  #    network block devices and device-mapper targets -- guest volumes and
-  #    inspection mounts. A host filesystem lives on sd*, nvme*, vd* or md*.
-  #  * A device is dropped when the same window contains a `no-recovery` mount
-  #    of it. That phrase is an operator saying "I know this is broken and I am
-  #    looking at it anyway", and the corruption lines that follow are its
-  #    consequence rather than news.
+  #  * The device exclusion originally covered `dm-` as well as `loop`/`nbd`.
+  #    But `dm-` is device-mapper -- LVM and LUKS -- which is exactly where a
+  #    host root filesystem lives, and the ENG-11210 lines were on `dm-2`. So
+  #    the predicate matched ZERO rows in 30 days: it had been made incapable
+  #    of firing on the only event it was ever built for, while its
+  #    measured-rate table still claimed "1 day in 30". That is the
+  #    `unhealthy=1` dead-flag trap from the Rejected table below,
+  #    self-inflicted, and it survived because the suppression was measured
+  #    against the false alarm and never against the predicate's remaining
+  #    reach. Only `loop` and `nbd` are excluded now -- a disk image and a
+  #    network block device are never this host's root storage.
+  #
+  #  * The `no-recovery` suppression matched `(node_id, device)` using a
+  #    different regex on each side, and the outer extraction returns EMPTY for
+  #    three of the four signatures (`EXT4-fs error (device sda1)` contains a
+  #    space, which `[a-z0-9-]+` rejects). Pairing `(node, '')` against
+  #    `(node, '')` turned the exclusion into a host-wide wildcard: any process
+  #    logging the phrase "no-recovery mode" silenced every storage alert on
+  #    that host for 15 minutes. Not hypothetical --
+  #    `ix-system-clickhouse.service` logs it at info level whenever a query
+  #    containing the phrase errors, which is to say whenever this file's own
+  #    SQL comes back in an exception. The CTE now demands a kernel source and
+  #    a non-empty device, and both sides use one expression.
+  @device_re "'\\\\(([a-z0-9]+[0-9-]*)\\\\)'"
+
   @kernel_storage_sql """
   WITH deliberate AS (
-    SELECT DISTINCT node_id, extract(message, 'XFS \\\\(([a-z0-9-]+)\\\\)') AS device
+    SELECT DISTINCT node_id, extract(message, #{@device_re}) AS device
     FROM logs.journald_logs
     WHERE timestamp > now() - INTERVAL 30 MINUTE
+      AND systemd_unit = ''
       AND message LIKE '%no-recovery mode%'
+      AND extract(message, #{@device_re}) != ''
   )
-  SELECT node_id, level, message,
-         extract(message, '\\\\(([a-z0-9-]+)\\\\)') AS device
+  SELECT node_id, level, message, extract(message, #{@device_re}) AS device
   FROM logs.journald_logs
   WHERE timestamp > now() - INTERVAL 15 MINUTE
     AND level IN ('alert', 'emerg')
@@ -145,10 +173,15 @@ defmodule IxMcp.Fleet.Alerts do
       OR match(message, '(?i)(I/O error, dev [a-z0-9]+, sector)')
       OR match(message, '(?i)md/raid[0-9]*: (Disk failure|too many failures)')
     )
-    -- Host storage only: loop/nbd/dm are images, guest volumes and mapper
-    -- targets, and none of them is this host's filesystem degrading.
-    AND NOT match(message, '\\\\((loop|nbd|dm-)[0-9]+\\\\)')
-    AND (node_id, extract(message, '\\\\(([a-z0-9-]+)\\\\)')) NOT IN (SELECT node_id, device FROM deliberate)
+    -- Images and network block devices, never host root storage. dm-* is
+    -- deliberately NOT in this list; see the comment above.
+    AND NOT match(message, '\\\\((loop|nbd)[0-9]+\\\\)')
+    -- Only suppressible when a device was actually identified: an empty
+    -- extraction must never match an empty CTE row.
+    AND NOT (
+      extract(message, #{@device_re}) != ''
+      AND (node_id, extract(message, #{@device_re})) IN (SELECT node_id, device FROM deliberate)
+    )
   ORDER BY timestamp
   LIMIT 200
   """
@@ -310,7 +343,12 @@ defmodule IxMcp.Fleet.Alerts do
   defp kernel_storage_hit(row) do
     node = row["node_id"]
     message = row["message"] || ""
-    device = row["device"] || "?"
+
+    device =
+      case row["device"] do
+        d when d in [nil, ""] -> "?"
+        d -> d
+      end
 
     %{
       level: level("kernel_storage"),

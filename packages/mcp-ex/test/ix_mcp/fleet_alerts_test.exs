@@ -86,7 +86,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("warning",
           query_fun: &only_kernel_storage/1,
           action_log: log,
-          notify: &collect(&1, me)
+          notify: &collect(&1, me),
+          deliverable: true
         )
 
       assert [hit] = result.announced
@@ -105,7 +106,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("warning",
           query_fun: &only_ci_oom/1,
           action_log: log,
-          notify: fn _ -> :ok end
+          notify: fn _ -> :ok end,
+          deliverable: true
         )
 
       assert [hit] = result.announced
@@ -126,7 +128,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("warning",
           query_fun: &quiet_fleet/1,
           action_log: log,
-          notify: &collect(&1, me)
+          notify: &collect(&1, me),
+          deliverable: true
         )
 
       assert result == %{announced: [], suppressed: 0, errors: []}
@@ -134,7 +137,12 @@ defmodule IxMcp.FleetAlertsTest do
     end
 
     test "the same condition standing across polls announces exactly once", %{log: log} do
-      opts = [query_fun: &only_kernel_storage/1, action_log: log, notify: fn _ -> :ok end]
+      opts = [
+        query_fun: &only_kernel_storage/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
 
       first = Watch.run_poll("warning", opts)
       second = Watch.run_poll("warning", opts)
@@ -150,7 +158,7 @@ defmodule IxMcp.FleetAlertsTest do
     end
 
     test "a genuinely new event announces again even while an old one stands", %{log: log} do
-      opts = [action_log: log, notify: fn _ -> :ok end]
+      opts = [action_log: log, notify: fn _ -> :ok end, deliverable: true]
 
       assert length(Watch.run_poll("warning", [query_fun: &only_oom/1] ++ opts).announced) == 1
 
@@ -167,7 +175,12 @@ defmodule IxMcp.FleetAlertsTest do
 
   describe "break-test 2: muting silences it, and the mute survives a reconnect" do
     test "mute stops the notification, unmute restores it", %{log: log} do
-      opts = [query_fun: &only_kernel_storage/1, action_log: log, notify: fn _ -> :ok end]
+      opts = [
+        query_fun: &only_kernel_storage/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
 
       assert :ok = ActionLog.mute_fleet_predicate("kernel_storage", "testing", log)
       assert Watch.run_poll("warning", opts).announced == []
@@ -215,7 +228,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("critical",
           query_fun: &only_oom/1,
           action_log: log,
-          notify: fn _ -> :ok end
+          notify: fn _ -> :ok end,
+          deliverable: true
         )
 
       assert result.announced == [], "a warning must not survive a critical floor"
@@ -230,7 +244,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("warning",
           query_fun: &unreachable/1,
           action_log: log,
-          notify: &collect(&1, me)
+          notify: &collect(&1, me),
+          deliverable: true
         )
 
       refute result.errors == []
@@ -255,7 +270,12 @@ defmodule IxMcp.FleetAlertsTest do
     end
 
     test "a persistent outage announces once, not once per poll", %{log: log} do
-      opts = [query_fun: &unreachable/1, action_log: log, notify: fn _ -> :ok end]
+      opts = [
+        query_fun: &unreachable/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
 
       assert length(Watch.run_poll("warning", opts).announced) == 1
       assert Watch.run_poll("warning", opts).announced == []
@@ -268,7 +288,8 @@ defmodule IxMcp.FleetAlertsTest do
         Watch.run_poll("warning",
           query_fun: &unreachable/1,
           action_log: log,
-          notify: fn _ -> :ok end
+          notify: fn _ -> :ok end,
+          deliverable: true
         )
 
       assert result.announced == []
@@ -333,6 +354,105 @@ defmodule IxMcp.FleetAlertsTest do
       for id <- Alerts.ids() do
         assert Alerts.level(id) in Watch.levels()
       end
+    end
+  end
+
+  describe "regressions from the adversarial review" do
+    # The first draft excluded dm-* alongside loop/nbd, which made the predicate
+    # match ZERO rows in 30 days -- including the very ENG-11210 lines its
+    # measured-rate table cited, which were on dm-2. Verified against production:
+    # shipped SQL 0 hits, loop/nbd-only 3 hits. This asserts on the SQL text
+    # because the bug lived in the SQL and every other test stubs past it.
+    test "the storage predicate excludes images but not device-mapper" do
+      sql = captured_sql("Unmount and run xfs_repair")
+
+      assert sql =~ "(loop|nbd)", "loop and nbd must still be excluded"
+
+      refute sql =~ "(loop|nbd|dm-)",
+             "dm-* is LVM/LUKS host storage; excluding it made the predicate dead"
+    end
+
+    # The no-recovery suppression used a different regex on each side, and the
+    # outer one returns "" for three of the four signatures, so (node,'') paired
+    # with (node,'') and any process logging the phrase silenced every storage
+    # alert on that host. ix-system-clickhouse logs it at info level whenever
+    # this file's own SQL comes back in an exception.
+    test "the deliberate-mount suppression cannot become a host-wide wildcard" do
+      sql = captured_sql("Unmount and run xfs_repair")
+
+      assert sql =~ "AND systemd_unit = ''", "the CTE must require a kernel source"
+      assert sql =~ ~r/deliberate AS \(.*?!= ''/s, "the CTE must reject an empty device"
+
+      assert sql =~ ~r/extract\(message, '.+?'\) != ''\n\s+AND \(node_id/,
+             "an empty extraction must never match an empty CTE row"
+    end
+
+    defp captured_sql(marker) do
+      {:ok, agent} = Agent.start_link(fn -> [] end)
+
+      Alerts.evaluate([], fn sql ->
+        Agent.update(agent, &[sql | &1])
+        {:ok, []}
+      end)
+
+      agent |> Agent.get(& &1) |> Enum.find(&String.contains?(&1, marker))
+    end
+
+    test "a level-filtered hit is still recorded, so lowering the floor cannot replay it",
+         %{log: log} do
+      opts = [query_fun: &only_oom/1, action_log: log, notify: fn _ -> :ok end, deliverable: true]
+
+      # oom_burst is a warning; a critical floor drops it from delivery.
+      assert Watch.run_poll("critical", opts).announced == []
+
+      # Lowering the floor must NOT replay it: it was recorded as seen.
+      assert Watch.run_poll("warning", opts).announced == []
+    end
+
+    test "nothing is recorded as seen when no transport can receive it", %{log: log} do
+      opts = [
+        query_fun: &only_kernel_storage/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
+
+      assert Watch.run_poll("warning", Keyword.put(opts, :deliverable, false)).announced == []
+      assert ActionLog.fleet_alerts_seen(log) == [], "an undelivered alert must stay unrecorded"
+
+      # ...so it still announces once somebody is listening. Without this the
+      # fleet path buries any fault raised between sessions: unlike jobs, it has
+      # no outbox replay.
+      assert length(Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced) ==
+               1
+    end
+
+    test "blindness is exempt from the level floor", %{log: log} do
+      # Raising the floor is the natural response to noise, and it must not be
+      # the thing that hides "I cannot see the fleet".
+      result =
+        Watch.run_poll("emergency",
+          query_fun: &unreachable/1,
+          action_log: log,
+          notify: fn _ -> :ok end,
+          deliverable: true
+        )
+
+      assert [hit] = result.announced
+      assert hit.predicate == "observability_blind"
+    end
+
+    test "a recovered read re-arms blindness, so a second outage is not silent", %{log: log} do
+      opts = [action_log: log, notify: fn _ -> :ok end, deliverable: true]
+
+      assert length(Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced) == 1
+      assert Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced == []
+
+      # A successful poll clears the fingerprint...
+      Watch.run_poll("warning", [query_fun: &quiet_fleet/1] ++ opts)
+
+      # ...so the next outage announces rather than being deduped forever.
+      assert length(Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced) == 1
     end
   end
 end
