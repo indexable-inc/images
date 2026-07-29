@@ -14,10 +14,10 @@ defmodule IxMcp.Serve do
   process tree (`IxMcp.OsProc`) and their output reads like any run
   (`Jobs.tail/2`).
 
-  Once the dev server prints its port, the advertised URL is written to the
-  terminal as the split-view escape `ESC ]5522;open-url;<url> BEL`
-  (ix#8185): to the ix-term session pts when `IX_TERM_SESSION_ID` is set,
-  else to `/dev/tty`, else it is only logged and the serve keeps working.
+  Once the dev server prints its port, the advertised URL is shown in a pane
+  of the surrounding ix-term session by running `ixterm open <url>`. When
+  there is no `ixterm` to run, or it refuses, the reason is logged with the
+  URL and the serve keeps working.
   """
 
   alias IxMcp.Cmd
@@ -25,11 +25,6 @@ defmodule IxMcp.Serve do
   alias IxMcp.Serve.State
 
   require Logger
-
-  # Server-maintained session -> pts mapping, same contract as the ixterm
-  # CLI (ix crates/tools/ixterm/src/pts.rs): <root>/<id>/pts holds the
-  # absolute pts device path.
-  @sessions_root "/run/ix-term/sessions"
 
   @poll_ms 150
   # A staging change counts once the tree holds still this long: agents write
@@ -57,8 +52,8 @@ defmodule IxMcp.Serve do
   return `status/1`.
 
   Options: `:host` overrides the advertised host (default: this machine's
-  hostname, reachable because vite runs with `--host`); `open: false` skips
-  the terminal escape.
+  hostname, reachable because vite runs with `--host`); `open: false` leaves
+  the URL unopened.
   """
   @spec app(String.t(), keyword()) :: status()
   def app(dir, opts \\ []) do
@@ -89,7 +84,15 @@ defmodule IxMcp.Serve do
       )
 
     State.merge(dir, %{url: url, dev_job: dev.id, gate_job: gate.id})
-    if Keyword.get(opts, :open, true), do: emit_open_url(url)
+
+    if Keyword.get(opts, :open, true) do
+      with {:error, reason} <- open_url(url) do
+        # A serve does not depend on the pane opening -- the URL is the
+        # story, and this is the line that tells you to use it.
+        Logger.info("serve: #{reason}; open #{url} yourself")
+      end
+    end
+
     status(dir)
   end
 
@@ -291,59 +294,56 @@ defmodule IxMcp.Serve do
     "http://#{host}:#{port}/"
   end
 
-  # -- split-view escape (ix#8185) ---------------------------------------------
+  # -- showing the URL in a pane -----------------------------------------------
 
   @doc """
-  The byte-exact split-view escape: `ESC ]5522;open-url;<url> BEL` (ix#8185).
-  Only http(s) URLs; anything else raises rather than reaching a terminal.
+  Show `url` in a pane of the surrounding ix-term session.
+
+  Through the `ixterm` CLI, and not by writing an escape. This used to emit
+  `ESC ]5522;open-url;<url> BEL` (ix#8185), which ix-term retired in favour of
+  a unix-socket control channel: its scanner now answers that escape with
+  "ixterm is out of date: OSC 5522 was replaced by the pane control channel"
+  rendered into the pane
+  (ix `nix/modules/services/host/ix-term/src/osc.rs`). The old code returned
+  `:ok` whatever the write did, so a serve reported success while the pane
+  showed that message. Two ways to be wrong at once: the wrong protocol, and
+  no way to find out.
+
+  `ixterm` rather than the socket protocol spoken from here, because the
+  framing, the request shape and the order a pane is resolved in are one
+  implementation in ix and a second one in Elixir is one to keep in step. It
+  is found on `PATH` rather than pinned as a store path because ix depends on
+  index, so index cannot depend back on ix's binaries; that is also why a
+  missing `ixterm` has to be an ordinary runtime answer here rather than
+  something the build rules out.
+
+  Returns `{:error, reason}` when the URL did not reach a pane, naming what
+  refused it. Nothing about a serve depends on the pane opening, but "it
+  opened" and "nobody knows" are different answers and the old code gave the
+  first for both.
+
+  `find` is the lookup, injected so a test can assert the missing-`ixterm`
+  answer without emptying `PATH` out from under every other async test.
   """
-  @spec open_url_escape(String.t()) :: binary()
-  def open_url_escape(url) do
+  @spec open_url(String.t(), (String.t() -> String.t() | nil)) ::
+          :ok | {:error, String.t()}
+  def open_url(url, find \\ &System.find_executable/1) do
     unless url =~ ~r{\Ahttps?://} do
-      raise ArgumentError, "open-url takes an http(s) URL, got: #{inspect(url)}"
+      raise ArgumentError, "open takes an http(s) URL, got: #{inspect(url)}"
     end
 
-    "\e]5522;open-url;" <> url <> "\a"
-  end
-
-  @doc false
-  @spec emit_open_url(String.t()) :: :ok
-  def emit_open_url(url) do
-    bytes = open_url_escape(url)
-
-    case write_tty(bytes) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        # No terminal to split: the serve still works, the URL is the story.
-        Logger.info("serve: no terminal for open-url (#{inspect(reason)}); open #{url} yourself")
-        :ok
-    end
-  end
-
-  defp write_tty(bytes) do
-    case System.get_env("IX_TERM_SESSION_ID") do
+    case find.("ixterm") do
       nil ->
-        File.write("/dev/tty", bytes)
+        {:error, "no ixterm on PATH to open a pane with"}
 
-      id ->
-        with {:error, _reason} <- write_session_pts(id, bytes) do
-          File.write("/dev/tty", bytes)
+      exe ->
+        case Cmd.run(exe, ["open", url], stderr_to_stdout: true) do
+          {_output, 0} ->
+            :ok
+
+          {output, status} ->
+            {:error, "ixterm open exited #{status}: #{String.trim(output)}"}
         end
-    end
-  end
-
-  defp write_session_pts(id, bytes) do
-    pts_file = Path.join([@sessions_root, id, "pts"])
-
-    with {:ok, contents} <- File.read(pts_file),
-         pts = String.trim(contents),
-         true <- String.starts_with?(pts, "/") do
-      File.write(pts, bytes)
-    else
-      false -> {:error, {:relative_pts, pts_file}}
-      {:error, reason} -> {:error, {reason, pts_file}}
     end
   end
 
