@@ -104,7 +104,7 @@ deployment key: declare them in a node module as `ix.healthChecks.<name>`
 
 Rendered plan (pydantic, `__init__.py:34-146`): a `FleetPlan` is `order`, `nodes`
 (name -> `FleetNode`), `secrets`. A `FleetNode` carries `name`, `system`,
-`switch` (`SwitchSpec`: `target`, `buildOn` auto|local|remote, `buildVm`,
+`switch` (`SwitchSpec`: `target`, `buildOn` auto|local|remote,
 `sourceInstallable`, `overrideInputs`), `bootstrapImage`, `replacementImage`,
 `region`, `ipv4`, `snapshot`, `recreateOnUp`, `tags`, `groups`, `env`,
 `l7ProxyPorts`, `dependsOn`, `healthChecks`, `secrets`, `noDefaultSecrets`,

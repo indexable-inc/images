@@ -66,9 +66,9 @@
       mkdir -p "$out"
     '';
 
-  # Two remote-source nodes that share a build VM, so `switch --dry-run` exercises
-  # the native multi-VM batch path: both must land in one `ix apply .#web .#worker
-  # --build-vm builder` command.
+  # Two remote-source nodes in one region, so `switch --dry-run` exercises the
+  # native multi-VM batch path: both must land in one `ix apply .#web .#worker`
+  # command.
   dryRunSwitchPlan = jsonFormat.generate "ix-fleet-dry-run-switch-plan.json" {
     order = [
       "web"
@@ -81,7 +81,6 @@
       switch = {
         target = "/nix/store/${name}-system.drv";
         buildOn = "remote";
-        buildVm = "builder";
         sourceInstallable = ".#${name}";
       };
       bootstrapImage = "registry.ix.dev/ix/base:latest";
@@ -196,8 +195,31 @@
     }
     ''
       ix-fleet --plan ${dryRunSwitchPlan} switch --skip-health --no-snapshot --dry-run | tee switch.log
-      grep -qE '\+ ix apply \.#web \.#worker --build-vm builder' switch.log \
-        || { echo "expected a single batched 'ix apply .#web .#worker --build-vm builder'" >&2; exit 1; }
+      grep -qE '\+ ix apply \.#web \.#worker( |$)' switch.log \
+        || { echo "expected a single batched 'ix apply .#web .#worker'" >&2; exit 1; }
+
+      # The positive grep above pins the shape we want but cannot tell a live
+      # flag from a retired one: the previous version of it asserted
+      # `--build-vm builder` was emitted, so it passed *because* the command was
+      # wrong, for as long as `--build-vm` had been unparseable (ENG-11074).
+      #
+      # This is the check that would have caught that. The list mirrors
+      # `apply_command_rejects_retired_build_flags` in ix's
+      # crates/ix/cli/src/args.rs, which asserts these must fail to parse.
+      # Keep the two in step when a flag is retired.
+      #
+      # Running the real `ix apply --help` over the emitted argv would be
+      # strictly better, since clap rejects an unknown flag before honouring
+      # --help and that derives the answer instead of restating it. It cannot
+      # live here: index is a submodule of ix and has no ix input (the
+      # dependency direction is ix -> index), so no `ix` binary can reach this
+      # sandbox. That gate belongs on the ix side.
+      for retired in --build-vm --build-on --to; do
+        if grep -qE -- "\+ ix apply .* $retired( |=|$)" switch.log; then
+          echo "ix apply argv carries the retired flag $retired; the CLI refuses to parse it" >&2
+          exit 1
+        fi
+      done
       mkdir -p "$out"
     '';
 

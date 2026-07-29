@@ -5985,7 +5985,6 @@
           == {
             target = builtins.unsafeDiscardStringContext fleet.nodes.web.system.build.toplevel.drvPath;
             buildOn = "remote";
-            buildVm = null;
             sourceInstallable = ".#web";
             overrideInputs = {};
           };
