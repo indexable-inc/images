@@ -44,7 +44,8 @@ index.lib.mkVm({
 
 [`modules/services/biff-reading-list`](../../../modules/services/biff-reading-list/default.nix)
 takes `port` and `host` alongside `enable` and `package`, runs the application
-as the non-root `biff` user under `ProtectSystem = "strict"`, generates the
+as the non-root `biff-reading-list` user under `ProtectSystem = "strict"`,
+generates the
 session cookie secret into the state directory before the JVM starts, and puts
 `sqldef` on the unit's PATH so the schema is applied without a download.
 

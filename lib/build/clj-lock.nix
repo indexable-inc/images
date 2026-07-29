@@ -207,6 +207,16 @@ lock covers.
   # `clojure` reads a user-level `deps.edn` and `tools/tools.edn` from
   # CLJ_CONFIG and creates them when absent, which a sandbox with a read-only
   # HOME cannot do. Empty maps satisfy the read without contributing deps.
+  # tools.gitlibs invokes `git` even after clj-nix has replaced each bare
+  # repository with metadata under `_repos/<git-dir>/revs`. The ordinary git
+  # executable cannot read that synthetic repository. Install the same command
+  # surface clj-nix's fake_git.clj provides, without bringing Babashka and its
+  # closure into every classpath resolver.
+  fakeGit = pkgs.writeScriptBin "git" ''
+    #!${lib.getExe pkgs.python3}
+    ${builtins.readFile ./clj-fake-git.py}
+  '';
+
   emptyEdn = pkgs.writeText "empty-edn" "{}\n";
   dotClojure = pkgs.linkFarm "clj-config" {
     "deps.edn" = emptyEdn;
@@ -352,7 +362,7 @@ lock covers.
         __contentAddressed = true;
         outputHashAlgo = "sha256";
         outputHashMode = "recursive";
-        nativeBuildInputs = [pkgs.clojure];
+        nativeBuildInputs = [pkgs.clojure fakeGit];
         passthru = {
           inherit cache;
           lock = parsed;

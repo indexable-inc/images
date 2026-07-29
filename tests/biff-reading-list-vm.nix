@@ -75,8 +75,8 @@ in
       server.wait_for_open_port(8080)
 
       expected_unit_properties = {
-          "User": "biff",
-          "Group": "biff",
+          "User": "biff-reading-list",
+          "Group": "biff-reading-list",
           "Restart": "on-failure",
           "RestartUSec": "2s",
           "ProtectSystem": "strict",
@@ -95,12 +95,12 @@ in
       process_uid = server.succeed(
           f"awk '/^Uid:/ {{print $2}}' /proc/{main_pid}/status"
       ).strip()
-      biff_uid = server.succeed("id -u biff").strip()
+      biff_uid = server.succeed("id -u biff-reading-list").strip()
       assert process_uid == biff_uid
       assert process_uid != "0"
 
       server.succeed(
-          "test \"$(stat -c '%U:%G:%a' /var/lib/biff-reading-list)\" = biff:biff:750"
+          "test \"$(stat -c '%U:%G:%a' /var/lib/biff-reading-list)\" = biff-reading-list:biff-reading-list:750"
       )
       server.succeed(
           "systemctl show biff-reading-list.service --property=Environment --value "
@@ -109,7 +109,7 @@ in
       server.fail("test -e /var/lib/biff-reading-list/target/bin/sqlite3def")
       server.fail("journalctl -u biff-reading-list.service | grep -F 'Downloading sqlite3def'")
       server.succeed("test -s /var/lib/biff-reading-list/cookie-secret")
-      server.succeed("test \"$(stat -c '%U:%G:%a' /var/lib/biff-reading-list/cookie-secret)\" = biff:biff:400")
+      server.succeed("test \"$(stat -c '%U:%G:%a' /var/lib/biff-reading-list/cookie-secret)\" = biff-reading-list:biff-reading-list:400")
       server.succeed("test \"$(base64 --decode /var/lib/biff-reading-list/cookie-secret | wc -c)\" -eq 16")
       server.succeed(f"test -s {schema}")
       server.succeed(f"grep -F 'CREATE TABLE link (' {schema}")

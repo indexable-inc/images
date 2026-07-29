@@ -13,14 +13,11 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::{Result, bail, eyre};
 
 use crate::model::{Graph, Namespace, SCHEMA_VERSION};
-use crate::naming::{
-    SOURCE_EXTENSIONS, namespace_to_relative_path, relative_path_to_namespace,
-};
+use crate::naming::{SOURCE_EXTENSIONS, namespace_to_relative_path, relative_path_to_namespace};
 use crate::ns_form;
 
 /// One `.clj`/`.cljc` file found under a source root.
 struct Source {
-    root_index: usize,
     /// Path under the root, e.g. `com/example/todo_app/model/todo.clj`.
     relative: PathBuf,
     /// The root as written on the command line, joined with `relative`. This is
@@ -46,11 +43,10 @@ struct LineColumn {
 pub fn render(roots: &[PathBuf]) -> Result<Graph> {
     let units = parse_all(roots)?;
     let by_namespace = index_by_namespace(&units)?;
-    let prefixes = root_prefixes(roots.len(), &units);
 
     let mut namespaces = BTreeMap::new();
     for unit in &units {
-        let requires = internal_requires(unit, &by_namespace, roots, &prefixes)?;
+        let requires = internal_requires(unit, &by_namespace);
         namespaces.insert(
             unit.namespace.clone(),
             Namespace {
@@ -76,7 +72,7 @@ pub fn render(roots: &[PathBuf]) -> Result<Graph> {
 
 fn parse_all(roots: &[PathBuf]) -> Result<Vec<Unit>> {
     let mut units = Vec::new();
-    for (root_index, root) in roots.iter().enumerate() {
+    for root in roots {
         if !root.is_dir() {
             bail!("source root `{}` is not a directory", root.display());
         }
@@ -84,7 +80,6 @@ fn parse_all(roots: &[PathBuf]) -> Result<Vec<Unit>> {
             let path = root.join(&relative);
             let display_path = path.display().to_string();
             units.push(parse_source(Source {
-                root_index,
                 relative,
                 path,
                 display_path,
@@ -154,87 +149,22 @@ fn index_by_namespace(units: &[Unit]) -> Result<BTreeMap<&str, &Unit>> {
     Ok(index)
 }
 
-/// The namespace prefix each source root is rooted at, taken as the longest
-/// common segment prefix of the namespaces found under it.
+/// Keep only requires whose namespaces are present in this graph.
 ///
-/// This is what tells an app's own namespace apart from a library's. Testing
-/// the top-level segment alone would not: `com.example.todo-app` and
-/// `com.biffweb.core` share `com`, and biffweb arrives as a jar.
-///
-/// A root whose namespaces share no prefix (several unrelated apps under one
-/// directory) gets an empty prefix, and nothing under it is treated as
-/// internal.
-fn root_prefixes(root_count: usize, units: &[Unit]) -> Vec<Vec<String>> {
-    let mut prefixes: Vec<Option<Vec<String>>> = vec![None; root_count];
-    for unit in units {
-        let segments: Vec<String> = unit.namespace.split('.').map(str::to_owned).collect();
-        let slot = &mut prefixes[unit.source.root_index];
-        *slot = Some(match slot.take() {
-            None => segments,
-            Some(existing) => existing
-                .into_iter()
-                .zip(segments)
-                .take_while(|pair| pair.0 == pair.1)
-                .map(|pair| pair.0)
-                .collect(),
-        });
-    }
-    prefixes.into_iter().map(Option::unwrap_or_default).collect()
-}
-
-/// Keep only the requires that are units in this graph.
-///
-/// Dropping the rest is the correct behaviour, not a limitation: `clojure.*`,
-/// `com.biffweb.*` and `ring.*` reach a unit as jars on the classpath, already
-/// compiled, so they are not derivations and cannot be edges. A require that
-/// looks like it belongs to the app but has no file is the one case that is
-/// genuinely wrong, and it is an error.
-fn internal_requires(
-    unit: &Unit,
-    by_namespace: &BTreeMap<&str, &Unit>,
-    roots: &[PathBuf],
-    prefixes: &[Vec<String>],
-) -> Result<Vec<String>> {
-    let mut kept = BTreeSet::new();
-    for required in &unit.requires {
-        if by_namespace.contains_key(required.as_str()) {
-            kept.insert(required.clone());
-            continue;
-        }
-        if let Some(root_index) = covering_root(required, prefixes) {
-            let root = &roots[root_index];
-            let candidates = SOURCE_EXTENSIONS
-                .map(|extension| {
-                    root.join(namespace_to_relative_path(required, extension))
-                        .display()
-                        .to_string()
-                })
-                .join(" or ");
-            bail!(
-                "{}: namespace `{}` requires `{}`, which shares the `{}` prefix of source root \
-                 `{}` but has no file; expected {}",
-                unit.source.display_path,
-                unit.namespace,
-                required,
-                prefixes[root_index].join("."),
-                root.display(),
-                candidates
-            );
-        }
-    }
-    Ok(kept.into_iter().collect())
-}
-
-fn covering_root(namespace: &str, prefixes: &[Vec<String>]) -> Option<usize> {
-    let segments: Vec<&str> = namespace.split('.').collect();
-    prefixes.iter().position(|prefix| {
-        !prefix.is_empty()
-            && segments.len() >= prefix.len()
-            && prefix
-                .iter()
-                .zip(&segments)
-                .all(|pair| pair.0.as_str() == *pair.1)
-    })
+/// Graph membership is the ownership boundary. A namespace absent from the
+/// source roots may legitimately come from a jar or git dependency even when
+/// its name shares every segment of an application namespace, so a common
+/// string prefix cannot classify it as a missing source file. The JVM remains
+/// the authority for reporting a truly missing external namespace during the
+/// unit's `require` step.
+fn internal_requires(unit: &Unit, by_namespace: &BTreeMap<&str, &Unit>) -> Vec<String> {
+    unit.requires
+        .iter()
+        .filter(|required| by_namespace.contains_key(required.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn find_cycle(namespaces: &BTreeMap<String, Namespace>) -> Option<Vec<String>> {
@@ -329,8 +259,7 @@ fn position(text: &str, offset: usize) -> LineColumn {
 mod tests {
     use super::render;
     use std::collections::BTreeMap;
-    use std::ffi::OsStr;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     /// Materialise `(relative path, contents)` pairs into a temporary source
     /// root and render it.
@@ -374,7 +303,10 @@ mod tests {
                 "app/core.clj",
                 "(ns app.core (:require [clojure.string :as str] [app.util :as util]))",
             ),
-            ("app/util.clj", "(ns app.util (:require [ring.util.response :as r]))"),
+            (
+                "app/util.clj",
+                "(ns app.util (:require [ring.util.response :as r]))",
+            ),
         ]);
         assert_eq!(
             tree.edges(),
@@ -440,15 +372,12 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_internal_require_is_an_error_naming_both_sides() {
-        let tree = Tree::new(&[
-            ("app/core.clj", "(ns app.core (:require [app.missing :as m]))"),
-            ("app/util.clj", "(ns app.util)"),
-        ]);
-        let failure = tree.failure();
-        assert!(failure.contains("app.core"), "{failure}");
-        assert!(failure.contains("app.missing"), "{failure}");
-        assert!(failure.contains("app/missing.clj"), "{failure}");
+    fn an_external_namespace_may_share_the_source_prefix() {
+        let tree = Tree::new(&[(
+            "foo/core.clj",
+            "(ns foo.core (:require [foo.core.plugin :as plugin]))",
+        )]);
+        assert_eq!(tree.edges()["foo.core"], Vec::<String>::new());
     }
 
     #[test]

@@ -206,11 +206,17 @@
 (deftest modules-include-demo-fx-handlers-test
   (let [handlers (->> modules/modules
                       (keep :biff.fx/handlers)
-                      (apply merge {}))]
+                      (apply merge {}))
+        initialized (apply merge
+                           (keep (fn [module]
+                                   (some-> (:biff.core/init module)
+                                           (#(% (atom modules/modules)))))
+                                 modules/modules))]
     (is (contains? handlers :biff.background/submit-jobs))
     (is (contains? handlers :biff.graph.fx/query))
     (is (contains? handlers :biff.sqlite.fx/execute))
-    (is (contains? handlers :biff.sqlite.fx/authorized-write))))
+    (is (contains? handlers :biff.sqlite.fx/authorized-write))
+    (is (ifn? (:biff.admin/send-email initialized)))))
 
 (deftest landing-signin-and-admin-flow-test
   (let [home                                                             (http-get "/")
@@ -359,6 +365,8 @@
     (is (true? (:todo/completed toggle-row)))
     (is (= 204 (:status filter-resp)))
     (is (str/includes? (:body filtered-page) "Current filter: Completed"))
+    (is (re-find #"class=\"[^\"]*bg-teal-600 text-white[^\"]*\">Completed"
+                 (:body filtered-page)))
     (is (str/includes? (:body filtered-page) title))
     (is (= 204 (:status archive-resp)))
     (is (true? (:todo/archived archived-row)))

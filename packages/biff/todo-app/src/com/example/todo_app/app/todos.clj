@@ -191,7 +191,7 @@
     :data-on:click (str (set-signal "filter" value)
                         (set-signal "showArchived" show-archived?)
                         (post (routes/tab-state)))
-    :class         (if (= current-filter value)
+    :class         (if (= (current-filter-value current-filter) value)
                      "bg-teal-600 text-white"
                      "bg-slate-100 text-slate-700 hover:bg-slate-200")}
    label])

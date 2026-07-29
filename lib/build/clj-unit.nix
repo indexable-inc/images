@@ -56,11 +56,16 @@ the value of having a graph at all.
 }: let
   inherit (builtins) attrNames concatStringsSep;
 
-  # Clojure munges a namespace into a path: dots become directories and
-  # hyphens become underscores. `com.example.todo-app.model.tab-state` is
-  # `com/example/todo_app/model/tab_state`.
+  # Clojure munges namespace punctuation into generated JVM class names.
+  # Resource paths only need dot -> slash and hyphen -> underscore, but the
+  # `:gen-class` launcher name must use the complete clojure.core/munge table.
   namespacePath = namespace:
     lib.replaceStrings ["." "-"] ["/" "_"] namespace;
+  mungeNamespace = namespace:
+    lib.replaceStrings
+    ["-" "+" "?" "!" "*" "/" "%" "&" "=" ">" "<" ":" "#" "@" "~" "^" "|" "{" "}" "[" "]" "\\" "\""]
+    ["_" "_PLUS_" "_QMARK_" "_BANG_" "_STAR_" "_SLASH_" "_PERCENT_" "_AMPERSAND_" "_EQ_" "_GT_" "_LT_" "_COLON_" "_SHARP_" "_CIRCA_" "_TILDE_" "_CARET_" "_BAR_" "_LBRACE_" "_RBRACE_" "_LBRACK_" "_RBRACK_" "_BSLASH_" "_DOUBLEQUOTE_"]
+    namespace;
 
   # `.clj` or `.cljc`, taken from the rendered graph rather than assumed. A
   # `.cljc` namespace copied to a `.clj` name throws `Conditional read not
@@ -112,8 +117,11 @@ the value of having a graph at all.
   mkUnit = {
     pname,
     classpathJars,
+    compileResources,
     src,
-  }: namespace: node: depUnits:
+  }: namespace: node: depUnits: let
+    applicationClasspath = concatStringsSep ":" (depUnits ++ compileResources);
+  in
     pkgs.runCommand "${pname}-clj-${namespace}" {
       __contentAddressed = true;
       outputHashAlgo = "sha256";
@@ -155,7 +163,7 @@ the value of having a graph at all.
       #
       # $out is on the classpath because Clojure loads back the classes it
       # has just emitted while compiling the rest of the namespace.
-      classpath="$(cat ${classpathJars})${lib.optionalString (depUnits != []) ":"}${concatStringsSep ":" depUnits}:$unitSource:$out"
+      classpath="${applicationClasspath}${lib.optionalString (applicationClasspath != "") ":"}$unitSource:$out:$(cat ${classpathJars})"
 
       # `require` FIRST, then compile. `compile` binds `*compile-files*` true
       # across the whole transitive load, so compiling straight away makes
@@ -193,6 +201,10 @@ the value of having a graph at all.
       fi
     '';
 in {
+  # Exposed for the root eval fixture that locks this table to
+  # clojure.core/munge. Not an application-builder API.
+  mungeNamespaceForTest = mungeNamespace;
+
   /**
   Build a Clojure application as one derivation per namespace, plus a
   launcher.
@@ -264,21 +276,10 @@ in {
 
     # One derivation per namespace, also a lazy fixpoint: selecting one
     # namespace builds only its own cone, never the whole application.
-    units =
-      lib.mapAttrs (
-        namespace: node:
-          mkUnit {inherit pname classpathJars src;}
-          namespace
-          node
-          (map (required: units.${required}) closures.${namespace})
-      )
-      graph.namespaces;
-
-    unitOutputs = map (namespace: units.${namespace}) (attrNames graph.namespaces);
-    # Each resource root as its own store path, not a subdirectory of `src`.
-    # Interpolating `src` here put the package's whole filtered source into the
-    # runtime classpath derivation, and from there into the deployed closure,
-    # which carried every .clj file to production for nothing.
+    # Resource roots are needed while compiling too: loading a namespace can
+    # read bundled configuration or templates during initialization. Each root
+    # is its own content-keyed path, so changing one resource does not make an
+    # unrelated source unit depend on the complete application tree.
     resources =
       map (
         dir:
@@ -288,23 +289,36 @@ in {
           }
       )
       resourceRoots;
+
+    units =
+      lib.mapAttrs (
+        namespace: node:
+          mkUnit {
+            inherit pname classpathJars src;
+            compileResources = resources ++ extraClasspath;
+          }
+          namespace
+          node
+          (map (required: units.${required}) closures.${namespace})
+      )
+      graph.namespaces;
+
+    unitOutputs = map (namespace: units.${namespace}) (attrNames graph.namespaces);
     # The dependency classpath arrives as a file, so the runtime classpath is
     # assembled in a derivation rather than as a Nix string. The launcher
     # embeds this file's contents at compile time, which keeps the classpath
     # out of the runtime and makes a missing entry a build failure.
     runtimeClasspathFile = pkgs.runCommand "${pname}-runtime-classpath" {strictDeps = true;} ''
       printf '%s:%s' \
-        "$(cat ${classpathJars})" \
         ${lib.escapeShellArg (concatStringsSep ":" (unitOutputs ++ resources ++ extraClasspath))} \
+        "$(cat ${classpathJars})" \
         > "$out"
     '';
     # Tests read the application's compiled units plus their own source, so
     # they exercise exactly the bytecode the launcher runs.
     testSources = concatStringsSep ":" (map (dir: "${testSrc}/${dir}") testRoots);
-    # Clojure munges the namespace into the generated class name the same way
-    # it munges the file path, so `:gen-class` on `com.example.reading-list`
-    # emits `com.example.reading_list`.
-    mainClass = lib.replaceStrings ["-"] ["_"] mainNamespace;
+    # `:gen-class` uses clojure.core/munge for the generated JVM class name.
+    mainClass = mungeNamespace mainNamespace;
   in
     # A compiled launcher, not a shell wrapper: writeShellApplication is
     # banned repo-wide (#3823) and the shell allowlist only shrinks. `exec`

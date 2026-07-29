@@ -15,6 +15,11 @@ This application is adapted from Biff's MIT-licensed `v2.x` demo at revision
 nix build .#biff-todo-app
 ```
 
+The package currently requires an `x86_64-linux` builder because its lock
+contains the Linux brotli native classifier. The source and Tailwind asset are
+also prepared for `aarch64-darwin`, but the package stays unavailable there
+until the lock includes `native-osx-aarch64`.
+
 From the repo root. Get the repo with
 `git clone https://github.com/indexable-inc/index`.
 
@@ -57,7 +62,7 @@ updates on its own. The database and the cookie secret persist under
 ## Module options
 
 [`modules/services/biff-todo-app`](../../../modules/services/biff-todo-app/default.nix)
-runs the application as the non-root `biff` user under
+runs the application as the non-root `biff-todo-app` user under
 `ProtectSystem = "strict"` with `UMask = "0077"`, generates the session cookie
 secret into the state directory before the JVM starts, and puts `sqldef` on the
 unit's PATH. Beyond `enable`, `package`, `port`, and `host`:
@@ -130,9 +135,10 @@ nix shell nixpkgs#clojure nixpkgs#sqldef -c clojure -M:test
 Run from this directory. Dependencies come from Maven Central and Clojars
 rather than from the Nix closure, so the first run needs network access. The
 suite boots a real Jetty on a loopback port and drives it over HTTP: sign-in
-and the admin page, todo mutations, the Datastar control bindings, the archive
-queue, cross-user isolation, and title validation. It reports 11 tests and 69
-assertions. Run on aarch64-darwin at 0 failures and 0 errors.
+and the admin page, todo mutations, the selected Datastar filter styling, the
+archive queue, cross-user isolation, title validation, and the admin alert
+mailer in the initialized system context. It reports 11 tests and 71 assertions.
+Run on aarch64-darwin at 0 failures and 0 errors.
 
 `clojure` leaves a `.cpcache/` directory behind; delete it afterwards.
 

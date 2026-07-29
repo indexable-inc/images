@@ -37,7 +37,17 @@
                (todo-events ctx :todo/updated-at))))
 
 (def module
-  (biff.admin/module
-   {:biff.admin/get-user-events #'get-user-events
-    :biff.admin/get-users       #'get-users
-    :biff.admin/send-email      #'lib.email/send-email}))
+  (let [admin-module
+        (biff.admin/module
+         {:biff.admin/get-user-events #'get-user-events
+          :biff.admin/get-users       #'get-users
+          :biff.admin/send-email      #'lib.email/send-email})
+        admin-init (:biff.core/init admin-module)]
+    (assoc admin-module
+           :biff.core/init
+           (fn [modules-var]
+             ;; `biff.admin/use-alerts` is a component, so it receives only
+             ;; the initialized system map. Route middleware gets the params
+             ;; above later and cannot supply the error handler's mailer.
+             (assoc (admin-init modules-var)
+                    :biff.admin/send-email #'lib.email/send-email)))))

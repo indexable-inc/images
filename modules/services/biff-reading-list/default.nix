@@ -22,8 +22,13 @@
     ;
   cfg = config.services.biff-reading-list;
 
+  serviceUser = "biff-reading-list";
   stateDirectory = "biff-reading-list";
   statePath = "/var/lib/${stateDirectory}";
+  healthHost =
+    if builtins.elem cfg.host ["0.0.0.0" "::" "[::]"]
+    then "127.0.0.1"
+    else cfg.host;
 
   # Biff decides whether to download sqldef by comparing the version it is
   # configured with against what `sqlite3def --version` prints, so the unit
@@ -40,7 +45,7 @@
     ${pkgs.sqldef.version} and confirm `sqlite3def --version` prints exactly that
     string: the comparison is literal, and a version Biff does not recognise
     makes it download sqldef from github into ${statePath}, chmod it
-    executable, and run it as the biff user.
+    executable, and run it as the ${serviceUser} user.
   '';
     pkgs.sqldef;
 
@@ -135,13 +140,13 @@ in {
   };
 
   config = mkIf cfg.enable {
-    users.groups.biff = {};
-    users.users.biff = {
+    users.groups.${serviceUser} = {};
+    users.users.${serviceUser} = {
       isSystemUser = true;
-      group = "biff";
+      group = serviceUser;
     };
 
-    ix.networking.expose.http = {
+    ix.networking.expose.biff-reading-list = {
       inherit (cfg) port;
       description = "Biff reading-list HTTP";
     };
@@ -152,6 +157,7 @@ in {
         description = "Biff and SQLite answer a reading-list request";
         http = {
           inherit (cfg) port;
+          host = healthHost;
           path = "/";
         };
       };
@@ -177,8 +183,8 @@ in {
       serviceConfig =
         ix.systemdHardening
         // {
-          User = "biff";
-          Group = "biff";
+          User = serviceUser;
+          Group = serviceUser;
           ExecStartPre = lib.getExe ensureCookieSecret;
           ExecStart = lib.getExe' cfg.package "biff-reading-list";
           StateDirectory = stateDirectory;

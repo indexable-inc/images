@@ -389,7 +389,7 @@
           {
             services.minecraft.rcon = {
               enable = true;
-              port = 25_576;
+              port = 25 _576;
               openFirewall = true;
             };
           }
@@ -428,7 +428,7 @@
         {
           services.minecraft.plugins = {
             pvpindex-factions = {};
-            simple-voice-chat.port = 24_455;
+            simple-voice-chat.port = 24 _455;
             terraformgenerator.worlds = [
               "factions"
               "factions_nether"
@@ -451,10 +451,10 @@
         {
           services.minecraft.properties = {
             query = {
-              port = 25_565;
+              port = 25 _565;
             };
             rcon = {
-              port = 25_575;
+              port = 25 _575;
             };
           };
         }
@@ -2167,6 +2167,40 @@
     service = config.systemd.services.biff-todo-app;
   };
 
+  # Both services can share one image when their ports differ. Their listener
+  # keys and Unix identities must remain distinct so Nix can merge the modules
+  # and neither process can read the other's 0400 secret or SQLite state.
+  biffCombined = evalConfig [
+    {
+      services.biff-reading-list = {
+        enable = true;
+        port = 8081;
+      };
+      services.biff-todo-app = {
+        enable = true;
+        port = 8082;
+      };
+    }
+  ];
+
+  biffReadingListBound = evalConfig [
+    {
+      services.biff-reading-list = {
+        enable = true;
+        host = "192.0.2.10";
+      };
+    }
+  ];
+
+  biffTodoAppBound = evalConfig [
+    {
+      services.biff-todo-app = {
+        enable = true;
+        host = "192.0.2.11";
+      };
+    }
+  ];
+
   nginxLifecycleExample = let
     fleet = ix.importIx (paths.examples + "/nginx/lifecycle/default.ix") {
       index = {
@@ -2478,7 +2512,7 @@
       services.velocity = {
         enable = true;
         address = "10.0.0.5";
-        port = 25_570;
+        port = 25 _570;
         openFirewall = false;
       };
     }
@@ -2510,8 +2544,8 @@
     {
       services.minecraft-bedrock = {
         enable = true;
-        port = 19_132;
-        portv6 = 19_132;
+        port = 19 _132;
+        portv6 = 19 _132;
       };
     }
   ];
@@ -3418,7 +3452,7 @@
         assertion = let
           ports = ixSparkMaster.networking.firewall.interfaces.tailscale0.allowedTCPPorts;
         in
-          builtins.elem 15_002 ports && builtins.elem 7077 ports;
+          builtins.elem 15 _002 ports && builtins.elem 7077 ports;
         message = "ix-spark master should open the Connect (15002) and master (7077) ports on tailscale0";
       }
       {
@@ -3433,7 +3467,8 @@
             7078
             7079
             7080
-            15_002
+            15
+            _002
           ];
         message = "ix-spark must never open its ports on the global firewall, only on tailscale0";
       }
@@ -3447,7 +3482,7 @@
           && !(ixSparkWorker.systemd.services ? spark-master)
           && !(ixSparkWorker.systemd.services ? spark-connect)
           && !(builtins.elem 7077 ports)
-          && !(builtins.elem 15_002 ports);
+          && !(builtins.elem 15 _002 ports);
         message = "ix-spark worker should run only a worker and open no master/connect ports";
       }
       {
@@ -3677,7 +3712,7 @@
       {
         assertion =
           factionsExample.cfg.worldBorder.enable
-          && factionsExample.cfg.worldBorder.diameter == 12_000
+          && factionsExample.cfg.worldBorder.diameter == 12 _000
           && factionsExample.cfg.properties.max-world-size == 6000;
         message = "factions example should declare a managed world border";
       }
@@ -3691,7 +3726,7 @@
         message = "factions example should keep RCON private while exposing Minecraft and BlueMap";
       }
       {
-        assertion = builtins.elem 24_454 factionsExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24 _454 factionsExample.config.networking.firewall.allowedUDPPorts;
         message = "factions example should expose Simple Voice Chat on the default UDP port";
       }
       {
@@ -3705,7 +3740,7 @@
             "simple-voice-chat"
           ]
           && claims.simple-voice-chat.protocol == "udp"
-          && claims.simple-voice-chat.port == 24_454;
+          && claims.simple-voice-chat.port == 24 _454;
         message = "factions example should register every service listener in ix.networking.portClaims";
       }
       {
@@ -3776,7 +3811,7 @@
         assertion =
           survivalExample.minecraft.paper.enable
           && survivalExample.minecraft.version == "26.1.2"
-          && survivalExample.minecraft.port == 25_566
+          && survivalExample.minecraft.port == 25 _566
           && !survivalExample.minecraft.openFirewall
           && !survivalExample.minecraft.properties.online-mode;
         message = "survival example should keep Paper behind the proxy";
@@ -3785,13 +3820,13 @@
         assertion = let
           ports = survivalExample.config.networking.firewall.allowedTCPPorts;
         in
-          builtins.elem 25_565 ports
-          && !(builtins.elem 25_566 ports)
+          builtins.elem 25 _565 ports
+          && !(builtins.elem 25 _566 ports)
           && !(builtins.elem survivalExample.minecraft.rcon.port ports);
         message = "survival example should expose Velocity while keeping backend and RCON private";
       }
       {
-        assertion = builtins.elem 19_132 survivalExample.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 19 _132 survivalExample.config.networking.firewall.allowedUDPPorts;
         message = "survival example should expose Geyser's Bedrock UDP listener";
       }
       {
@@ -3804,10 +3839,10 @@
             "minecraft-rcon"
             "geyser"
           ]
-          && claims.velocity.port == 25_565
-          && claims.minecraft.port == 25_566
+          && claims.velocity.port == 25 _565
+          && claims.minecraft.port == 25 _566
           && claims.geyser.protocol == "udp"
-          && claims.geyser.port == 19_132;
+          && claims.geyser.port == 19 _132;
         message = "survival example should register proxy, backend, RCON, and Bedrock listeners";
       }
       {
@@ -3950,7 +3985,7 @@
       {
         assertion =
           biffReadingListExample.service.serviceConfig.User
-          == "biff"
+          == "biff-reading-list"
           && biffReadingListExample.service.serviceConfig.StateDirectory == "biff-reading-list"
           && biffReadingListExample.service.serviceConfig.StateDirectoryMode == "0750"
           && biffReadingListExample.service.serviceConfig.WorkingDirectory == "/var/lib/biff-reading-list"
@@ -3963,10 +3998,10 @@
       }
       {
         assertion =
-          biffReadingListExample.config.users.users.biff.isSystemUser
-          && biffReadingListExample.config.users.users.biff.group == "biff"
-          && biffReadingListExample.config.users.groups ? biff
-          && biffReadingListExample.service.serviceConfig.Group == "biff"
+          biffReadingListExample.config.users.users.biff-reading-list.isSystemUser
+          && biffReadingListExample.config.users.users.biff-reading-list.group == "biff-reading-list"
+          && biffReadingListExample.config.users.groups ? biff-reading-list
+          && biffReadingListExample.service.serviceConfig.Group == "biff-reading-list"
           && biffReadingListExample.service.serviceConfig.Restart == "on-failure"
           && biffReadingListExample.service.serviceConfig.RestartSec == "2s"
           && lib.hasSuffix "/bin/biff-reading-list-cookie-secret" biffReadingListExample.service.serviceConfig.ExecStartPre
@@ -3976,7 +4011,7 @@
       }
       {
         assertion = let
-          claim = biffReadingListExample.config.ix.networking.portClaims.http;
+          claim = biffReadingListExample.config.ix.networking.portClaims.biff-reading-list;
         in
           claim.protocol
           == "tcp"
@@ -4024,15 +4059,15 @@
         # get its unit or the shared `biff` identity.
         assertion =
           !(base.config.systemd.services ? biff-todo-app)
-          && !(base.config.users.users ? biff)
-          && !(base.config.users.groups ? biff);
+          && !(base.config.users.users ? biff-todo-app)
+          && !(base.config.users.groups ? biff-todo-app);
         message = "services.biff-todo-app should stay inert until enabled";
       }
       {
         assertion =
           biffTodoApp.service.serviceConfig.User
-          == "biff"
-          && biffTodoApp.service.serviceConfig.Group == "biff"
+          == "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.Group == "biff-todo-app"
           && biffTodoApp.service.serviceConfig.StateDirectory == "biff-todo-app"
           && biffTodoApp.service.serviceConfig.StateDirectoryMode == "0750"
           && biffTodoApp.service.serviceConfig.WorkingDirectory == "/var/lib/biff-todo-app"
@@ -4045,9 +4080,9 @@
       }
       {
         assertion =
-          biffTodoApp.config.users.users.biff.isSystemUser
-          && biffTodoApp.config.users.users.biff.group == "biff"
-          && biffTodoApp.config.users.groups ? biff
+          biffTodoApp.config.users.users.biff-todo-app.isSystemUser
+          && biffTodoApp.config.users.users.biff-todo-app.group == "biff-todo-app"
+          && biffTodoApp.config.users.groups ? biff-todo-app
           && biffTodoApp.service.serviceConfig.Restart == "on-failure"
           && biffTodoApp.service.serviceConfig.RestartSec == "2s"
           && lib.hasSuffix "/bin/biff-todo-app-cookie-secret" biffTodoApp.service.serviceConfig.ExecStartPre
@@ -4059,7 +4094,7 @@
       }
       {
         assertion = let
-          claim = biffTodoApp.config.ix.networking.portClaims.http;
+          claim = biffTodoApp.config.ix.networking.portClaims.biff-todo-app;
           env = biffTodoApp.service.environment;
         in
           claim.protocol
@@ -4105,6 +4140,25 @@
             "http://127.0.0.1:8080/"
           ];
         message = "biff todo-app should expose unit and functional HTTP deployment health checks";
+      }
+      {
+        assertion =
+          biffCombined.config.ix.networking.portClaims.biff-reading-list.port
+          == 8081
+          && biffCombined.config.ix.networking.portClaims.biff-todo-app.port == 8082
+          && biffCombined.config.systemd.services.biff-reading-list.serviceConfig.User
+          == "biff-reading-list"
+          && biffCombined.config.systemd.services.biff-todo-app.serviceConfig.User
+          == "biff-todo-app";
+        message = "both Biff modules should coexist with distinct exposure keys and service identities";
+      }
+      {
+        assertion =
+          lib.last biffReadingListBound.config.ix.healthChecks.biff-reading-list-http.command
+          == "http://192.0.2.10:8080/"
+          && lib.last biffTodoAppBound.config.ix.healthChecks.biff-todo-app-http.command
+          == "http://192.0.2.11:8080/";
+        message = "Biff health checks should probe a configured concrete bind address";
       }
     ];
 
@@ -4572,7 +4626,7 @@
           inherit (minecraftBlocksExample) schema;
         in
           schema.coordOffset
-          == 1_048_576
+          == 1 _048_576
           && lib.hasInfix "mortonEncode" schema.createTableSql
           && lib.hasInfix "toUInt32(x + 1048576)" schema.mortonExpr
           && builtins.length schema.mortonFields == 3
@@ -5025,7 +5079,7 @@
         message = "default Minecraft module should follow versions.nix default runtime version";
       }
       {
-        assertion = minecraft.cfg.properties.max-players == 100_000;
+        assertion = minecraft.cfg.properties.max-players == 100 _000;
         message = "default Minecraft module should allow the large ix player ceiling";
       }
       {
@@ -5259,13 +5313,13 @@
         message = "Paper minecraft should seed pluginCatalog from the generated 26.1.2 Paper catalog";
       }
       {
-        assertion = builtins.elem 24_455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
+        assertion = builtins.elem 24 _455 minecraft.paperPlugins.config.networking.firewall.allowedUDPPorts;
         message = "Simple Voice Chat should open its UDP port when installed as a Paper plugin";
       }
       {
         assertion =
           minecraft.paperPlugins.cfg.serverFiles."plugins/voicechat/voicechat-server.properties".port
-          == 24_455;
+          == 24 _455;
         message = "Simple Voice Chat should render Paper plugin config under plugins/voicechat";
       }
       {
@@ -6078,11 +6132,11 @@
         message = "services.minestom.yourkit.sessionName should appear in the agent options";
       }
       {
-        assertion = builtins.elem 10_001 minestomYourkit.firewallTcpPorts;
+        assertion = builtins.elem 10 _001 minestomYourkit.firewallTcpPorts;
         message = "services.minestom.yourkit.openFirewall should open the YourKit port in the firewall";
       }
       {
-        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10_001;
+        assertion = minestomYourkit.portClaim != null && minestomYourkit.portClaim.port == 10 _001;
         message = "services.minestom.yourkit.enable should register a portClaim for the YourKit port";
       }
       {
@@ -6979,6 +7033,23 @@
     assertion = offenders == [];
   };
 
+  # Clojure's launcher class name uses the complete `munge` mapping, not
+  # only hyphen-to-underscore. Keep this fixture synchronized with
+  # clojure.core/munge; punctuation in a legal namespace must still launch.
+  cljLauncherMungeTest = let
+    cljUnit = ix.cljUnitFor pkgs;
+    expected = lib.concatStrings [
+      "a_PLUS_b_QMARK_c_BANG_d_STAR_e_SLASH_f_PERCENT_g_AMPERSAND_h_EQ_i"
+      "_GT_j_LT_k_COLON_l_SHARP_m_CIRCA_n_TILDE_o_CARET_p_BAR_q_LBRACE_r"
+      "_RBRACE_s_LBRACK_t_RBRACK_u_BSLASH_v_DOUBLEQUOTE_w"
+    ];
+    actual = cljUnit.mungeNamespaceForTest "a+b?c!d*e/f%g&h=i>j<k:l#m@n~o^p|q{r}s[t]u\\v\"w";
+  in
+    pkgs.runCommand "ix-test-clj-launcher-munge" {} ''
+      test ${lib.escapeShellArg actual} = ${lib.escapeShellArg expected}
+      mkdir -p "$out"
+    '';
+
   # The namespace graph `nix-clj-unit` renders from the real Biff todo-app
   # tree, diffed against a committed golden. 16 namespaces with real edges
   # between them, which is the only tree in this repo where the Clojure unit
@@ -7033,6 +7104,7 @@ in {
       provenanceTest
       cargoUnitPrebuiltTest
       cljUnitTodoAppGraphTest
+      cljLauncherMungeTest
     ]
   );
 }

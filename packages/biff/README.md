@@ -134,7 +134,7 @@ nix shell nixpkgs#clojure nixpkgs#sqldef -c clojure -M:test
 That resolves dependencies from Maven Central and Clojars rather than from the
 Nix closure, so the first run needs network access and takes a few minutes.
 Reading List reports 5 tests and 32 assertions. Todo App boots a real Jetty on
-a loopback port and reports 11 tests and 69 assertions. Both were run this way
+a loopback port and reports 11 tests and 71 assertions. Both were run this way
 on aarch64-darwin at 0 failures and 0 errors.
 
 `clojure` writes a `.cpcache/` directory into the package it runs in. Delete it

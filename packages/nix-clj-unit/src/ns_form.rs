@@ -36,9 +36,9 @@ pub fn parse(src: &str) -> Result<NsForm, ReadError> {
     };
 
     let mut rest = items.into_iter().skip(1);
-    let name_form = rest.next().ok_or_else(|| {
-        ReadError::new(0, "`ns` form has no namespace name")
-    })?;
+    let name_form = rest
+        .next()
+        .ok_or_else(|| ReadError::new(0, "`ns` form has no namespace name"))?;
     let name = name_form
         .symbol()
         .ok_or_else(|| {
@@ -100,7 +100,9 @@ fn collect_libspecs(args: &[Form], out: &mut Vec<String>) -> Result<(), ReadErro
             }
             Kind::Vector(items) => {
                 if is_flat_libspec(items) {
-                    out.push(flat_libspec_name(arg, items)?);
+                    if !has_as_alias(items) {
+                        out.push(flat_libspec_name(arg, items)?);
+                    }
                 } else {
                     collect_prefix_list(arg, items, out)?;
                 }
@@ -127,10 +129,21 @@ fn is_flat_libspec(items: &[Form]) -> bool {
         .is_none_or(|second| matches!(second.kind, Kind::Keyword(_)))
 }
 
+/// `:as-alias` establishes an alias without loading the target namespace.
+/// Such a libspec is deliberately absent from the unit graph: the target need
+/// not exist, and adding an edge can create a cycle Clojure itself never loads.
+fn has_as_alias(items: &[Form]) -> bool {
+    items
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .any(|item| item.keyword() == Some("as-alias"))
+}
+
 fn flat_libspec_name(spec: &Form, items: &[Form]) -> Result<String, ReadError> {
-    let head = items.first().ok_or_else(|| {
-        ReadError::new(spec.offset, "an empty vector is not a libspec")
-    })?;
+    let head = items
+        .first()
+        .ok_or_else(|| ReadError::new(spec.offset, "an empty vector is not a libspec"))?;
     let name = head.symbol().ok_or_else(|| {
         ReadError::new(
             head.offset,
@@ -144,10 +157,14 @@ fn flat_libspec_name(spec: &Form, items: &[Form]) -> Result<String, ReadError> {
 /// `[a.b [c :as x] [d] e]` means `a.b.c`, `a.b.d` and `a.b.e`. Clojure resolves
 /// exactly one level of prefix, so a nested prefix list is an error there and
 /// here.
-fn collect_prefix_list(spec: &Form, items: &[Form], out: &mut Vec<String>) -> Result<(), ReadError> {
-    let head = items.first().ok_or_else(|| {
-        ReadError::new(spec.offset, "an empty vector is not a prefix list")
-    })?;
+fn collect_prefix_list(
+    spec: &Form,
+    items: &[Form],
+    out: &mut Vec<String>,
+) -> Result<(), ReadError> {
+    let head = items
+        .first()
+        .ok_or_else(|| ReadError::new(spec.offset, "an empty vector is not a prefix list"))?;
     let prefix = head.symbol().ok_or_else(|| {
         ReadError::new(
             head.offset,
@@ -165,7 +182,12 @@ fn collect_prefix_list(spec: &Form, items: &[Form], out: &mut Vec<String>) -> Re
                 validate_namespace_name(name, member.offset)?;
                 name.clone()
             }
-            Kind::Vector(inner) if is_flat_libspec(inner) => flat_libspec_name(member, inner)?,
+            Kind::Vector(inner) if is_flat_libspec(inner) => {
+                if has_as_alias(inner) {
+                    continue;
+                }
+                flat_libspec_name(member, inner)?
+            }
             Kind::Vector(_) => {
                 return Err(ReadError::new(
                     member.offset,
@@ -212,6 +234,14 @@ mod tests {
     fn use_clauses_carry_the_same_edges_as_require() {
         let ns = parsed("(ns foo.bar (:use [a.b :only [x]] c.d))");
         assert_eq!(ns.requires, ["a.b", "c.d"]);
+    }
+
+    #[test]
+    fn as_alias_libspecs_do_not_load_namespaces() {
+        let ns = parsed(
+            "(ns foo.bar (:require [app.types :as-alias types] [real.dep :as dep] [prefix [types :as-alias t] [loaded :as l]]))",
+        );
+        assert_eq!(ns.requires, ["real.dep", "prefix.loaded"]);
     }
 
     #[test]

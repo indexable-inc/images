@@ -182,7 +182,12 @@ impl<'a> Reader<'a> {
     fn require_form(&mut self, at: usize, what: &str) -> Result<Form, ReadError> {
         loop {
             match self.read_item()? {
-                None => return Err(ReadError::new(at, format!("end of input while reading {what}"))),
+                None => {
+                    return Err(ReadError::new(
+                        at,
+                        format!("end of input while reading {what}"),
+                    ));
+                }
                 Some(Item::One(form)) => return Ok(form),
                 Some(Item::Nothing) => {}
                 Some(Item::Splice(_)) => {
@@ -224,18 +229,23 @@ impl<'a> Reader<'a> {
                 Kind::Atom
             }
             ':' => Kind::Keyword(self.read_keyword()),
-            // Quoting and deref wrap a form without changing which namespaces it
-            // names, so the wrapper is dropped and the inner form returned.
+            // Quote, syntax-quote, deref, and unquote produce wrapper forms.
+            // Their contents are data or an operand, never the top-level form
+            // itself. Consume the wrapped form for delimiter validation, but
+            // keep it opaque so `'(ns example.data)` cannot be mistaken for a
+            // namespace declaration.
             '\'' | '`' | '@' => {
                 self.bump();
-                return Ok(Some(Item::One(self.require_form(start, "a quoted form")?)));
+                self.require_form(start, "a quoted form")?;
+                Kind::Atom
             }
             '~' => {
                 self.bump();
                 if self.peek() == Some('@') {
                     self.bump();
                 }
-                return Ok(Some(Item::One(self.require_form(start, "an unquoted form")?)));
+                self.require_form(start, "an unquoted form")?;
+                Kind::Atom
             }
             '^' => {
                 self.bump();
@@ -309,10 +319,13 @@ impl<'a> Reader<'a> {
                 return Ok(Item::Nothing);
             }
             '?' => return self.read_conditional(start),
-            // `#'var-quote` and `#=(eval)` both wrap one form.
+            // `#'var-quote` and `#=(eval)` both wrap one form. A var-quoted
+            // list is not executable syntax, so do not expose its contents to
+            // the top-level `ns` scanner.
             '\'' => {
                 self.bump();
-                return Ok(Item::One(self.require_form(start, "a var-quoted form")?));
+                self.require_form(start, "a var-quoted form")?;
+                Kind::Atom
             }
             '=' => {
                 self.bump();
@@ -335,13 +348,13 @@ impl<'a> Reader<'a> {
                     self.require_form(start, "the map of a namespaced map literal")?,
                 ));
             }
-            // `#inst "..."`, `#uuid "..."`, or any user tag: read the tag, then
-            // hand back the tagged form itself.
+            // `#inst "..."`, `#uuid "..."`, or any user tag wraps data. Read
+            // and validate its value, but keep that value opaque to the
+            // top-level `ns` scanner.
             _ if is_token_char(next) => {
                 self.read_token();
-                return Ok(Item::One(
-                    self.require_form(start, "the value of a tagged literal")?,
-                ));
+                self.require_form(start, "the value of a tagged literal")?;
+                Kind::Atom
             }
             _ => {
                 return Err(ReadError::new(
@@ -641,6 +654,14 @@ mod tests {
     }
 
     #[test]
+    fn quoting_wrappers_keep_their_contents_opaque() {
+        assert_eq!(
+            kinds("'(ns quoted.data) `(ns syntax.quoted) @(ns deref.data) #'(ns var.quoted)"),
+            [Kind::Atom, Kind::Atom, Kind::Atom, Kind::Atom]
+        );
+    }
+
+    #[test]
     fn reader_conditional_selects_the_clj_branch() {
         let kinds = kinds("(a #?(:cljs cljs-only :clj clj-only) b)");
         assert_eq!(symbols(&kinds[0]), ["a", "clj-only", "b"]);
@@ -691,14 +712,17 @@ mod tests {
     }
 
     #[test]
-    fn tagged_literals_yield_their_value() {
+    fn tagged_literals_keep_their_values_opaque() {
+        assert_eq!(kinds("#example (ns tagged.data)"), [Kind::Atom]);
         let kinds = kinds("(a #inst \"2024-01-01\" b)");
         assert_eq!(symbols(&kinds[0]), ["a", "b"]);
     }
 
     #[test]
     fn a_mismatched_delimiter_names_both_ends() {
-        let error = Reader::new("(a [b c)").next_form().expect_err("should fail");
+        let error = Reader::new("(a [b c)")
+            .next_form()
+            .expect_err("should fail");
         assert_eq!(error.offset, 7);
         assert!(
             error.message.contains("found `)` where `]` was expected"),
@@ -717,7 +741,9 @@ mod tests {
 
     #[test]
     fn unterminated_string_reports_its_opening_offset() {
-        let error = Reader::new("(a \"oops)").next_form().expect_err("should fail");
+        let error = Reader::new("(a \"oops)")
+            .next_form()
+            .expect_err("should fail");
         assert_eq!(error.offset, 3);
     }
 }
