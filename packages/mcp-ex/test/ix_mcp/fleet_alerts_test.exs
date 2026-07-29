@@ -148,7 +148,7 @@ defmodule IxMcp.FleetAlertsTest do
       second = Watch.run_poll("warning", opts)
       third = Watch.run_poll("warning", opts)
 
-      assert length(first.announced) == 1
+      assert [_] = first.announced
       assert second.announced == []
       assert second.suppressed == 1
       assert third.announced == []
@@ -160,7 +160,7 @@ defmodule IxMcp.FleetAlertsTest do
     test "a genuinely new event announces again even while an old one stands", %{log: log} do
       opts = [action_log: log, notify: fn _ -> :ok end, deliverable: true]
 
-      assert length(Watch.run_poll("warning", [query_fun: &only_oom/1] ++ opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", [query_fun: &only_oom/1] ++ opts).announced
 
       # Same predicate, new hour bucket: a fresh burst, so it is news.
       next_hour = fn sql ->
@@ -169,7 +169,7 @@ defmodule IxMcp.FleetAlertsTest do
           else: {:ok, []}
       end
 
-      assert length(Watch.run_poll("warning", [query_fun: next_hour] ++ opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", [query_fun: next_hour] ++ opts).announced
     end
   end
 
@@ -186,7 +186,7 @@ defmodule IxMcp.FleetAlertsTest do
       assert Watch.run_poll("warning", opts).announced == []
 
       assert :ok = ActionLog.unmute_fleet_predicate("kernel_storage", log)
-      assert length(Watch.run_poll("warning", opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", opts).announced
     end
 
     test "the mute survives the log process dying and coming back", %{log: log, path: path} do
@@ -277,7 +277,7 @@ defmodule IxMcp.FleetAlertsTest do
         deliverable: true
       ]
 
-      assert length(Watch.run_poll("warning", opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", opts).announced
       assert Watch.run_poll("warning", opts).announced == []
     end
 
@@ -423,8 +423,7 @@ defmodule IxMcp.FleetAlertsTest do
       # ...so it still announces once somebody is listening. Without this the
       # fleet path buries any fault raised between sessions: unlike jobs, it has
       # no outbox replay.
-      assert length(Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced) ==
-               1
+      assert [_] = Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced
     end
 
     test "blindness is exempt from the level floor", %{log: log} do
@@ -445,14 +444,14 @@ defmodule IxMcp.FleetAlertsTest do
     test "a recovered read re-arms blindness, so a second outage is not silent", %{log: log} do
       opts = [action_log: log, notify: fn _ -> :ok end, deliverable: true]
 
-      assert length(Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced
       assert Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced == []
 
       # A successful poll clears the fingerprint...
       Watch.run_poll("warning", [query_fun: &quiet_fleet/1] ++ opts)
 
       # ...so the next outage announces rather than being deduped forever.
-      assert length(Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced
     end
   end
 
@@ -469,7 +468,7 @@ defmodule IxMcp.FleetAlertsTest do
         deliverable: true
       ]
 
-      assert length(Watch.run_poll("warning", opts).announced) == 1
+      assert [_] = Watch.run_poll("warning", opts).announced
       assert [%{predicate: "kernel_storage"}] = ActionLog.fleet_alerts_seen(log)
       # ...and does not announce twice.
       assert Watch.run_poll("warning", opts).announced == []
@@ -496,8 +495,7 @@ defmodule IxMcp.FleetAlertsTest do
       assert ActionLog.fleet_alerts_seen(log) == [],
              "nothing was attempted, so nothing may be recorded"
 
-      assert length(Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced) ==
-               1
+      assert [_] = Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced
     end
 
     test "the three rows are genuinely different, not two spellings of one", %{log: log} do
