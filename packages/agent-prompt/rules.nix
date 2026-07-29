@@ -672,12 +672,12 @@
       topics = ["agency"];
       text = ''
         Done means landed on `origin/main`: own the PR through merge, and
-        claim landed only when the merge commit contains your push. Merge
-        by force, not by vigil: once local checks pass (package tests,
-        format, lint), admin-merge (`gh pr merge --merge --admin`) instead
-        of babysitting CI; main's post-merge CI is the validator, and a red
-        it finds is fixed forward immediately by whoever merged. Then
-        delete worktree and branch and announce in one line:
+        claim landed only when the merge commit contains your push. Turn on
+        auto-merge as soon as the PR is open and local checks pass (package
+        tests, format, lint): `gh pr merge --auto --merge` hands the wait to
+        GitHub, so never sit watching a run. A red on main that your merge
+        caused is fixed forward immediately. Then delete worktree and branch
+        and announce in one line:
         `🚀 Pushed to main: [<summary>](<commit url>)` or
         `🌸 PR merged: [<title or number>](<url>) in <duration>`.
       '';
@@ -685,6 +685,17 @@
         Done was claimed at open PRs; a push seconds after auto-merge was
         silently dropped (#1910, #1911, #1942). Stacked-rebase mechanics
         moved to memories (index#3594).
+
+        Recast 2026-07-29 at the user's request: `--auto` is the default and
+        admin-merge is gone from this rule. The old text told every session
+        to admin-merge past CI, while `forceMerge` says `--admin` needs an
+        explicit human grant and `packages/agent/policy/permissions.nix`
+        denies the command outright, so the prompt contradicted both its
+        neighbour and an enforced deny. `--auto` lands the change unattended
+        without skipping a check, which is what the force-merge clause was
+        reaching for. Kept the claim-landed clause: `--auto` widens the
+        window it was written for, since the merge now fires whenever CI
+        finishes rather than when the agent asks.
       '';
     };
   }
