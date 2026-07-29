@@ -126,16 +126,22 @@ defmodule IxMcp.Fleet do
   end
 
   @doc """
-  Everything that can be muted: each discrete alert predicate, the whole
-  digest, and one severity category inside the digest. Three granularities
-  because they answer different asks -- "this specific alarm is wrong", "stop
-  the per-minute line", and "the line is fine but I do not care about
-  warnings".
+  Everything that can be muted.
+
+  * a discrete predicate id -- "this specific alarm is wrong"
+  * `"heartbeat"` -- stop the hourly baseline line
+  * `"anomaly"` -- stop the immediate out-of-band line
+  * `"digest"` -- both of the above
+  * `"digest:warning"` and friends -- keep the line, drop one category from it
+
+  Five shapes rather than one, because they answer genuinely different asks and
+  an operator who can only mute everything will mute everything.
   """
   @spec mutable() :: [String.t()]
   def mutable do
     Alerts.ids() ++
-      ["digest"] ++ for(level <- ~w(warning error crit alert emerg), do: "digest:" <> level)
+      ["digest", "heartbeat", "anomaly"] ++
+      for(level <- ~w(warning error crit alert emerg), do: "digest:" <> level)
   end
 
   @doc """
@@ -166,36 +172,50 @@ defmodule IxMcp.Fleet do
   end
 
   @doc """
-  Expand the last digest into what was actually counted: the top host, level
-  and unit combinations in that exact window, with a sample message each.
+  Expand the last heartbeat window into what was actually counted: the top
+  host, level and unit combinations, with a sample message each.
 
-  The digest line is a pointer, not the content. Without this, getting curious
-  means writing ClickHouse by hand at precisely the moment attention is
-  available.
+  The line is a pointer, not the content. Without this, getting curious means
+  writing ClickHouse by hand at precisely the moment attention is available.
   """
   @spec digest() :: {:ok, [map()]} | {:error, String.t()}
   def digest, do: expand(Watch.digest_state())
 
   defp expand(%{last: nil}),
-    do: {:error, "no digest has been sent yet; Fleet.digest_now() builds one"}
+    do: {:error, "no heartbeat has been sent yet; Fleet.heartbeat_now() builds one"}
 
   defp expand(%{last: %{from: from, to: to}}), do: Digest.detail(from, to)
 
-  @doc "Build and send a digest immediately. `{:ok, nil}` if the window is empty."
-  @spec digest_now() :: {:ok, map() | nil} | {:error, String.t()}
-  def digest_now, do: Watch.digest_now()
+  @doc "Send a heartbeat immediately. `{:ok, nil}` if the window was empty."
+  @spec heartbeat_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def heartbeat_now, do: Watch.heartbeat_now()
 
   @doc """
-  Read or set the digest period in seconds (default 60, minimum 10).
-
-  The default is not a measured optimum, it is the operator's opening
-  suggestion supported by one number: the median minute across the fleet
-  carries 33 warning-or-worse lines. 87.1% of minutes are non-empty, so 60s
-  costs roughly 1,250 digest lines a day.
+  Check the last complete minute for an anomaly immediately. `{:ok, nil}` means
+  in band, which is the answer roughly 99.5% of the time by construction.
   """
-  @spec digest_period(pos_integer() | nil) :: pos_integer() | :ok | {:error, String.t()}
-  def digest_period(nil), do: Watch.digest_state().period_s
-  def digest_period(seconds) when is_integer(seconds), do: Watch.set_digest_period(seconds)
+  @spec anomaly_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def anomaly_now, do: Watch.anomaly_now()
+
+  @doc """
+  Read or set the heartbeat period in seconds (default 3600, minimum 60).
+
+  Hourly rather than per-minute for a measured reason: 87.1% of minutes are
+  non-empty, so a 60s heartbeat costs roughly **1,250 lines a day** while an
+  hourly one costs 24. Anomalies do not wait for the hour -- they emit within
+  a minute of detection, at a measured 10.3 a day.
+  """
+  @spec heartbeat_period(pos_integer() | nil) :: pos_integer() | :ok | {:error, String.t()}
+  def heartbeat_period(seconds \\ nil)
+  def heartbeat_period(nil), do: Watch.digest_state().period_s
+  def heartbeat_period(seconds) when is_integer(seconds), do: Watch.set_heartbeat_period(seconds)
+
+  @doc """
+  The anomaly threshold in force for the current clock hour, and the quantile
+  it is taken at. Useful for answering "why did that not fire".
+  """
+  @spec anomaly_threshold() :: map() | nil
+  def anomaly_threshold, do: Watch.digest_state().threshold
 
   @doc """
   Forget standing alerts so they announce again: `:all`, or one predicate id.

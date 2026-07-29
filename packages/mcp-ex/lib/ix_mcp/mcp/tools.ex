@@ -30,24 +30,33 @@ defmodule IxMcp.MCP.Tools do
                                             session's finishes here (own jobs
                                             already announce; session ids:
                                             Sessions.list())
-      Fleet.digest()                        expand the last per-minute fleet digest
+      Fleet.digest()                        expand the last fleet heartbeat window
                                             into what it counted (host, level, unit,
                                             sample message)
-      Fleet.digest_period()                 read the digest period; pass seconds to
-                                            change it (default 60, minimum 10). The
-                                            median fleet minute holds 33 warning-or-
-                                            worse lines and 87% of minutes are
-                                            non-empty, so 60s is ~1,250 lines/day
+      Fleet.heartbeat_period()              read the heartbeat period; pass seconds
+                                            to change it (default 3600, minimum 60).
+                                            Hourly is measured, not arbitrary: 87% of
+                                            minutes are non-empty, so a per-minute
+                                            line costs ~1,250/day where hourly costs
+                                            24. Anomalies do not wait for the hour;
+                                            they emit within a minute, ~10/day
+      Fleet.anomaly_threshold()             the count this clock hour has to exceed,
+                                            and the quantile it comes from -- answers
+                                            "why did that not fire"
       Fleet.check()                         poll for discrete alert conditions now;
                                             .errors non-empty means part of the
                                             fleet could NOT be read, which is not
                                             the same as healthy
-      Fleet.mute("digest")                  UNSUBSCRIBE, three granularities, all
-                                            durable across reconnects:
-                                              "digest"          the per-minute line
-                                              "digest:warning"  one category inside
-                                                                it (also error, crit,
-                                                                alert, emerg)
+      Fleet.mute("anomaly")                 UNSUBSCRIBE, five shapes, all durable
+                                            across reconnects:
+                                              "heartbeat"       the hourly baseline
+                                              "anomaly"         the immediate
+                                                                out-of-band line
+                                              "digest"          both of those
+                                              "digest:warning"  keep the line, drop
+                                                                one category (also
+                                                                error, crit, alert,
+                                                                emerg)
                                               "oom_burst"       one discrete alert
                                             Fleet.unmute/1 undoes any of them,
                                             Fleet.mutable() lists them all, and
@@ -198,6 +207,12 @@ defmodule IxMcp.MCP.Tools do
   persist -- code ships as source strings), and darwin-specific behavior.
   Fleet.nodes() == [] means no fleet is configured (helpers return
   {:error, :no_nodes}); the remote env is minimal (shell-outs limited).
+
+  Fleet notifications (heartbeat, anomaly, discrete alerts) ride
+  notifications/claude/channel, which is a Claude Code extension rather than
+  standard MCP: a non-Claude MCP client receives none of them, and for those
+  clients the initialize `instructions` field is the only surface that reaches
+  the reader (#3785).
   """
 
   @doc "The in-language surface cheat sheet (also shipped as server instructions)."

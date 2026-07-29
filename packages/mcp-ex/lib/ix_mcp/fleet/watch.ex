@@ -71,43 +71,57 @@ defmodule IxMcp.Fleet.Watch do
   @spec poll_now() :: %{announced: [map()], suppressed: non_neg_integer(), errors: [String.t()]}
   def poll_now, do: GenServer.call(__MODULE__, :poll_now, 120_000)
 
-  # Default digest period. 60s is the operator's opening suggestion, and the
-  # measurement in IxMcp.Fleet.Digest supports it: the median minute carries 33
-  # notable lines, which is a readable one-liner. It is settable because 87.1%
-  # of minutes are non-empty, so this default costs roughly 1,250 lines a day
-  # and whoever pays that should be able to change it.
-  @default_digest_s Application.compile_env(:ix_mcp, :fleet_digest_period_s, 60)
+  # Heartbeat period: the visible baseline, at 24 lines a day. Hourly rather
+  # than per-minute because the measured cost of per-minute is ~1,250 lines a
+  # day (87.1% of minutes are non-empty), which is not wallpaper but what
+  # wallpaper becomes when there is too much of it.
+  @default_heartbeat_s Application.compile_env(:ix_mcp, :fleet_heartbeat_period_s, 3_600)
+
+  # Anomaly detection cadence. Measurement is per-minute because that is the
+  # granularity the distribution supports; only emission is rare, and it is
+  # rare by construction rather than by hope -- see IxMcp.Fleet.Digest on why
+  # the threshold is a quantile and not a ratio.
+  @anomaly_interval_s 60
 
   @doc """
-  Build and send a digest now, returning what was sent. `{:ok, nil}` means the
-  window was empty and nothing was said.
+  Send a heartbeat now. `{:ok, nil}` means the window was empty and nothing
+  was said.
   """
-  @spec digest_now() :: {:ok, map() | nil} | {:error, String.t()}
-  def digest_now, do: GenServer.call(__MODULE__, :digest_now, 120_000)
+  @spec heartbeat_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def heartbeat_now, do: GenServer.call(__MODULE__, :heartbeat_now, 120_000)
 
   @doc """
-  Change the digest period, in seconds. Minimum 10s -- below that the query
-  cost stops being negligible and the line stops being readable.
+  Check the last complete minute for an anomaly now. `{:ok, nil}` means it was
+  in band, which is the overwhelmingly common answer.
   """
-  @spec set_digest_period(pos_integer()) :: :ok | {:error, String.t()}
-  def set_digest_period(seconds) when is_integer(seconds) do
-    if seconds >= 10 do
-      GenServer.cast(__MODULE__, {:digest_period, seconds})
+  @spec anomaly_now() :: {:ok, map() | nil} | {:error, String.t()}
+  def anomaly_now, do: GenServer.call(__MODULE__, :anomaly_now, 120_000)
+
+  @doc """
+  Change the heartbeat period, in seconds. Minimum 60s -- the measurement says
+  a per-minute heartbeat costs ~1,250 lines a day, so anything shorter is
+  re-creating the problem this cadence exists to solve.
+  """
+  @spec set_heartbeat_period(pos_integer()) :: :ok | {:error, String.t()}
+  def set_heartbeat_period(seconds) when is_integer(seconds) do
+    if seconds >= 60 do
+      GenServer.cast(__MODULE__, {:heartbeat_period, seconds})
     else
-      {:error, "digest period must be at least 10s, got #{seconds}"}
+      {:error,
+       "heartbeat period must be at least 60s (a 60s heartbeat is already ~1,250 lines/day), got #{seconds}"}
     end
   end
 
-  @doc "The current digest period in seconds, and the last window summarised."
-  @spec digest_state() :: %{period_s: pos_integer(), last: map() | nil}
+  @doc "Heartbeat period, the last window summarised, and the cached threshold."
+  @spec digest_state() :: %{period_s: pos_integer(), last: map() | nil, threshold: map() | nil}
   def digest_state, do: GenServer.call(__MODULE__, :digest_state)
 
   # Whether the timers are armed. The process always starts -- callers need the
-  # level and digest-period state, and the tests drive run_poll/2 and
-  # run_digest/2 directly -- but polling is off in the test environment and in
-  # any sandboxed build, because a poll is an ssh to a production host. A test
-  # suite that reaches out to hil-compute-2 is wrong whether or not it passes,
-  # and in a nix build it would fail with no network and read as a fleet
+  # level and heartbeat state, and the tests drive run_poll/2, run_heartbeat/2
+  # and run_anomaly/2 directly -- but polling is off in the test environment and
+  # in any sandboxed build, because a poll is an ssh to a production host. A
+  # test suite that reaches out to hil-compute-2 is wrong whether or not it
+  # passes, and in a nix build it would fail with no network and read as a fleet
   # outage.
   @poll_enabled Application.compile_env(:ix_mcp, :fleet_watch_enabled, true)
 
@@ -115,10 +129,19 @@ defmodule IxMcp.Fleet.Watch do
   def init(_opts) do
     if @poll_enabled do
       Process.send_after(self(), :poll, @initial_delay_ms)
-      Process.send_after(self(), :digest, @initial_delay_ms + 5_000)
+      Process.send_after(self(), :heartbeat, @initial_delay_ms + 5_000)
+      Process.send_after(self(), :anomaly, @initial_delay_ms + 10_000)
     end
 
-    {:ok, %{level: "warning", digest_s: @default_digest_s, last_digest: nil}}
+    {:ok,
+     %{
+       level: "warning",
+       heartbeat_s: @default_heartbeat_s,
+       last_digest: nil,
+       # {clock_hour, value}: recomputing the threshold is a 7-day scan, which
+       # is fine hourly and not fine every 60 seconds.
+       threshold: nil
+     }}
   end
 
   @doc """
@@ -137,8 +160,8 @@ defmodule IxMcp.Fleet.Watch do
   @impl true
   def handle_cast({:set_level, level}, state), do: {:noreply, %{state | level: level}}
 
-  def handle_cast({:digest_period, seconds}, state),
-    do: {:noreply, %{state | digest_s: seconds}}
+  def handle_cast({:heartbeat_period, seconds}, state),
+    do: {:noreply, %{state | heartbeat_s: seconds}}
 
   @impl true
   def handle_call(:level, _from, state), do: {:reply, state.level, state}
@@ -148,15 +171,26 @@ defmodule IxMcp.Fleet.Watch do
   end
 
   def handle_call(:digest_state, _from, state) do
-    {:reply, %{period_s: state.digest_s, last: state.last_digest}, state}
+    threshold =
+      case state.threshold do
+        {hour, value} -> %{hour: hour, value: value, quantile: Digest.anomaly_quantile()}
+        nil -> nil
+      end
+
+    {:reply, %{period_s: state.heartbeat_s, last: state.last_digest, threshold: threshold}, state}
   end
 
-  def handle_call(:digest_now, _from, state) do
-    case run_digest(state.digest_s) do
+  def handle_call(:heartbeat_now, _from, state) do
+    case run_heartbeat(state.heartbeat_s) do
       {:ok, nil} -> {:reply, {:ok, nil}, state}
       {:ok, digest} -> {:reply, {:ok, digest}, %{state | last_digest: digest}}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call(:anomaly_now, _from, state) do
+    {reply, state} = anomaly_cycle(state)
+    {:reply, reply, state}
   end
 
   @impl true
@@ -166,17 +200,23 @@ defmodule IxMcp.Fleet.Watch do
     {:noreply, state}
   end
 
-  def handle_info(:digest, state) do
+  def handle_info(:heartbeat, state) do
     state =
-      case run_digest(state.digest_s) do
+      case run_heartbeat(state.heartbeat_s) do
         {:ok, nil} -> state
         {:ok, digest} -> %{state | last_digest: digest}
-        # A digest that could not be read is announced by the alert path's
-        # observability_blind predicate, not twice from here.
+        # A window that could not be read is announced by the alert path's
+        # observability_blind predicate, not a second time from here.
         {:error, _reason} -> state
       end
 
-    Process.send_after(self(), :digest, state.digest_s * 1_000)
+    Process.send_after(self(), :heartbeat, state.heartbeat_s * 1_000)
+    {:noreply, state}
+  end
+
+  def handle_info(:anomaly, state) do
+    {_reply, state} = anomaly_cycle(state)
+    Process.send_after(self(), :anomaly, @anomaly_interval_s * 1_000)
     {:noreply, state}
   end
 
@@ -184,20 +224,22 @@ defmodule IxMcp.Fleet.Watch do
 
   # -- digest ------------------------------------------------------------------
 
+  # -- heartbeat and anomaly ---------------------------------------------------
+
   @doc """
-  Build one digest and announce it unless muted. Public for the same reason
-  `run_poll/2` is: the suppression and anomaly behaviour has to be testable
-  without a broken fleet to hand.
+  Build one heartbeat and announce it unless muted. Public for the same reason
+  `run_poll/2` is: suppression and mute behaviour has to be testable without a
+  broken fleet to hand.
   """
-  @spec run_digest(pos_integer(), keyword()) :: {:ok, map() | nil} | {:error, String.t()}
-  def run_digest(period_s, opts \\ []) do
+  @spec run_heartbeat(pos_integer(), keyword()) :: {:ok, map() | nil} | {:error, String.t()}
+  def run_heartbeat(period_s, opts \\ []) do
     query_fun = Keyword.get(opts, :query_fun, &ClickHouse.query/1)
     log = Keyword.get(opts, :action_log, ActionLog)
-    notify = Keyword.get(opts, :notify, &announce_digest/1)
+    notify = Keyword.get(opts, :notify, &announce_heartbeat/1)
 
     muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
 
-    if "digest" in muted do
+    if muted?(muted, "heartbeat") do
       {:ok, nil}
     else
       with {:ok, digest} when digest != nil <- Digest.build(period_s, query_fun) do
@@ -206,8 +248,63 @@ defmodule IxMcp.Fleet.Watch do
     end
   end
 
+  @doc """
+  Check the last complete minute against the cached per-hour threshold and
+  announce it if out of band. `cached` is `{clock_hour, value}` or nil; the
+  refreshed value comes back so the caller can hold it.
+  """
+  @spec run_anomaly(term(), keyword()) :: {{:ok, map() | nil} | {:error, String.t()}, term()}
+  def run_anomaly(cached, opts \\ []) do
+    query_fun = Keyword.get(opts, :query_fun, &ClickHouse.query/1)
+    log = Keyword.get(opts, :action_log, ActionLog)
+    notify = Keyword.get(opts, :notify, &announce_anomaly/1)
+    hour = Keyword.get(opts, :hour, current_hour())
+
+    muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
+
+    if muted?(muted, "anomaly") do
+      {{:ok, nil}, cached}
+    else
+      with_threshold(cached, hour, query_fun, notify)
+    end
+  end
+
+  # The threshold is a 7-day scan, so it is computed once per clock hour and
+  # reused for that hour's sixty checks.
+  defp with_threshold({hour, value}, hour, query_fun, notify),
+    do: {detect(value, query_fun, notify), {hour, value}}
+
+  defp with_threshold(_stale, hour, query_fun, notify) do
+    case Digest.threshold(hour, query_fun) do
+      {:ok, value} -> {detect(value, query_fun, notify), {hour, value}}
+      # A threshold that could not be read is dropped rather than kept stale:
+      # judging this hour against last hour's number is worse than not judging.
+      {:error, reason} -> {{:error, reason}, nil}
+    end
+  end
+
+  defp detect(threshold, query_fun, notify) do
+    case Digest.check_anomaly(threshold, query_fun) do
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, anomaly} ->
+        notify.(anomaly)
+        {:ok, anomaly}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp current_hour, do: DateTime.utc_now().hour
+
+  # "digest" mutes both rates, because that is what somebody typing it means;
+  # "heartbeat" and "anomaly" mute one each.
+  defp muted?(muted, id), do: id in muted or "digest" in muted
+
   # Dropping every counted level leaves nothing to say, and a line reading
-  # "0 notable" every minute is the thing mutes exist to stop.
+  # "0 notable" is the thing mutes exist to stop.
   defp emit(%{total: 0}, _notify), do: {:ok, nil}
 
   defp emit(digest, notify) do
@@ -216,8 +313,7 @@ defmodule IxMcp.Fleet.Watch do
   end
 
   # Per-category mute: "digest:warning" removes warnings from the count rather
-  # than silencing the whole line, which is what the operator asked for when
-  # they said mute a category inside it.
+  # than silencing the whole line.
   defp drop_muted_levels(digest, muted) do
     dropped =
       for "digest:" <> level <- muted, level != "", into: MapSet.new() do
@@ -228,31 +324,34 @@ defmodule IxMcp.Fleet.Watch do
     %{digest | counts: counts, total: counts |> Map.values() |> Enum.sum()}
   end
 
-  # An anomalous minute is rendered loudly, a boring one quietly, and the
-  # distinction is in `severity` so a harness can style them differently. The
-  # boring case is meant to become furniture -- that is what makes the
-  # anomalous one visible -- so it stays to one line with no hint text. The
-  # pointers only appear when there is something to point at.
-  defp announce_digest(digest) do
-    severity = if digest.anomalies == [], do: "info", else: "failure"
-
-    content =
-      case digest.anomalies do
-        [] ->
-          "fleet: " <> Digest.render(digest)
-
-        _marked ->
-          "fleet: " <>
-            Digest.render(digest) <>
-            "\nFleet.digest() expands this window; Fleet.mute(\"digest\") or " <>
-            "Fleet.mute(\"digest:warning\") stops it."
-      end
-
-    Notifier.channel(content, %{
-      "source" => "fleet_digest",
-      "severity" => severity,
+  # The heartbeat is meant to become furniture -- that is what makes an anomaly
+  # legible -- so it is one quiet line, severity "info", with no hint text.
+  defp announce_heartbeat(digest) do
+    Notifier.channel("fleet: " <> Digest.render(digest), %{
+      "source" => "fleet_heartbeat",
+      "severity" => "info",
       "total" => Integer.to_string(digest.total)
     })
+  end
+
+  # The anomaly is the line somebody actually reads, so it carries the culprit
+  # hosts, the drill-in and the way out.
+  defp announce_anomaly(anomaly) do
+    Notifier.channel(
+      "fleet ANOMALY: " <>
+        Digest.render_anomaly(anomaly) <>
+        "\nFleet.digest() expands the window; Fleet.mute(\"anomaly\") stops these.",
+      %{
+        "source" => "fleet_anomaly",
+        "severity" => "failure",
+        "count" => Integer.to_string(anomaly.count)
+      }
+    )
+  end
+
+  defp anomaly_cycle(state) do
+    {reply, threshold} = run_anomaly(state.threshold)
+    {reply, %{state | threshold: threshold}}
   end
 
   # -- polling -----------------------------------------------------------------
