@@ -35,7 +35,8 @@ an annotated `# noqa: <rule> -- <reason>`, never a blanket silence.
 
 Enforcement is two-layer, sharing that one selector: each package's build gate
 runs it over the package, and a repo-wide `ruff` lint stage
-(`lib/per-system.nix`, in `nix run .#lint` + the CI `lint` check) runs it over
+(`lib/per-system.nix`, in index's `nix run .#lint` + the CI `lint` check; ix
+lints no Python) runs it over
 **every** tracked `.py` — including `tools/`, `users/`, `skills/`, `sdk/`,
 `examples/`, `lib/` that no package gate covers.
 

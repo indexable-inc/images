@@ -10,7 +10,8 @@ default, including small docs edits. Keep the shared `main` checkout as the clea
 landing zone for pulls, branch bases, and final syncs.
 
 The default path to land a change is: verify locally, then push directly to
-`main`. Run the repo gates on your change first (`nix run .#lint`, plus
+`main`. Run the repo gates on your change first (the lint -- `nix run .#lint` here,
+`just lint` in ix, see the `linting` skill -- plus
 `cargo check` / `cargo nextest run` on the affected packages, or a targeted `nix
 build .#<pkg>` when the change touches a packaged artifact), then push. Do not
 wait on CI to land a change. CI is advisory: a single shared runner node serves
@@ -107,8 +108,11 @@ squash, and revert commits are exempt.
 tags on commits that are already reachable from `main`.
 
 Contributor setup and local checks live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-Run the repo lint before committing:
+Run the repo lint before committing. In this repository that is:
 
 ```sh
 nix run .#lint
 ```
+
+It is `just lint` in `indexable-inc/ix`, which has no `nix run .#lint` at all.
+The `linting` skill has the per-repo table.
