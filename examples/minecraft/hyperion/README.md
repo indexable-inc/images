@@ -134,12 +134,31 @@ asked.** Before creating the third proxy, the three hosts reported:
     hil-compute-3  MemAvailable 389715 MiB   <- highest, so this should win
 
 Written down before the outcome so the record shows a prediction rather than a
-rationalisation. If it lands on hil-compute-3 the fleet ends up spread across
-two hosts, and that is **luck agreeing with the requirement, not the design
-meeting it** -- another VM created first would have changed the answer, and
-nothing here would have noticed. Anti-affinity being inexpressible in the fleet
-spec, in `mkFleet`, and on `ix apply` is the finding; ENG-11225 is where it
-lives.
+rationalisation. **It was then re-measured immediately before the create, and it
+had inverted:**
+
+    host             recorded 14:0x   measured 15:01, just before the create
+    hil-compute-1    373963 MiB       399285 MiB   <- now highest
+    hil-compute-2    313773 MiB       339849 MiB
+    hil-compute-3    389715 MiB       371943 MiB   <- was the prediction
+
+An hour apart, with no workload anyone started or stopped in between: the two
+hosts simply swapped on background noise. The second prediction was recorded
+before the create too, and it was the one that came true -- `hyperion-proxy-2`
+landed on hil-compute-1 with the other two.
+
+That inversion is the finding, and it is worth more than the good outcome would
+have been. **A property that flips on memory noise between two hosts nobody is
+choosing between is not a property the fleet has** -- it is one it may happen to
+get. Landing on hil-compute-3 would have looked like success and hidden that
+entirely. Anti-affinity being inexpressible in the fleet spec, in `mkFleet`, and
+on `ix apply` is the thing to fix; ENG-11225 is where it lives.
+
+`ix migrate` can move a VM off its host afterwards, and it chooses the
+destination itself, excluding the source. That is a lever, not a fix: **a manual
+correction of a placement nobody could ask for is not the design meeting the
+requirement.** Anyone reading this and seeing proxies on two hosts should not
+conclude the fleet can express that. It cannot.
 
 hil-compute-2 is worth avoiding for two reasons rather than one: it has not
 taken the east-west fix yet, and it is the host missing the group DNS gateway
@@ -171,9 +190,89 @@ two load-bearing parts:
 
 ## State of the deployment, 2026-07-29
 
-Three VMs exist in `us-west-1`: `hyperion-game` on hil-compute-3,
-`hyperion-proxy-0` and `hyperion-proxy-1` on hil-compute-1. The third proxy is
-in this spec and evaluates; **it has not been created.**
+Four VMs exist in `us-west-1`. `hyperion-game` on hil-compute-3, and
+`hyperion-proxy-0`, `-1` and `-2` all on hil-compute-1.
+
+**The third proxy exists, and it is the only machine in the fleet running the
+current build.** Not because it was updated -- because it was *created*. Every
+existing node failed to switch (below), so the one node that never had to switch
+is the one that is current. That is the same asymmetry that caused the outage,
+seen from the good side.
+
+**The fleet still does not have the property the user asked for.** All three
+proxies are on one host, so a hil-compute-1 fault takes every entrypoint.
+Placement is not something this spec can express; see above. The only remaining
+lever is `ix migrate`, which is a deliberate action to take cold rather than at
+the end of an incident.
+
+### The 13m40s outage, 15:04:28Z to 15:18:08Z
+
+Applying the game-version bump to all four nodes took the public endpoint down
+for **13 minutes 40 seconds**, measured at 2 s cadence: last success 15:04:28,
+first failure 15:04:30, last failure 15:18:02, first success 15:18:08, 136
+consecutive failed probes.
+
+Three of four switches failed, identically:
+
+    ✗ hyperion-game     switch-to-configuration exited with status 1
+    ✗ hyperion-proxy-0  switch-to-configuration exited with status 1
+    ✗ hyperion-proxy-1  switch-to-configuration exited with status 1
+    ✓ hyperion-proxy-2  ready          <- created, not switched
+
+**The switch stopped the thing it was standing on.** From the game server's
+journal, and byte-for-byte the same on proxy-1 one second later:
+
+    15:04:29 nixos[25901]: switching to system configuration /nix/store/dvspfsvzm...
+    15:04:29 systemd[1]: Stopped target Local File Systems.
+    15:04:29 systemd[1]: Stopping D-Bus System Message Bus...
+    15:04:29 systemd[1]: Unmounting /tmp...
+    15:04:29 systemd[1]: Unmounted /tmp.
+             (silence)
+
+Diffing the running system against the target system found the cause in one
+comparison: `tmp.mount` is present in the old system and **absent** in the new
+one. `switch-to-configuration` correctly stops a unit the new configuration no
+longer declares -- but `local-fs.target` depends on it, so stopping it cascades
+to D-Bus and to everything ordered after, including the process performing the
+switch. It cannot finish, exits 1, and leaves the services it already stopped
+stopped.
+
+The cause is index commit `dac64977`, *"image: keep /tmp on the rootfs instead
+of a tmpfs sized by the boot base"*. **That commit is correct and should not be
+reverted.** `boot.tmp.useTmpfs = true` mounted /tmp with `size=50%`, the kernel
+resolves that percentage once at mount time against `totalram_pages()`, and an
+ix guest mounts /tmp while only the 3 GiB unpluggable virtio-mem base exists --
+giving a measured 1.42 GiB /tmp on a guest reporting 256 GiB, one of them
+already full. This is a **missing migration, not a regression**: removing a
+mount unit is not a safe in-place transition, and nothing noticed that.
+
+ENG-11315, urgent. The property it asks for is one sentence and is checkable
+statically, from the two systems' unit graphs, before any deploy: *a switch must
+never stop a unit the switch itself depends on.*
+
+Three things worth keeping from how this failed:
+
+- **Nothing was half-migrated.** All three failed nodes stayed on their old
+  generation; `/run/current-system` never moved. That is the deploy tool
+  behaving correctly under failure, and it is why recovery was
+  `systemctl start hyperion-game-server` -- the unit was merely stopped, because
+  the switch never got as far as replacing it. The reflex after a failed deploy
+  is to assume a mixed state; here that reflex would have been wrong and
+  expensive.
+- **The guard for this was written today and the deploy that needed it is the
+  deploy that failed to install it.** `hyperion-proxy-0` sat `active` with a
+  dead backend for the whole thirteen minutes -- exactly the state the handshake
+  check exists to catch -- and the check could not fire, because its own switch
+  failed. It is deployed on `hyperion-proxy-2`, the node that was created.
+- **`ix apply` writes nothing to stdout without a tty.** The log was empty for
+  ninety seconds and looked stalled. The real signal is the JSONL trace under
+  `~/.ix/trace/`. Worth knowing before scripting an apply.
+
+**The game version bump is deferred, not done.** The lock change is merged and
+correct; the fleet cannot receive it by the supported path until ENG-11315 is
+fixed. Do not retry the apply before then -- it will fail identically, because
+the unit diff is a property of the two closures rather than of timing.
+
 
 **The fleet serves Minecraft, across hosts, through either proxy.** A real
 status handshake -- protocol 776, the same packet a client sends -- against
@@ -230,11 +329,16 @@ and refuses anything else, so reaching that port is not the same as being able
 to use it. Through the script the same thing reads as
 `expected status response (packet 0), got packet 3`.
 
-**What is missing is public ingress, and only that.** No player can reach a
-proxy from the internet: the proxies hold no public IPv4 (see below), and a
-guest's public IPv6 `/128` answers only from the host it lives on (ENG-11144).
-Every hop from a player's client to the world exists and is tested except the
-first one.
+**Public ingress now exists and works.** A handshake from a laptop against
+`15.204.111.75:25565` -- no tunnel, no group membership -- returns the game
+server's status. The path is internet, hil-compute-1's own routed address, DNAT,
+proxy, cross-host, game server. Every hop from a player's client to the world is
+now exercised.
+
+That address is a host's, not the fleet's, for the reasons under `ipv4` in
+`proxy.nix`: the region's ingress block is undelivered and its vRack suspended
+(ENG-11229). So the endpoint is a host address with no name in front of it, and
+both of those are still open.
 
 Two things this run corrected that were true this morning:
 
@@ -273,6 +377,13 @@ Fixed since this example landed:
 
 Open:
 
+- **`ix apply` cannot update an existing guest in this fleet at all.** ENG-11315,
+  urgent. A switch across index `dac64977` stops `tmp.mount`, which the new
+  system no longer declares, and that cascades through `local-fs.target` to
+  D-Bus and to the process performing the switch. Detail above. Until it is
+  fixed, the only way to move a node to a new build is to recreate it, which is
+  why the newest node in the fleet is the one that was created rather than
+  updated.
 - **Public ingress. This is the only thing left between the fleet and a
   player.** The region's one Additional IP block, `15.204.22.192/26`, is
   delivered nowhere: OVH reports `routedTo.serviceName = null` for it. The fix
