@@ -103,7 +103,7 @@ the value of having a graph at all.
       # context that no derivation attribute is allowed to carry.
       cd ${src}
       nix-clj-unit render \
-        ${concatStringsSep " " (map (dir: "--src ${dir}") sourceRoots)} \
+        ${concatStringsSep " " (map (dir: "--src ${lib.escapeShellArg dir}") sourceRoots)} \
         --out "$out"
     '';
 
@@ -165,12 +165,14 @@ the value of having a graph at all.
       # has just emitted while compiling the rest of the namespace.
       classpath="${applicationClasspath}${lib.optionalString (applicationClasspath != "") ":"}$unitSource:$out:$(cat ${classpathJars})"
 
-      # `require` FIRST, then compile. `compile` binds `*compile-files*` true
-      # across the whole transitive load, so compiling straight away makes
-      # every library namespace reached from this one compile into `$out` as
-      # well: the libraries arrive from jars and git checkouts as source with
-      # no class file, or with one at store mtime 1 that ties and loses by the
-      # same RT.load rule this file's header describes.
+      # Require only this unit's direct dependencies, then compile the target.
+      # `compile` binds `*compile-files*` true across the transitive load, so
+      # compiling straight away makes every library namespace reached from
+      # this one compile into `$out` as well: the libraries arrive from jars
+      # and git checkouts as source with no class file, or with one at store
+      # mtime 1 that ties and loses by the same RT.load rule this file's header
+      # describes. Requiring the target first is also wrong: non-idempotent
+      # top-level code would run once in `require` and again in `compile`.
       #
       # Measured before this line existed: one unit held 7244 class files of
       # which exactly one was its own, the 16 units totalled 437 MiB against
@@ -182,7 +184,7 @@ the value of having a graph at all.
       # is written. `compile` then loads this namespace's file directly, and
       # its `ns` form's requires are no-ops against `*loaded-libs*`.
       java -cp "$classpath" clojure.main \
-        -e "(require '${namespace}) (binding [*compile-path* \"$out\"] (compile '${namespace}))"
+        -e "(doseq [dependency '${builtins.toJSON node.requires}] (require dependency)) (binding [*compile-path* \"$out\"] (compile '${namespace}))"
 
       # The guard has to name this namespace's own class. Checking merely for
       # `*.class` could not fail while the whole library closure was landing
@@ -314,6 +316,18 @@ in {
         "$(cat ${classpathJars})" \
         > "$out"
     '';
+    # Nothing else in the build starts a JVM against the assembled application,
+    # so a namespace missing from the graph, or a unit whose classes do not
+    # link, could otherwise build green and die at boot.
+    smokeCheck =
+      pkgs.runCommand "${pname}-smoke" {
+        nativeBuildInputs = [jdk];
+        strictDeps = true;
+      } ''
+        java -cp "$(cat ${runtimeClasspathFile})" clojure.main \
+          -e "(require '${mainNamespace}) (println \"loaded ${mainNamespace}\")"
+        mkdir -p "$out"
+      '';
     # Tests read the application's compiled units plus their own source, so
     # they exercise exactly the bytecode the launcher runs.
     testSources = concatStringsSep ":" (map (dir: "${testSrc}/${dir}") testRoots);
@@ -345,40 +359,31 @@ in {
     // {
       passthru = {
         inherit units graph version;
-        # Nothing else in the build starts a JVM against the assembled
-        # application, so a namespace missing from the graph, or a unit whose
-        # classes do not link, builds green and dies at boot with
-        # `Could not locate ...__init.class`. Requiring the main namespace off
-        # the real runtime classpath costs seconds and closes that whole class.
-        smoke =
-          pkgs.runCommand "${pname}-smoke" {
-            nativeBuildInputs = [jdk];
-            strictDeps = true;
-          } ''
-            java -cp "$(cat ${runtimeClasspathFile})" clojure.main \
-              -e "(require '${mainNamespace}) (println \"loaded ${mainNamespace}\")"
-            mkdir -p "$out"
-          '';
+        smoke = smokeCheck;
         # The project's own suite, so `nix run .#lint`'s sibling gate covers
-        # what `clojure -M:test` covers. Without this the tests are 101
-        # assertions nothing runs, which is the same defect as a service
+        # what `clojure -M:test` covers. Without this the tests are assertions
+        # nothing runs, which is the same defect as a service
         # module asserted against `/bin/true`.
-        tests = lib.optionalAttrs (testNamespace != null) {
-          clojure =
-            pkgs.runCommand "${pname}-clojure-tests" {
-              nativeBuildInputs = [jdk] ++ testInputs;
-              strictDeps = true;
-            } ''
-              # A writable HOME and cwd: the suites open SQLite files
-              # relative to the working directory.
-              export HOME="$NIX_BUILD_TOP/home"
-              mkdir -p "$HOME" run
-              cd run
-              java -cp "$(cat ${runtimeClasspathFile}):${testSources}" \
-                clojure.main -m ${testNamespace}
-              mkdir -p "$out"
-            '';
-        };
+        tests =
+          {
+            smoke = smokeCheck;
+          }
+          // lib.optionalAttrs (testNamespace != null) {
+            clojure =
+              pkgs.runCommand "${pname}-clojure-tests" {
+                nativeBuildInputs = [jdk] ++ testInputs;
+                strictDeps = true;
+              } ''
+                # A writable HOME and cwd: the suites open SQLite files
+                # relative to the working directory.
+                export HOME="$NIX_BUILD_TOP/home"
+                mkdir -p "$HOME" run
+                cd run
+                java -cp "$(cat ${runtimeClasspathFile}):${testSources}" \
+                  clojure.main -m ${testNamespace}
+                mkdir -p "$out"
+              '';
+          };
         # Exposed for the source-independence gate in tests/, which reads the
         # builder text of every derivation in the graph and asserts that
         # neither the package's own source tree nor the repository root

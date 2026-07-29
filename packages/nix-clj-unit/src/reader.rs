@@ -318,6 +318,20 @@ impl<'a> Reader<'a> {
                 self.require_form(start, "the form `#_` discards")?;
                 return Ok(Item::Nothing);
             }
+            // Symbolic IEEE values are dispatch literals, not tagged
+            // literals: `##Inf`, `##-Inf`, and `##NaN` consume no value form.
+            '#' => {
+                self.bump();
+                let token = self.read_token();
+                if matches!(token.as_str(), "Inf" | "-Inf" | "NaN") {
+                    Kind::Atom
+                } else {
+                    return Err(ReadError::new(
+                        start,
+                        format!("unsupported symbolic value `##{token}`"),
+                    ));
+                }
+            }
             '?' => return self.read_conditional(start),
             // `#'var-quote` and `#=(eval)` both wrap one form. A var-quoted
             // list is not executable syntax, so do not expose its contents to
@@ -697,6 +711,14 @@ mod tests {
         assert_eq!(
             kinds("-> +foo"),
             [Kind::Symbol("->".into()), Kind::Symbol("+foo".into())]
+        );
+    }
+
+    #[test]
+    fn symbolic_numeric_literals_are_single_atoms() {
+        assert_eq!(
+            kinds("##Inf ##-Inf ##NaN"),
+            [Kind::Atom, Kind::Atom, Kind::Atom]
         );
     }
 
