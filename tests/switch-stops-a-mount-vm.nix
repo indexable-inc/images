@@ -50,7 +50,7 @@ pkgs.testers.runNixOSTest {
     # The fix under test, imported rather than restated. It is its own module
     # precisely so this test and `lib/image/default.nix` can share one copy;
     # a test carrying its own version of the fix would guard nothing.
-    imports = [(paths.modules + "/system/dbus-survives-mount-removal.nix")];
+    imports = [(paths.modules + "/system/dbus-survives-mount-removal")];
 
     # Generation A declares the tmpfs and generation B does not. Expressed as
     # an option rather than as two `systemd.mounts` lists, because taking an
@@ -145,9 +145,10 @@ pkgs.testers.runNixOSTest {
     # every command runs through does `cd /tmp`
     # (nixos/modules/testing/test-instrumentation.nix), and each command runs
     # in a subshell, so its working directory cannot be moved out of the way.
-    # The driver also 9p-mounts /tmp/xchg and /tmp/shared underneath, and a
-    # mount with submounts cannot be unmounted at all. Measured in this VM:
-    # `umount /tmp` answers `target is busy` even with nothing else running.
+    # Measured in this VM: `umount /tmp` answers `target is busy` with nothing
+    # else running, and the working directory alone accounts for that. The
+    # driver also 9p-mounts /tmp/xchg and /tmp/shared around the same path,
+    # which does not help, though a lazy unmount would handle those.
     #
     # So this test holds the part that made the failure catastrophic -- the bus
     # dies, activation never runs, nothing is recorded -- and cannot hold the
@@ -164,5 +165,30 @@ pkgs.testers.runNixOSTest {
     assert failed == ["Failed to stop tmp.mount"], (
         f"the switch failed at more than the unmount: {failed}\n{out}"
     )
+
+    # THE SECOND HALF: the bus surviving is not enough if it cannot be reloaded
+    # afterwards.
+    #
+    # `PrivateTmp=true` puts dbus-broker's private directory under the very
+    # /tmp being retired, and systemd#28515 reports reloads failing
+    # 226/NAMESPACE afterwards. A switch reloads the bus -- nixpkgs puts the
+    # dbus config directory in its `restartTriggers` and marks it
+    # `reloadIfChanged` -- so if that were true here it would be the next
+    # nonzero exit behind the one above, on exactly the guests where the
+    # unmount succeeds and this test therefore cannot look.
+    #
+    # It does not reproduce on systemd 261: the three lines below are the
+    # upstream reproducer, replacing /tmp underneath the running bus and
+    # reloading it, and they pass. That measurement is why the module does not
+    # carry `PrivateTmp = "disconnected"`. They stay as a guard rather than
+    # being deleted as a negative result, so that a future systemd or
+    # dbus-broker that does break this breaks here instead of on a guest.
+    #
+    # Overmounting rather than unmounting on purpose: it needs no cooperation
+    # from a busy /tmp, which under this driver never comes.
+    machine.succeed("mount --bind /var/tmp /tmp")
+    machine.succeed("systemctl reload dbus-broker.service")
+    machine.succeed("busctl --system --no-pager status >/dev/null")
+    machine.succeed("umount /tmp")
   '';
 }
