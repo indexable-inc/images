@@ -89,7 +89,8 @@
   someUnit = workspace: let
     names = lib.attrNames workspace.units;
   in
-    assert names != [];
+    assert lib.assertMsg (names != [])
+    "the cargo-unit fixture produced no units, so this test would compare two empty hardening lists and pass without exercising anything";
       workspace.units.${lib.head names};
 
   hardeningOf = workspace: (someUnit workspace).hardeningDisable or [];
@@ -97,20 +98,19 @@
   devHardening = hardeningOf (workspaceForProfile "dev");
   releaseHardening = hardeningOf (workspaceForProfile null);
 
-  wiringReachesUnits =
-    assert lib.assertMsg (lib.elem "fortify" devHardening && lib.elem "fortify3" devHardening) ''
-      a dev-profile cargo-unit does not carry hardeningDisable = [ "fortify" "fortify3" ].
-      Got: ${lib.generators.toPretty {} devHardening}
-      The seam in lib/rust/cargo-unit.nix is not reaching the rendered units;
-      check that `unitHardeningDisable` is still inherited into `importUnits`
-      and still applied in `mkUnit` in the units.nix template.
-    '';
-    assert lib.assertMsg (!(lib.elem "fortify" releaseHardening)) ''
-      a release-profile cargo-unit carries hardeningDisable = ${lib.generators.toPretty {} releaseHardening}.
-      Fortify must stay on for release: that artifact ships, and `-O` satisfies
-      glibc there, so there is nothing to compensate for.
-    '';
-      pkgs.runCommand "dev-profile-fortify-wiring" {} "touch $out";
+  wiringReachesUnits = assert lib.assertMsg (lib.elem "fortify" devHardening && lib.elem "fortify3" devHardening) ''
+    a dev-profile cargo-unit does not carry hardeningDisable = [ "fortify" "fortify3" ].
+    Got: ${lib.generators.toPretty {} devHardening}
+    The seam in lib/rust/cargo-unit.nix is not reaching the rendered units;
+    check that `unitHardeningDisable` is still inherited into `importUnits`
+    and still applied in `mkUnit` in the units.nix template.
+  '';
+  assert lib.assertMsg (!(lib.elem "fortify" releaseHardening)) ''
+    a release-profile cargo-unit carries hardeningDisable = ${lib.generators.toPretty {} releaseHardening}.
+    Fortify must stay on for release: that artifact ships, and `-O` satisfies
+    glibc there, so there is nothing to compensate for.
+  '';
+    pkgs.runCommand "dev-profile-fortify-wiring" {} "touch $out";
 in {
   inherit premiseStillHolds wiringReachesUnits;
 }

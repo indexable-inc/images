@@ -1953,7 +1953,7 @@
             # invokes a compiler; the eval-only half that asserts the flag
             # actually reaches the rendered units rides in `eval`. See
             # tests/dev-profile-fortify.nix.
-            dev-profile-fortify = tests.dev-profile-fortify;
+            inherit (tests) dev-profile-fortify;
             # The commented knob/env reference at the Home Manager consumption
             # site (index#3710) is asserted, at eval, against what the
             # claude-code wrapper actually accepts (functionArgs plus
