@@ -16,6 +16,30 @@
 //! Storing each field as text means updates diff incrementally and, because a
 //! Loro oplog *is* a recording, the whole pane history replays for free.
 //!
+//! # Who may write what, when several writers share a pane
+//!
+//! The two halves of a pane merge differently, and this is the one place the
+//! CRDT does not save a careless writer:
+//!
+//! - a [`LoroText`] field (a body, an execution's `stdout`) **merges**, so two
+//!   writers appending concurrently both survive;
+//! - the `meta` [`LoroMap`] scalars (`title`, `kind`, `subtitle`) are
+//!   **last-write-wins**, so two writers setting `title` concurrently silently
+//!   lose one of them.
+//!
+//! So the convention is: **the writer that created a pane owns its scalars, and
+//! anyone may append to its text.** Nothing here enforces that, deliberately.
+//! Enforcing single ownership would make the case this document exists for --
+//! several agents contributing competing findings about one subject --
+//! impossible to express, and it would turn a merge into an error the writer
+//! has to handle, which is what a CRDT is for avoiding.
+//!
+//! Leaving it unenforced is defensible only because a violation is *visible*:
+//! [`LoroMap::get_last_editor`] reports who last set a key, so a title that
+//! changed hands says so on the pane itself rather than in a log nobody opens.
+//! See `map_scalars_report_their_last_editor` in `tests/peer_switching.rs`,
+//! which is that convention written as a test.
+//!
 //! Every commit carries a millisecond wall-clock timestamp
 //! ([`set_next_commit_timestamp`](LoroDoc::set_next_commit_timestamp)), and each
 //! pane is stamped with a `created_at` the first time it appears. Together they
@@ -1130,8 +1154,8 @@ pub struct HistoryChange {
     pub counter: i32,
     /// Logical clock, for ordering changes that are concurrent in wall time.
     pub lamport: u32,
-    /// Wall clock the writer stamped, in milliseconds (see
-    /// [`commit_delta`](DocState::commit_delta)).
+    /// Wall clock the writer stamped, in milliseconds. Every commit through
+    /// this hub is stamped; `DocState::commit_delta` is where.
     pub timestamp: i64,
     /// The commit tag, a JSON object for a change this hub wrote. Absent for a
     /// writer that set no message.
