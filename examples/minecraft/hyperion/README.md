@@ -243,15 +243,36 @@ Open:
 
 ## Evaluating it without deploying
 
-Every node's closure, from this directory, with the sibling index checkout you
-are editing:
+Every node's closure, from this directory, against the index checkout you are
+editing:
 
 ```sh
-nix eval --override-input index path:/path/to/index \
+nix eval --override-input index /path/to/index \
   .#nixosConfigurations \
   --apply 'cs: builtins.mapAttrs (n: c: c.config.system.build.toplevel.drvPath) cs'
 ```
 
-That forces all four systems to evaluate, so a missing attribute, a bad option
-or a port collision fails in seconds. It builds nothing and deploys nothing:
-an eval passing says the fleet is well formed, not that it works.
+11 seconds, and it forces all four systems, so a missing attribute, a bad option
+or a port collision fails immediately. It builds nothing and deploys nothing: an
+eval passing says the fleet is well formed, not that it works.
+
+Two things about that command that cost time to find. Write the override as a
+plain path, **not** `path:/path/to/index`: the `path:` fetcher copies the tree
+into the store and `lib.fileset.gitTracked` then refuses it ("The argument is a
+store path within a working tree of a Git repository"). And the plain path is a
+git flakeref, so it reads `HEAD`, not your working tree -- commit before you
+evaluate or you will confidently evaluate the previous version.
+
+Holding the index input constant also makes the eval a diff tool. Evaluating
+this directory's current spec against the index revision that predates it
+reproduces the previous fleet's derivation paths exactly:
+
+    hyperion-game     k4nxy1l152lq4vq8wfv7q5d926nxqzl8   unchanged
+    hyperion-proxy-0  aragzfail81z0fdz38dzgzm126jqvrjj   unchanged
+    hyperion-proxy-1  s1k599cw6blsh9927f3cv8l0bh7f7y4v   unchanged
+    hyperion-proxy-2  8ir5pdfimwh89c375cq8hml44yxqpk7n   new
+
+So folding the two copy-pasted proxy nodes into `replicas: 3` and deleting the
+resolved DNS workaround changed no existing node's system at all -- re-applying
+switches and restarts nothing, and the only new closure is the third proxy.
+Worth doing before any apply that claims to be a no-op.
