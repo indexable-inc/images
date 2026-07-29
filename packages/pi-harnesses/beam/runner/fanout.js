@@ -52,7 +52,11 @@ export async function fanout({
           env: { ...process.env, PI_TURN_CAP: String(turnCap) },
         });
 
-        const diff = await sh("git", ["-C", wt, "diff", "--no-color"]);
+        // `--no-ext-diff`: `patch` is returned to the caller as a patch, and
+        // this fleet configures `diff.external = difft`, whose columnar
+        // rendering is not one and will not apply. `--numstat` is computed by
+        // git and never reaches a driver, so the score is unaffected either way.
+        const diff = await sh("git", ["-C", wt, "diff", "--no-ext-diff", "--no-color"]);
         const numstat = await sh("git", ["-C", wt, "diff", "--numstat"]);
         const diffLines = countDiffLines(numstat.stdout);
         const scored = scoreCmd ? await sh("bash", ["-lc", scoreCmd], { cwd: wt }) : { code: 0, stdout: "" };
