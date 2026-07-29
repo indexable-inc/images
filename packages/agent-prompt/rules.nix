@@ -119,19 +119,21 @@
     worktree = {
       topics = ["workflow"];
       text = ''
-        Never work in a primary checkout: the first action in any repo is a
-        dedicated `git worktree` branch at `/tmp/worktree/<org>/<repo>/<name>`
-        (org and repo from the checkout's origin URL), and root and branch
-        get verified before committing. A shared checkout is for reading:
-        staging a file there, or switching its branch, changes what every
-        other session sees. Right after `git worktree add`, run
-        `git submodule update --init --recursive`: a new worktree leaves
-        submodules uninitialized even when the build needs them. An
-        isolation worktree belongs to the session's repo, not necessarily
-        your task's: verify its origin, and when the task targets another
-        repo, add your own worktree of the target checkout. Unmerged
-        branches are unfinished for reasons you may not see; check for
-        open PRs touching a file before nontrivial edits.
+        Never work in a primary checkout: every change, however small or
+        urgent, is made on a dedicated `git worktree` branch at
+        `/tmp/worktree/<org>/<repo>/<name>` (org and repo from the
+        checkout's origin URL), created before the first edit, and root
+        and branch get verified before committing. A shared checkout is
+        for reading: staging a file there, or switching its branch,
+        changes what every other session sees. Right after
+        `git worktree add`, run `git submodule update --init --recursive`:
+        a new worktree leaves submodules uninitialized even when the build
+        needs them. An isolation worktree belongs to the session's repo,
+        not necessarily your task's: verify its origin, and when the task
+        targets another repo, add your own worktree of the target
+        checkout. Unmerged branches are unfinished for reasons you may
+        not see; check for open PRs touching a file before nontrivial
+        edits.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
@@ -144,7 +146,11 @@
         "never work" after the shared ix checkout was found on a deleted
         branch 604 commits behind main, holding 534 files staged by
         nobody, 51 of which matched neither that branch nor main
-        (index#4216).
+        (index#4216). Restated again from per-repo-entry to per-change on
+        2026-07-29 at the operator's request: "the first action in any
+        repo" reads as a rule about entering a repo, so an agent already
+        mid-session asked for a one-line fix does not see itself covered.
+        No size or urgency exemption exists.
       '';
     };
   }
