@@ -155,6 +155,8 @@
       packageRegistry
       buildIxRustTool
       cargoUnitFor
+      cljLockFor
+      cljUnitFor
       clippy-src
       rustWorkspaceFor
       writeNushellApplication
@@ -305,6 +307,24 @@
       inherit (languages) go;
     };
   goUnit = goUnitFor pkgs;
+  # Per-namespace Clojure AOT (clj-unit): the Clojure analog of cargoUnitFor
+  # and kernelUnitFor. `cljLockFor` resolves the dependency libraries one
+  # fetch derivation per artifact, so bumping one library re-runs one fetch;
+  # `cljUnitFor` compiles one content-addressed derivation per namespace over
+  # the graph nix-clj-unit renders from the source's `ns` forms.
+  # No eager `cljLock = cljLockFor pkgs` / `cljUnit = cljUnitFor pkgs` here.
+  # Unlike cargoUnit and goUnit, nothing in image or module evaluation builds
+  # Clojure against the top-level x86_64-linux package set; every consumer
+  # reaches these through `lib/packages.nix` or the overlay, bound to its own
+  # pkgs. An eager binding would be dead weight deadnix is right to flag.
+  cljLockFor = pkgs: import ./build/clj-lock.nix {inherit lib pkgs;};
+  cljUnitFor = pkgs:
+    import ./build/clj-unit.nix {
+      inherit lib pkgs;
+      jdk = languages.java.defaultJdkFor pkgs;
+      nix-clj-unit = buildIxRustTool pkgs (packagePath "nix-clj-unit");
+      inherit writeRustApplication;
+    };
   # Per-TU content-addressed Linux kernel builds (kbuild-unit, #3411): the
   # kbuild analog of cargoUnitFor. Stage 1 harvests a monolithic kbuild's
   # .cmd files into a plan; stage 2 renders one derivation per unit.
@@ -524,6 +544,8 @@
       packageRegistry
       ixSpecialArgs
       cargoUnitFor
+      cljLockFor
+      cljUnitFor
       goUnitFor
       rustWorkspaceFor
       clippy-src
@@ -909,6 +931,8 @@
         crossHaskell
         cargoUnitFor
         cargoUnitExternal
+        cljLockFor
+        cljUnitFor
         darwinCrossPkgs
         discoverModules
         errors

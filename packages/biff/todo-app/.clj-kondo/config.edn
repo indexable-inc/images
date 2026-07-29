@@ -1,0 +1,4 @@
+{:lint-as {com.biffweb.fx/defmachine clojure.core/def
+           com.biffweb.ring/defpath  clojure.core/def
+           com.biffweb.ring/defroute clojure.core/def}
+ :hooks   {:analyze-call {com.biffweb.graph/defresolver hooks.biff/defresolver}}}

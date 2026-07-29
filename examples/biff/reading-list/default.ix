@@ -1,0 +1,12 @@
+// `ix apply` reads this VM through flake.nix. The reading-list application is
+// a repo package (`pkgs.biff-reading-list`) with a fully locked dependency
+// closure, so the service module resolves it by name and nothing is fetched
+// when the VM boots.
+export default ({ index }) =>
+  index.lib.mkVm({
+    name: "biff-reading-list",
+    // The SQLite state directory is the point of this example. Keep ix's
+    // rollback snapshot even if the platform default changes later.
+    deployment: { snapshot: true },
+    modules: [{ services: { "biff-reading-list": { enable: true } } }],
+  });

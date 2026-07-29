@@ -1,0 +1,21 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.5"}
+        ;; Biff 2's libraries are being released independently. Pin every
+        ;; Biff component to the same v2.x commit so its local-root links are
+        ;; resolved as one tested API surface; clj-nix records the full source.
+        com.biffweb/core {:git/url "https://github.com/jacobobryant/biff"
+                          :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                          :deps/root "libs/core"}
+        com.biffweb/fx {:git/url "https://github.com/jacobobryant/biff"
+                         :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                         :deps/root "libs/fx"}
+        com.biffweb/ring {:git/url "https://github.com/jacobobryant/biff"
+                           :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                           :deps/root "libs/ring"}
+        com.biffweb/sqlite {:git/url "https://github.com/jacobobryant/biff"
+                             :git/sha "b3abe5b13824af2f83f89ec31c63a430417ac457"
+                             :deps/root "libs/sqlite"}
+        org.slf4j/slf4j-simple {:mvn/version "2.0.18"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :main-opts ["-m" "com.example.reading-list-test"]}}}

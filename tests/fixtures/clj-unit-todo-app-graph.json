@@ -1,0 +1,201 @@
+{
+  "version": 2,
+  "namespaces": {
+    "com.example.todo-app": {
+      "file": "src/com/example/todo_app.clj",
+      "requires": [
+        "com.example.todo-app.components",
+        "com.example.todo-app.modules"
+      ],
+      "loads": [
+        "clojure.string",
+        "com.biffweb.core",
+        "com.example.todo-app.components",
+        "com.example.todo-app.modules"
+      ]
+    },
+    "com.example.todo-app.app.admin": {
+      "file": "src/com/example/todo_app/app/admin.clj",
+      "requires": [
+        "com.example.todo-app.lib.email"
+      ],
+      "loads": [
+        "com.biffweb.admin",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.lib.email"
+      ]
+    },
+    "com.example.todo-app.app.archive": {
+      "file": "src/com/example/todo_app/app/archive.clj",
+      "requires": [
+        "com.example.todo-app.lib.middleware",
+        "com.example.todo-app.lib.ui"
+      ],
+      "loads": [
+        "com.biffweb.fx",
+        "com.biffweb.ring",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.lib.middleware",
+        "com.example.todo-app.lib.ui"
+      ]
+    },
+    "com.example.todo-app.app.auth": {
+      "file": "src/com/example/todo_app/app/auth.clj",
+      "requires": [
+        "com.example.todo-app.lib.email",
+        "com.example.todo-app.routes"
+      ],
+      "loads": [
+        "com.biffweb.authenticate",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.lib.email",
+        "com.example.todo-app.routes",
+        "next.jdbc"
+      ]
+    },
+    "com.example.todo-app.app.landing": {
+      "file": "src/com/example/todo_app/app/landing.clj",
+      "requires": [
+        "com.example.todo-app.lib.ui",
+        "com.example.todo-app.routes"
+      ],
+      "loads": [
+        "com.example.todo-app.lib.ui",
+        "com.example.todo-app.routes"
+      ]
+    },
+    "com.example.todo-app.app.todos": {
+      "file": "src/com/example/todo_app/app/todos.clj",
+      "requires": [
+        "com.example.todo-app.lib.middleware",
+        "com.example.todo-app.lib.ui",
+        "com.example.todo-app.model.tab-state",
+        "com.example.todo-app.model.todo",
+        "com.example.todo-app.routes"
+      ],
+      "loads": [
+        "clojure.string",
+        "com.biffweb.datastar",
+        "com.biffweb.ring",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.lib.middleware",
+        "com.example.todo-app.lib.ui",
+        "com.example.todo-app.model.tab-state",
+        "com.example.todo-app.model.todo",
+        "com.example.todo-app.routes"
+      ]
+    },
+    "com.example.todo-app.components": {
+      "file": "src/com/example/todo_app/components.clj",
+      "requires": [],
+      "loads": [
+        "com.biffweb.admin",
+        "com.biffweb.background",
+        "com.biffweb.config",
+        "com.biffweb.ring",
+        "com.biffweb.sqlite"
+      ]
+    },
+    "com.example.todo-app.lib.email": {
+      "file": "src/com/example/todo_app/lib/email.clj",
+      "requires": [],
+      "loads": [
+        "clojure.tools.logging",
+        "hato.client"
+      ]
+    },
+    "com.example.todo-app.lib.middleware": {
+      "file": "src/com/example/todo_app/lib/middleware.clj",
+      "requires": [
+        "com.example.todo-app.routes"
+      ],
+      "loads": [
+        "com.example.todo-app.routes"
+      ]
+    },
+    "com.example.todo-app.lib.ui": {
+      "file": "src/com/example/todo_app/lib/ui.clj",
+      "requires": [],
+      "loads": [
+        "cheshire.core",
+        "clojure.java.io",
+        "com.biffweb.datastar",
+        "lambdaisland.hiccup",
+        "ring.util.response"
+      ]
+    },
+    "com.example.todo-app.model.schema": {
+      "file": "src/com/example/todo_app/model/schema.clj",
+      "requires": [],
+      "loads": [
+        "clojure.string",
+        "com.biffweb.sqlite"
+      ]
+    },
+    "com.example.todo-app.model.tab-state": {
+      "file": "src/com/example/todo_app/model/tab_state.clj",
+      "requires": [],
+      "loads": [
+        "com.biffweb.graph",
+        "com.biffweb.sqlite"
+      ]
+    },
+    "com.example.todo-app.model.todo": {
+      "file": "src/com/example/todo_app/model/todo.clj",
+      "requires": [
+        "com.example.todo-app.model.tab-state"
+      ],
+      "loads": [
+        "com.biffweb.graph",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.model.tab-state"
+      ]
+    },
+    "com.example.todo-app.model.user": {
+      "file": "src/com/example/todo_app/model/user.clj",
+      "requires": [],
+      "loads": [
+        "com.biffweb.graph"
+      ]
+    },
+    "com.example.todo-app.modules": {
+      "file": "src/com/example/todo_app/modules.clj",
+      "requires": [
+        "com.example.todo-app.app.admin",
+        "com.example.todo-app.app.archive",
+        "com.example.todo-app.app.auth",
+        "com.example.todo-app.app.landing",
+        "com.example.todo-app.app.todos",
+        "com.example.todo-app.model.schema",
+        "com.example.todo-app.model.tab-state",
+        "com.example.todo-app.model.todo",
+        "com.example.todo-app.model.user"
+      ],
+      "loads": [
+        "com.biffweb.background",
+        "com.biffweb.core",
+        "com.biffweb.datastar",
+        "com.biffweb.fx",
+        "com.biffweb.graph",
+        "com.biffweb.ring",
+        "com.biffweb.sqlite",
+        "com.example.todo-app.app.admin",
+        "com.example.todo-app.app.archive",
+        "com.example.todo-app.app.auth",
+        "com.example.todo-app.app.landing",
+        "com.example.todo-app.app.todos",
+        "com.example.todo-app.model.schema",
+        "com.example.todo-app.model.tab-state",
+        "com.example.todo-app.model.todo",
+        "com.example.todo-app.model.user"
+      ]
+    },
+    "com.example.todo-app.routes": {
+      "file": "src/com/example/todo_app/routes.clj",
+      "requires": [],
+      "loads": [
+        "com.biffweb.ring"
+      ]
+    }
+  }
+}

@@ -213,6 +213,10 @@
           # tsconfig.staging.json; tsc owns these names via `-p`.
           '(^|/)tsconfig\.[a-z-]+\.json$'
           '(^|/)(package-lock|lock)\.json$'
+          # clj-nix's `deps-lock` generator owns this name: it is what
+          # `nix run github:jlesquembre/clj-nix#deps-lock` writes, and
+          # lib/build/clj-lock.nix reads it back.
+          '(^|/)deps-lock\.json$'
           '(^|/)(pins|manifest)\.json$'
           '^\.(claude|vscode|zed)/settings\.json$'
           '^\.vscode/extensions\.json$'
@@ -1922,6 +1926,16 @@
             # (readiness log line, open port, real server-list ping); see
             # tests/minestom-spleef-vm.nix.
             minestom-spleef-vm = tests.minestomSpleefVm;
+            # Boots the two Biff 2 applications under
+            # `services.biff-{reading-list,todo-app}` and drives them over
+            # HTTP: hardening properties as systemd applied them, CSRF and
+            # input rejection, the SQLite state, and cookie-secret survival
+            # across a clean restart and a SIGKILL. Todo App adds sign-in and
+            # a real two-tab Datastar update in Firefox. Their own checks
+            # because each boots a qemu VM; see tests/biff-reading-list-vm.nix
+            # and packages/biff/todo-app/vm-test.nix.
+            biff-reading-list-vm = tests.biffReadingListVm;
+            biff-todo-app-vm = tests.biffTodoAppVm;
             # Builds the base OCI archive and asserts its baked nix store DB
             # registers the pinned nixpkgs source as valid, so a fresh VM's first
             # `nix` command does not re-copy the tree through VCFS (ix

@@ -1,0 +1,455 @@
+(ns com.example.todo-app-test
+  (:require [clojure.java.io :as io]
+            [cheshire.core :as json]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is run-tests use-fixtures]]
+            [com.biffweb.admin :as biff.admin]
+            [com.biffweb.background :as biff.background]
+            [com.biffweb.core :as biff.core]
+            [com.example.todo-app.lib.email :as email]
+            [com.example.todo-app.app.todos :as todos]
+            [com.example.todo-app.modules :as modules]
+            [com.example.todo-app.routes :as routes]
+            [com.biffweb.ring :as biff.ring]
+            [com.biffweb.sqlite :as biff.sqlite]
+            [com.example.todo-app :as app]
+            [hato.client :as hato])
+  (:import [java.net ServerSocket]
+           [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]))
+
+(def ^:dynamic *system* nil)
+(def ^:dynamic *base-url* nil)
+(def ^:dynamic *db-dir* nil)
+
+(deftest cookie-secret-file-test
+  (let [path (str (Files/createTempFile
+                   "biff-todo-cookie-secret"
+                   ""
+                   (into-array FileAttribute [])))]
+    (try
+      (spit path "  persisted-secret  \n")
+      (is (= "persisted-secret" (app/read-cookie-secret path)))
+      (spit path "  \n")
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"must contain a non-blank secret"
+           (app/read-cookie-secret path)))
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"COOKIE_SECRET_FILE is required"
+           (app/read-cookie-secret nil)))
+      (finally
+        (io/delete-file path true)))))
+
+(deftest transaction-hooks-are-wired-test
+  (let [calls     (atom 0)
+        aggregate (:biff.core/on-tx
+                   ((:biff.core/init (first modules/modules))
+                    (atom [{:biff.core/on-tx (fn [_] (swap! calls inc))}])))]
+    (aggregate {})
+    (is (= 1 @calls))))
+
+(def test-components
+  [biff.admin/use-alerts
+   biff.sqlite/use-sqlite
+   biff.background/use-queues
+   biff.ring/use-jetty])
+
+(defn- free-port []
+  (with-open [socket (ServerSocket. 0)]
+    (.getLocalPort socket)))
+
+(defn- delete-tree! [path]
+  (when path
+    (doseq [file (reverse (file-seq (io/file path)))]
+      (.delete ^java.io.File file))))
+
+(defn- temp-db-dir []
+  (str (Files/createTempDirectory
+        "biff-demo-test"
+        (into-array FileAttribute []))))
+
+(defn- start-test-system [db-dir port]
+  (biff.core/start
+   {:biff.auth/skip-captcha true
+    :biff.ring/base-url     (str "http://127.0.0.1:" port)
+    :biff.ring/host         "127.0.0.1"
+    :biff.ring/port         port
+    :biff.ring/secure       false
+    :biff.sqlite/db-path    (str db-dir "/main.db")
+    :biff.sqlite/schema-path (str db-dir "/schema.sql")
+    :biff.sqlite/sqldef-version "3.11.1"}
+   #'modules/modules
+   test-components))
+
+(defn- with-demo-system [f]
+  (let [db-dir   (temp-db-dir)
+        port     (free-port)
+        system   (start-test-system db-dir port)
+        base-url (str "http://127.0.0.1:" port)]
+    (binding [*system*   system
+              *base-url* base-url
+              *db-dir*   db-dir]
+      (try
+        (f)
+        (finally
+          (biff.core/stop system)
+          (delete-tree! db-dir))))))
+
+(use-fixtures :each with-demo-system)
+
+(defn- set-cookie->cookie [response]
+  (some-> (get-in response [:headers "set-cookie"])
+          (str/split #";" 2)
+          first))
+
+(defn- response-cookie [cookie response]
+  (or (set-cookie->cookie response) cookie))
+
+(defn- request-url [path]
+  (str *base-url* path))
+
+(defn- http-get [path & {:keys [cookie]}]
+  (hato/get (request-url path)
+            (cond-> {:as               :text
+                     :redirect-policy  :none
+                     :throw-exceptions false}
+              cookie
+              (assoc :headers {"cookie" cookie}))))
+
+(defn- http-post [path & {:keys [cookie headers form-params body]}]
+  (hato/post (request-url path)
+             (cond-> {:as               :text
+                      :redirect-policy  :none
+                      :throw-exceptions false}
+               cookie
+               (assoc-in [:headers "cookie"] cookie)
+
+               (seq headers)
+               (update :headers merge headers)
+
+               form-params
+               (assoc :form-params form-params)
+
+               body
+               (assoc :body body))))
+
+(defn- datastar-app-path [tab-id]
+  (str "/app?u=&datastar="
+       (java.net.URLEncoder/encode
+        (str "{\"tabId\":\"" tab-id "\"}")
+        "UTF-8")))
+
+(defn- datastar-post [path tab-id & {:keys [cookie headers form-params signals]}]
+  (let [headers (merge {"datastar-request" "true"} headers)]
+    (if signals
+      (http-post path
+                 :cookie cookie
+                 :headers (merge {"content-type" "application/json"} headers)
+                 :body (json/generate-string (merge {"tabId" tab-id} signals)))
+      (http-post path
+                 :cookie cookie
+                 :headers headers
+                 :form-params (merge {"tabId" tab-id}
+                                     form-params)))))
+
+(defn- csrf-token [body]
+  (or (second (re-find #"__anti-forgery-token\" value=\"([^\"]+)\"" body))
+      (second (re-find #"X-CSRF-Token': \"([^\"]+)\"" body))
+      (throw (ex-info "Couldn't find CSRF token in response body." {}))))
+
+(defn- db-query [sql & params]
+  (biff.sqlite/execute *system* (into [sql] params)))
+
+(defn- wait-for! [f]
+  (loop [attempts 40]
+    (if-some [value (f)]
+      value
+      (if (pos? attempts)
+        (do
+          (Thread/sleep 50)
+          (recur (dec attempts)))
+        (throw (ex-info "Timed out waiting for condition." {}))))))
+
+(defn- sign-in! []
+  (let [email      (str "demo-test-" (random-uuid) "@example.com")
+        sent-email (atom nil)]
+    (with-redefs [email/send-email (fn [_ctx params]
+                                     (reset! sent-email params)
+                                     true)]
+      (let [signin-page  (http-get "/signin")
+            cookie       (response-cookie nil signin-page)
+            signin-token (csrf-token (:body signin-page))
+            send-code    (http-post "/_biff/auth/send-code"
+                                    :cookie cookie
+                                    :form-params {"email"                email
+                                                  "__anti-forgery-token" signin-token})
+            verify-page  (http-get (get-in send-code [:headers "location"])
+                                   :cookie cookie)
+            verify-token (csrf-token (:body verify-page))
+            verify-code  (http-post "/_biff/auth/verify-code"
+                                    :cookie cookie
+                                    :form-params {"email"                email
+                                                  "code"                 (:code @sent-email)
+                                                  "__anti-forgery-token" verify-token})
+            cookie       (response-cookie cookie verify-code)
+            app-page     (http-get "/app" :cookie cookie)]
+        {:app-page    app-page
+         :app-token   (csrf-token (:body app-page))
+         :cookie      cookie
+         :email       email
+         :send-code   send-code
+         :sent-email  @sent-email
+         :verify-code verify-code}))))
+
+(deftest modules-include-demo-fx-handlers-test
+  (let [handlers (->> modules/modules
+                      (keep :biff.fx/handlers)
+                      (apply merge {}))
+        initialized (apply merge
+                           (keep (fn [module]
+                                   (some-> (:biff.core/init module)
+                                           (#(% (atom modules/modules)))))
+                                 modules/modules))]
+    (is (contains? handlers :biff.background/submit-jobs))
+    (is (contains? handlers :biff.graph.fx/query))
+    (is (contains? handlers :biff.sqlite.fx/execute))
+    (is (contains? handlers :biff.sqlite.fx/authorized-write))
+    (is (ifn? (:biff.admin/send-email initialized)))))
+
+(deftest landing-signin-and-admin-flow-test
+  (let [home                                                             (http-get "/")
+        {:keys [app-page cookie email send-code sent-email verify-code]} (sign-in!)
+        users                                                            (db-query "SELECT id, email FROM user ORDER BY joined_at DESC")
+        todos                                                            (db-query "SELECT archived FROM todo t JOIN user u ON t.user_id = u.id WHERE u.email = ? ORDER BY created_at ASC"
+                                                                                   email)
+        user-row                                                         (some #(when (= email (or (:email %) (:user/email %))) %) users)
+        admin-page                                                       (http-get "/_biff/admin" :cookie cookie)]
+    (is (= 200 (:status home)))
+    (is (str/includes? (:body home) "Todo App"))
+    (is (str/includes? (:body home) "/signin"))
+
+    (is (= 303 (:status send-code)))
+    (is (str/includes? (get-in send-code [:headers "location"]) "verify=code"))
+    (is (= email (:to sent-email)))
+    (is (= :signin-code (:template sent-email)))
+
+    (is (= 303 (:status verify-code)))
+    (is (= "/app" (get-in verify-code [:headers "location"])))
+    (is (= 200 (:status app-page)))
+    (is (str/includes? (:body app-page) email))
+    (is (some? user-row))
+
+    (is (= 5 (count todos)))
+    (is (= 1 (count (filter :todo/archived todos))))
+    (is (= 200 (:status admin-page)))
+    (is (= 200 (:status admin-page)))
+    (is (str/includes? (:body admin-page) "Admin Setup"))))
+
+(deftest todo-mutations-work-over-http-test
+  (let [{:keys [app-token cookie] :as _signin} (sign-in!)
+        title                                  (str "Todo " (random-uuid))
+        create-resp                            (http-post "/app/todos"
+                                                          :cookie cookie
+                                                          :headers {"x-csrf-token" app-token}
+                                                          :form-params {"newtodo" title})
+        todo-row                               (first (biff.sqlite/execute
+                                                       *system*
+                                                       {:select [:todo/id :todo/completed :todo/archived]
+                                                        :from   :todo
+                                                        :where  [:= :todo/title title]}))
+        toggle-resp                            (http-post (routes/todo-toggle (:todo/id todo-row))
+                                                          :cookie cookie
+                                                          :headers {"x-csrf-token" app-token}
+                                                          :form-params {"completed" "true"})
+        toggled-row                            (first (biff.sqlite/execute
+                                                       *system*
+                                                       {:select [:todo/completed]
+                                                        :from   :todo
+                                                        :where  [:= :todo/id (:todo/id todo-row)]}))
+        archive-resp                           (http-post (routes/todo-archive (:todo/id todo-row))
+                                                          :cookie cookie
+                                                          :headers {"x-csrf-token" app-token}
+                                                          :form-params {"archived" "true"})
+        archived-row                           (first (biff.sqlite/execute
+                                                       *system*
+                                                       {:select [:todo/archived]
+                                                        :from   :todo
+                                                        :where  [:= :todo/id (:todo/id todo-row)]}))
+        app-page                               (http-get "/app" :cookie cookie)]
+    (is (= 200 (:status create-resp)))
+    (is (str/includes? (:body create-resp) "datastar-patch-signals"))
+    (is (some? todo-row))
+    (is (false? (:todo/completed todo-row)))
+    (is (false? (:todo/archived todo-row)))
+
+    (is (= 204 (:status toggle-resp)))
+    (is (true? (:todo/completed toggled-row)))
+
+    (is (= 204 (:status archive-resp)))
+    (is (true? (:todo/archived archived-row)))
+    (is (not (str/includes? (:body app-page) title)))))
+
+(deftest todo-page-renders-datastar-control-bindings-test
+  (let [{:keys [app-page]} (sign-in!)
+        body               (:body app-page)]
+    (is (str/includes? body "$completed = el.checked;"))
+    (is (str/includes? body "$archived = true;"))
+    (is (str/includes? body "$filter = &quot;completed&quot;;"))
+    (is (str/includes? body "$showArchived = el.checked;"))
+    (is (str/includes? body "id=\"current-todos-section\""))
+    (is (not (str/includes? body "id=\"archived-todos-section\"")))
+    (is (not (str/includes? body "data-show=\"$showArchived\"")))
+    (is (not (str/includes? body "data-signals:show-archived")))))
+
+(deftest param-value-preserves-false-signal-values-test
+  (is (false? (#'todos/param-value {:biff.datastar/signals {:showArchived false}}
+                                   :show-archived)))
+  (is (some? (#'todos/param-value {:biff.datastar/signals {:showArchived false}}
+                                  :show-archived))))
+
+(deftest datastar-todo-controls-work-over-http-test
+  (let [{:keys [app-token cookie]} (sign-in!)
+        tab-id                     "demo-test-tab"
+        title                      (str "Datastar todo " (random-uuid))
+        create-resp                (http-post "/app/todos"
+                                              :cookie cookie
+                                              :headers {"x-csrf-token" app-token}
+                                              :form-params {"newtodo" title})
+        todo-row                   (first (biff.sqlite/execute
+                                           *system*
+                                           {:select [:todo/id]
+                                            :from   :todo
+                                            :where  [:= :todo/title title]}))
+        toggle-resp                (datastar-post (routes/todo-toggle (:todo/id todo-row))
+                                                  tab-id
+                                                  :cookie cookie
+                                                  :headers {"x-csrf-token" app-token})
+        toggle-row                 (first (biff.sqlite/execute
+                                           *system*
+                                           {:select [:todo/completed]
+                                            :from   :todo
+                                            :where  [:= :todo/id (:todo/id todo-row)]}))
+        filter-resp                (datastar-post (routes/tab-state)
+                                                  tab-id
+                                                  :cookie cookie
+                                                  :headers {"x-csrf-token" app-token}
+                                                  :form-params {"filter" "completed"})
+        filtered-page              (http-get (datastar-app-path tab-id) :cookie cookie)
+        archive-resp               (datastar-post (routes/todo-archive (:todo/id todo-row))
+                                                  tab-id
+                                                  :cookie cookie
+                                                  :headers {"x-csrf-token" app-token})
+        archived-row               (first (biff.sqlite/execute
+                                           *system*
+                                           {:select [:todo/archived]
+                                            :from   :todo
+                                            :where  [:= :todo/id (:todo/id todo-row)]}))
+        show-archived-resp         (datastar-post (routes/tab-state)
+                                                  tab-id
+                                                  :cookie cookie
+                                                  :headers {"x-csrf-token" app-token}
+                                                  :signals {"filter"       "all"
+                                                            "showArchived" true})
+        archived-page              (http-get (datastar-app-path tab-id) :cookie cookie)
+        hide-archived-resp         (datastar-post (routes/tab-state)
+                                                  tab-id
+                                                  :cookie cookie
+                                                  :headers {"x-csrf-token" app-token}
+                                                  :signals {"filter"       "all"
+                                                            "showArchived" false})
+        hidden-page                (http-get (datastar-app-path tab-id) :cookie cookie)]
+    (is (= 200 (:status create-resp)))
+    (is (= 204 (:status toggle-resp)))
+    (is (true? (:todo/completed toggle-row)))
+    (is (= 204 (:status filter-resp)))
+    (is (str/includes? (:body filtered-page) "Current filter: Completed"))
+    (is (re-find #"class=\"[^\"]*bg-teal-600 text-white[^\"]*\">Completed"
+                 (:body filtered-page)))
+    (is (str/includes? (:body filtered-page) title))
+    (is (= 204 (:status archive-resp)))
+    (is (true? (:todo/archived archived-row)))
+    (is (= 204 (:status show-archived-resp)))
+    (is (str/includes? (:body archived-page) "Archived todos"))
+    (is (str/includes? (:body archived-page) title))
+    (is (= 204 (:status hide-archived-resp)))
+    (is (not (str/includes? (:body hidden-page) title)))))
+
+(deftest archive-queue-route-archives-active-todos-test
+  (let [{:keys [app-token cookie email]} (sign-in!)
+        archive-resp                     (http-post "/app/archive"
+                                                    :cookie cookie
+                                                    :headers {"x-csrf-token" app-token})
+        active-count                     (fn []
+                                           (some-> (first (db-query
+                                                           "SELECT COUNT(*) AS total
+                                        FROM todo t
+                                        JOIN user u ON t.user_id = u.id
+                                        WHERE u.email = ? AND t.archived = 0"
+                                                           email))
+                                                   :total
+                                                   (#(when (zero? %) %))))]
+    (is (= 204 (:status archive-resp)))
+    (is (zero? (wait-for! active-count)))))
+
+(deftest users-cannot-mutate-or-batch-archive-each-others-todos-test
+  (let [{cookie-a :cookie token-a :app-token email-a :email} (sign-in!)
+        {cookie-b :cookie token-b :app-token email-b :email} (sign-in!)
+        title       (str "Owned todo " (random-uuid))
+        create-resp (http-post "/app/todos"
+                               :cookie cookie-a
+                               :headers {"x-csrf-token" token-a}
+                               :form-params {"newtodo" title})
+        todo-row    (first (db-query
+                            "SELECT t.id, t.completed, t.archived
+                             FROM todo t
+                             JOIN user u ON t.user_id = u.id
+                             WHERE u.email = ? AND t.title = ?"
+                            email-a title))
+        toggle-resp (http-post (routes/todo-toggle (:todo/id todo-row))
+                               :cookie cookie-b
+                               :headers {"x-csrf-token" token-b}
+                               :form-params {"completed" "true"})
+        batch-resp  (http-post "/app/archive"
+                               :cookie cookie-b
+                               :headers {"x-csrf-token" token-b})
+        user-b-active-count
+        (fn []
+          (some-> (first (db-query
+                          "SELECT COUNT(*) AS total
+                           FROM todo t
+                           JOIN user u ON t.user_id = u.id
+                           WHERE u.email = ? AND t.archived = 0"
+                          email-b))
+                  :total
+                  (#(when (zero? %) %))))]
+    (is (= 200 (:status create-resp)))
+    (is (some? todo-row))
+    (is (= 404 (:status toggle-resp)))
+    (is (= 204 (:status batch-resp)))
+    (is (zero? (wait-for! user-b-active-count)))
+    (let [owner-row (first (db-query
+                            "SELECT t.completed, t.archived
+                             FROM todo t
+                             JOIN user u ON t.user_id = u.id
+                             WHERE u.email = ? AND t.title = ?"
+                            email-a title))]
+      (is (false? (:todo/completed owner-row)))
+      (is (false? (:todo/archived owner-row))))))
+
+(deftest todo-title-validation-test
+  (let [{:keys [app-token cookie]} (sign-in!)
+        too-long (apply str (repeat (inc todos/max-title-length) "x"))
+        response (http-post "/app/todos"
+                            :cookie cookie
+                            :headers {"x-csrf-token" app-token}
+                            :form-params {"newtodo" too-long})]
+    (is (= 204 (:status response)))
+    (is (empty? (db-query "SELECT id FROM todo WHERE title = ?" too-long)))))
+
+(defn -main [& _args]
+  (let [{:keys [fail error]} (run-tests 'com.example.todo-app-test)]
+    (shutdown-agents)
+    (when (pos? (+ fail error))
+      (throw (ex-info "Todo App tests failed" {:fail fail :error error})))))
