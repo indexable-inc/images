@@ -4,15 +4,16 @@ Data-only guest specs consumed by the general `macosGuests` module
 (`modules/home/macos-guests.nix`, index `homeModules.macos-guests`), which
 generates one idempotent `macos-guest-<name>` push command per guest.
 
-## macos-primary — Beeper iMessage bridge (Linear ENG-7746)
+## macos-primary — the agent's own iMessage identity (index#4360)
 
 vmkit guest at `~/.local/share/vmkit/guests/macos-primary`, auto-login user
-`ix`, ssh `ix@192.168.64.6`. Declares:
+`ix`, ssh `ix@192.168.64.6`. Its Messages is signed into the agent's own
+Apple ID, not the user's, so the agent can be added to a group chat and speak
+as itself. Declares:
 
-- launchd agent `com.beeper.sh-imessage`: `bbctl run` for the `sh-imessage`
-  bridge, KeepAlive, logging to `/tmp/imsg.log` on the guest.
-- `~/.local/bin/bbctl`: the pinned bridge-manager CLI (`packages/bbctl`,
-  v0.14.0 darwin arm64; hash in `packages/bbctl/pins.json`).
+- launchd agent `dev.ix.agent-node`: a BEAM node the host kernel calls into
+  over distributed Erlang, KeepAlive, logging to `/tmp/ix-agent-node.log`.
+- `~/.local/bin/ix-agent-node`: the script that starts it.
 
 ```sh
 macos-guest-macos-primary          # idempotent apply
@@ -21,25 +22,60 @@ macos-guest-macos-primary ssh      # interactive guest shell
 macos-guest-macos-primary ssh -- sw_vers  # run one guest command
 ```
 
-### One-time bootstrap (stateful / GUI-gated, deliberately not applied)
+Sending, from a host cell:
 
-General TCC mechanics: `modules/home/macos-guests/tcc-bootstrap.md`. The
-bridge-specific steps, validated live 2026-07-14:
+```elixir
+Imsg.send("+14155551212", "hi", mac: Mac.guest(:"ixagent@192.168.64.6"))
+Imsg.send({:chat, guid}, "hi", mac: Mac.guest(:"ixagent@192.168.64.6"))
+```
 
-1. **`bbctl login`**: interactive bubbletea TUI; it wedges in headless PTYs,
-   so run it in the guest's GUI Terminal.app. It writes the bridge
-   registration under `~/Library/Application Support/bbctl/prod/sh-imessage/`
-   (config.yaml + mautrix-imessage.db). That directory holds SECRETS and is
-   the bridge's durable state: never commit it; include it in guest backups.
-2. **Full Disk Access**: after the first apply, the agent crash-loops on
-   `chat.db: operation not permitted` until bbctl auto-appears (toggled off)
-   in System Settings > Privacy & Security > Full Disk Access; toggle it on.
-3. **Contacts**: approve the prompt on first bridge start.
-4. **Automation > Messages**: approve the prompt on the first outbound send.
+### Guest state this file cannot describe
 
-### Verifying
+Everything below lives only on the guest. A rebuilt guest needs it again.
 
-`macos-guest-macos-primary` ends by printing the agent's launchd state
-(`state = running`). On the guest, `/tmp/imsg.log` carries bridge output; an
-outbound send logs a `step REMOTE, status SUCCESS` checkpoint, and the log
-must stay free of `FTL` lines.
+- **The Apple ID sign-in**, through Messages' settings window. GUI-only, and
+  two-factor sends a code to a trusted device.
+- **`~/.erlang.cookie`**, the shared secret the host authenticates with. Not
+  rendered from nix: a cookie in `/nix/store` is world-readable.
+- **Homebrew's Elixir** at `/opt/homebrew/bin/elixir`, which the node script
+  names. Nix cannot install on this guest: its installer cannot create
+  `/etc/fstab` there even as root, so it cannot mount a store. Homebrew
+  upgrades on its own schedule, so the runtime under the node can drift.
+- **TCC grants** (`../../../modules/home/macos-guests/tcc-bootstrap.md`).
+  Pre-seed them offline with `vmkit provision` against the stopped bundle
+  rather than clicking through the guest GUI.
+
+### TCC, the parts that cost a rebuild to learn
+
+- **The grant follows the responsible process, not the tool.** Approving
+  `/usr/bin/sqlite3` does nothing for a `sqlite3` run over ssh; approve
+  `/usr/libexec/sshd-keygen-wrapper` and every ssh session inherits it.
+- **The node's Apple Events grant names `erlexec`**, the launcher `elixir`
+  execs, not `beam.smp`. Until it is granted, a send through the node hangs
+  on an unanswered dialog on the guest screen rather than failing.
+- **A grant for a non-Apple binary needs `--tcc-client-path`**: the
+  requirement is computed from a copy staged on the host, but the row must
+  name the path the guest runs.
+
+### The guest is headless, so a sign-in needs a screen
+
+`vmkit run-macos` opens no window. Screen Sharing supplies one, but the
+service refuses to start until `screensharingd`, `ScreensharingAgent`,
+`AppleVNCServer` and `ARDAgent` are all pre-approved for screen recording the
+same offline way. With that done:
+
+```sh
+open "vnc://ix@192.168.64.6"   # add :<password> to skip the auth dialog
+```
+
+Auto-login lands on a locked screen unless
+`/Library/Preferences/com.apple.loginwindow autoLoginUserScreenLocked` is
+false; while it is locked, apps launch into a session behind the lock and
+report no windows.
+
+### Group chats reach the guest only after a message does
+
+Adding the agent to a group delivers nothing to it. The thread appears on the
+guest the first time someone sends a message to it, and `{:chat, guid}` can
+address it only from then on. The guest does not use Messages in iCloud, so
+there is no history to sync.
