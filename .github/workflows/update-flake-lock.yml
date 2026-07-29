@@ -444,8 +444,8 @@ jobs:
   # issue plus a Slack post (when the caller supplies slack-bot-token),
   # recorded as a body marker so later ticks do not re-fire. Watcher-internal
   # failures (API errors) exit loudly without claiming health or closing the
-  # issue. Callers must grant `issues: write`, `checks: read` and
-  # `statuses: read` on the calling job.
+  # issue. Callers must grant `issues: write`, `checks: read`, `statuses: read`
+  # and `actions: read` on the calling job.
   #
   # A WATCHDOG THAT CANNOT SAY WHICH RED IT IS, IS NOISE. The two exits below
   # mean opposite things and are labelled apart so the run page says which one
@@ -470,21 +470,35 @@ jobs:
     # workflow silently depend on GitHub capacity after the update job exits.
     runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 10
-    # checks/statuses are what `--json statusCheckRollup` below actually costs:
-    # the field resolves `commit.statusCheckRollup`, which aggregates check runs
-    # (checks:read) and commit statuses (statuses:read). With only
-    # pull-requests:read, GraphQL refuses the nested field rather than the
-    # query, so `gh` exits non-zero with
+    # Three read scopes are what `--json statusCheckRollup` below actually
+    # costs. `gh` resolves that one field into a fixed GraphQL selection three
+    # levels deep, and each level is a different resource:
     #
-    #     GraphQL: Resource not accessible by integration
-    #       (repository.pullRequests.nodes.0.statusCheckRollup
-    #        .nodes.0.commit.statusCheckRollup)
+    #     commit.statusCheckRollup                 checks:read + statuses:read
+    #       .contexts.nodes[].checkSuite
+    #         .workflowRun                         actions:read
     #
-    # and this watchdog dies before it has read anything (indexable-inc/ix#9157).
+    # Miss any one and GraphQL refuses that nested field rather than the whole
+    # query, so `gh` exits non-zero and this watchdog dies before it has read
+    # anything (indexable-inc/ix#9157). Granting only the first two moved the
+    # refusal one level down to `checkSuite.workflowRun` and read as the same
+    # failure with a longer path -- measured on a real tick, ix run 30495339289,
+    # which is how `actions:read` was found and how the first two should have
+    # been.
+    #
     # Dropping to REST buys nothing: `commits/{ref}/check-runs` wants checks and
-    # `commits/{ref}/status` wants statuses, so these two reads are the floor for
-    # knowing whether the bump PR is red, not a shortcut around it.
+    # `commits/{ref}/status` wants statuses. Asking GraphQL directly for only
+    # the four fields the script reads (`.conclusion`, `.state`, `.name`,
+    # `.context` -- it never touches `workflowRun`) would need no actions:read
+    # at all, and is deliberately not done: it returns a third JSON shape into a
+    # classifier that already normalizes two, and getting that wrong means
+    # reading a red bump PR as green. A read-only scope is the cheaper mistake.
+    #
+    # Callers grant the same set, since a called job may not request more than
+    # its caller (ix#9192 landed first for that reason). ENG-11313 tracks
+    # checking that contract before main rather than after.
     permissions:
+      actions: read
       checks: read
       contents: read
       issues: write
