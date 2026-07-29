@@ -145,8 +145,10 @@
                               (System/getenv "COOKIE_SECRET_FILE")))
    :biff.sqlite/db-path (or (System/getenv "SQLITE_DB_PATH") "storage/reading-list.db")
    :biff.sqlite/schema-path (or (System/getenv "SQLITE_SCHEMA_PATH") "storage/schema.sql")
-   ;; NixOS supplies this exact executable through the service PATH.
-   :biff.sqlite/sqldef-version "3.11.1"})
+   ;; Biff downloads sqldef when this differs from what the binary it finds
+   ;; reports, so the NixOS unit sets SQLDEF_VERSION from the sqldef it puts on
+   ;; PATH. The literal is only the fallback for a run outside that unit.
+   :biff.sqlite/sqldef-version (or (System/getenv "SQLDEF_VERSION") "3.11.1")})
 
 (defonce system (atom nil))
 

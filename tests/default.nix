@@ -6895,7 +6895,15 @@
   # `builtins.getContext "${drv}"` sees only the derivation itself, never its
   # inputs, so it cannot see a leak at all; and leak (3) had no context left
   # yet still moved the derivation, because the store path was still in the
-  # bytes. A substring check over `buildCommand` catches all three.
+  # bytes.
+  #
+  # Read EVERY string attribute, not just `buildCommand`. An earlier version
+  # read only that, and missed a real leak: `ix.writeRustApplication` passes
+  # the launcher's Rust source through `text` with `passAsFile`, so its
+  # `buildCommand` is only `rustc ... "$textPath"` and a store path in the
+  # Rust body is invisible. A derivation carrying no string attribute at all
+  # throws rather than passing, because a check that silently finds nothing
+  # to look at is the failure mode this whole gate exists to prevent.
   cljSourceIndependence = let
     # Two whole-tree paths, both of which a unit must be independent of: the
     # repository root (what leaked through clj-lock's error messages) and the
@@ -6913,8 +6921,16 @@
         paths.root
         package.passthru.src
       ];
-    leaks = package: drv:
-      lib.any (path: lib.hasInfix path (drv.buildCommand or "")) (forbidden package);
+    builderStrings = label: drv: let
+      strings = lib.filter lib.isString (lib.attrValues (drv.drvAttrs or {}));
+    in
+      if strings == []
+      then throw "cljSourceIndependence: ${label} has no string attributes to scan; the gate would pass it vacuously"
+      else strings;
+    leaks = package: entry:
+      lib.any (
+        text: lib.any (path: lib.hasInfix path text) (forbidden package)
+      ) (builderStrings entry.label entry.drv);
     # `writeRustApplication` names the launcher through `name`, not `pname`,
     # so read both or the failure message says `?` and helps nobody.
     labelOf = package: package.pname or package.name or "unnamed";
@@ -6925,20 +6941,39 @@
           drv = package;
         }
         {
-          label = "${labelOf package} (classpath)";
+          label = "${labelOf package} (dependency classpath)";
           drv = package.passthru.classpath;
+        }
+        {
+          label = "${labelOf package} (runtime classpath)";
+          drv = package.passthru.runtimeClasspath;
+        }
+        # The graph render is deliberately absent. It is the one derivation
+        # that must read the whole source, because its job is to walk the tree
+        # for `ns` forms. It is content-addressed instead, so an edit leaving
+        # every `ns` form alone renders identical JSON and resolves to the same
+        # output, and no unit sees a changed input.
+        {
+          label = "${labelOf package} (smoke)";
+          drv = package.passthru.smoke;
         }
       ]
       ++ lib.mapAttrsToList (namespace: unit: {
         label = "${labelOf package}: ${namespace}";
         drv = unit;
       }) (package.passthru.units or {});
-    offenders = lib.concatMap (
-      package:
-        map (entry: entry.label) (
-          lib.filter (entry: leaks package entry.drv) (checked package)
-        )
-    ) [repoPackages.biff-reading-list];
+    # Todo App is where the graph actually has edges, so it is the one that
+    # matters most here. It is absent from the package set off x86_64-linux
+    # (its lock carries a Linux-only brotli native), hence the `?` guard
+    # rather than a hardcoded system check.
+    gated =
+      [repoPackages.biff-reading-list]
+      ++ lib.optional (repoPackages ? biff-todo-app) repoPackages.biff-todo-app;
+    offenders =
+      lib.concatMap (
+        package: map (entry: entry.label) (lib.filter (leaks package) (checked package))
+      )
+      gated;
   in {
     inherit offenders;
     assertion = offenders == [];

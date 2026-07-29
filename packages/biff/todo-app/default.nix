@@ -88,6 +88,14 @@ in
     resourceRoots = ["resources"];
     extraClasspath = [browserAssets];
     classpathJars = ix.cljLock.classpathFor {lock = ./deps-lock.json;};
+    # See the note in reading-list's default.nix: test sources stay out of
+    # `src`, and sqldef must be present rather than downloaded.
+    testSrc = lib.fileset.toSource {
+      root = ./.;
+      fileset = ./test;
+    };
+    testNamespace = "com.example.todo-app-test";
+    testInputs = [pkgs.sqldef];
     meta = {
       description = "Biff 2 todo app: auth, user-scoped writes, background jobs, Datastar live queries";
       mainProgram = "biff-todo-app";

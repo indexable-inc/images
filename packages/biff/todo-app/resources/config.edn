@@ -19,7 +19,7 @@
 
  :biff.sqlite/db-path        #or [#biff/env SQLITE_DB_PATH "storage/sqlite/main.db"]
  :biff.sqlite/schema-path    #or [#biff/env SQLITE_SCHEMA_PATH "storage/sqlite/schema.sql"]
- :biff.sqlite/sqldef-version "3.11.1"
+ :biff.sqlite/sqldef-version #or [#biff/env SQLDEF_VERSION "3.11.1"]
 
  :mailersend/api-key   #biff/secret MAILERSEND_API_KEY
  :mailersend/from      #biff/env MAILERSEND_FROM

@@ -27,7 +27,7 @@ Both run from the repo root. Get the repo with
 
 [`packages/registry.nix`](../registry.nix) discovers each application from its
 `package.nix`, so CI builds them like every other package here. Each output is
-a launcher script that execs `java -cp <closure> com.example.<app>`.
+a compiled Rust binary that execs `java -cp <closure> com.example.<app>`.
 
 ## How the build is split
 

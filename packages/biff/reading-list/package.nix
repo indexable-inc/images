@@ -8,4 +8,7 @@
   # have to take the package as a flake input, which is what made
   # lib/discovery.nix skip it.
   overlay = true;
+  # Fans `passthru.tests.clojure` into a flake check, so the project's own
+  # suite runs in CI instead of only on whoever last typed `clojure -M:test`.
+  passthruTests.prefix = "clj-biff-reading-list";
 }

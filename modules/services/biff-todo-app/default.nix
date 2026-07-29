@@ -27,6 +27,27 @@
   stateDirectory = "biff-todo-app";
   statePath = "/var/lib/${stateDirectory}";
 
+  # Biff decides whether to download sqldef by comparing the version it is
+  # configured with against what `sqlite3def --version` prints, so the unit
+  # renders that version from the package (`SQLDEF_VERSION` below) instead of
+  # trusting a number written down in the application. The assert covers the
+  # two copies Nix does not render: the fallback in
+  # packages/biff/todo-app/resources/config.edn, read when the application runs
+  # outside this unit, and the config map in
+  # packages/biff/todo-app/test/com/example/todo_app_test.clj, whose build has
+  # no network and so fails with a download stack trace rather than a version
+  # complaint.
+  sqldef = assert lib.assertMsg (pkgs.sqldef.version == "3.11.1") ''
+    biff-todo-app: pkgs.sqldef is ${pkgs.sqldef.version}, not the 3.11.1 written
+    down in packages/biff/todo-app/resources/config.edn and
+    packages/biff/todo-app/test/com/example/todo_app_test.clj. Set both to
+    ${pkgs.sqldef.version} and confirm `sqlite3def --version` prints exactly that
+    string: the comparison is literal, and a version Biff does not recognise
+    makes it download sqldef from github into ${statePath}, chmod it
+    executable, and run it as the biff user.
+  '';
+    pkgs.sqldef;
+
   # Biff reads the session cookie key from a file, so the secret has to exist
   # before the application starts and has to survive restarts (a regenerated
   # key silently signs every user out). Generating it in the unit rather than
@@ -198,12 +219,15 @@ in {
         HOST = cfg.host;
         PORT = toString cfg.port;
         SECURE = lib.boolToString cfg.secure;
+        # Rendered from the package on PATH, so the version the application
+        # looks for and the binary it finds cannot disagree.
+        SQLDEF_VERSION = sqldef.version;
         SQLITE_DB_PATH = "${statePath}/todo-app.db";
         SQLITE_SCHEMA_PATH = "${statePath}/schema.sql";
       };
-      # sqldef applies the schema at startup. On PATH from the store so the
-      # application never downloads a migration binary at runtime.
-      path = [pkgs.sqldef];
+      # sqldef applies the schema at startup, from the store, so the unit never
+      # downloads a migration binary at runtime.
+      path = [sqldef];
       serviceConfig =
         ix.systemdHardening
         // {

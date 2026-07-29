@@ -62,27 +62,45 @@ the value of having a graph at all.
   namespacePath = namespace:
     lib.replaceStrings ["." "-"] ["/" "_"] namespace;
 
+  # `.clj` or `.cljc`, taken from the rendered graph rather than assumed. A
+  # `.cljc` namespace copied to a `.clj` name throws `Conditional read not
+  # allowed` from a filename that exists nowhere in the tree.
+  sourceExtension = file:
+    if lib.hasSuffix ".cljc" file
+    then ".cljc"
+    else ".clj";
+
   # The namespace graph, rendered from the source by IFD. Rendering reads
   # only the `ns` forms, so it is cheap; the units it plans are what cost.
+  # Returns the derivation, not the parsed graph: the caller imports it, and
+  # exposes it through `passthru` so the source-independence gate in tests/
+  # can inspect this derivation's builder text like any other.
   renderGraph = {
     pname,
     src,
     sourceRoots,
   }:
-    lib.importJSON (
-      pkgs.runCommand "${pname}-clj-graph.json" {
-        nativeBuildInputs = [nix-clj-unit];
-        strictDeps = true;
-      } ''
-        # Render from inside the source so the graph records paths relative
-        # to it. Absolute store paths in the JSON would give the string a
-        # context that no derivation attribute is allowed to carry.
-        cd ${src}
-        nix-clj-unit render \
-          ${concatStringsSep " " (map (dir: "--src ${dir}") sourceRoots)} \
-          --out "$out"
-      ''
-    );
+    pkgs.runCommand "${pname}-clj-graph.json" {
+      # The one derivation here that MUST read the whole source: it walks the
+      # tree for `ns` forms. Content-addressed so that reading it all does not
+      # propagate: an edit that leaves every `ns` form alone renders identical
+      # JSON, resolves to the same output, and no unit sees a changed input.
+      # This is the cheap version of what cargo-unit gets from planning against
+      # a stubbed source tree.
+      __contentAddressed = true;
+      outputHashAlgo = "sha256";
+      outputHashMode = "flat";
+      nativeBuildInputs = [nix-clj-unit];
+      strictDeps = true;
+    } ''
+      # Render from inside the source so the graph records paths relative
+      # to it. Absolute store paths in the JSON would give the string a
+      # context that no derivation attribute is allowed to carry.
+      cd ${src}
+      nix-clj-unit render \
+        ${concatStringsSep " " (map (dir: "--src ${dir}") sourceRoots)} \
+        --out "$out"
+    '';
 
   /**
   Compile one namespace.
@@ -129,7 +147,7 @@ the value of having a graph at all.
           name = "clj-source-${namespace}";
           path = src + "/${node.file}";
         }
-      } "$unitSource/${namespacePath namespace}.clj"
+      } "$unitSource/${namespacePath namespace}${sourceExtension node.file}"
 
       # clj-lock's classpath is a file, not a string: the git half of it is
       # only knowable after reading each library's deps.edn inside the
@@ -139,11 +157,38 @@ the value of having a graph at all.
       # has just emitted while compiling the rest of the namespace.
       classpath="$(cat ${classpathJars})${lib.optionalString (depUnits != []) ":"}${concatStringsSep ":" depUnits}:$unitSource:$out"
 
+      # `require` FIRST, then compile. `compile` binds `*compile-files*` true
+      # across the whole transitive load, so compiling straight away makes
+      # every library namespace reached from this one compile into `$out` as
+      # well: the libraries arrive from jars and git checkouts as source with
+      # no class file, or with one at store mtime 1 that ties and loses by the
+      # same RT.load rule this file's header describes.
+      #
+      # Measured before this line existed: one unit held 7244 class files of
+      # which exactly one was its own, the 16 units totalled 437 MiB against
+      # 768 KiB of application bytecode, and the copies were dead anyway,
+      # because the JVM skips a class at mtime 1 next to a jar entry dated
+      # 2026 and loads the library from source regardless.
+      #
+      # `require` loads the closure with `*compile-files*` false, so nothing
+      # is written. `compile` then loads this namespace's file directly, and
+      # its `ns` form's requires are no-ops against `*loaded-libs*`.
       java -cp "$classpath" clojure.main \
-        -e "(binding [*compile-path* \"$out\"] (compile '${namespace}))"
+        -e "(require '${namespace}) (binding [*compile-path* \"$out\"] (compile '${namespace}))"
 
-      if [ -z "$(find "$out" -name '*.class' -print -quit)" ]; then
-        echo "clj-unit: compiling ${namespace} produced no class files" >&2
+      # The guard has to name this namespace's own class. Checking merely for
+      # `*.class` could not fail while the whole library closure was landing
+      # here, which is how the recompile above went unnoticed.
+      if [ ! -f "$out/${namespacePath namespace}__init.class" ]; then
+        echo "clj-unit: compiling ${namespace} produced no ${namespacePath namespace}__init.class" >&2
+        exit 1
+      fi
+
+      # And nothing but this namespace's own classes. A foreign class here is
+      # the whole-closure recompile coming back.
+      foreign="$(find "$out" -name '*.class' -not -path "$out/${namespacePath namespace}*" -print -quit)"
+      if [ -n "$foreign" ]; then
+        echo "clj-unit: compiling ${namespace} also wrote $foreign, so the dependency closure recompiled" >&2
         exit 1
       fi
     '';
@@ -179,9 +224,22 @@ in {
     # a build step generates rather than the source tree carrying (compiled
     # CSS, vendored browser assets). Not visible to the compile units.
     extraClasspath ? [],
+    # The project's `:test` alias, as three pieces: a source containing only
+    # the test tree, the directories inside it to put on the classpath, and
+    # the namespace whose `-main` runs the suite.
+    #
+    # Tests run from source rather than as units. They are leaves nothing
+    # requires, so a unit per test namespace would add derivations and buy no
+    # incrementality. They are kept OUT of `src` so that editing a test does
+    # not re-run the namespace-graph render.
+    testSrc ? null,
+    testRoots ? ["test"],
+    testNamespace ? null,
+    testInputs ? [],
     meta ? {},
   }: let
-    graph = renderGraph {inherit pname src sourceRoots;};
+    graphFile = renderGraph {inherit pname src sourceRoots;};
+    graph = lib.importJSON graphFile;
 
     # Loading a namespace loads its whole require closure, so a unit needs
     # every TRANSITIVE dependency's compiled output on its classpath, not
@@ -217,7 +275,19 @@ in {
       graph.namespaces;
 
     unitOutputs = map (namespace: units.${namespace}) (attrNames graph.namespaces);
-    resources = map (dir: "${src}/${dir}") resourceRoots;
+    # Each resource root as its own store path, not a subdirectory of `src`.
+    # Interpolating `src` here put the package's whole filtered source into the
+    # runtime classpath derivation, and from there into the deployed closure,
+    # which carried every .clj file to production for nothing.
+    resources =
+      map (
+        dir:
+          builtins.path {
+            name = "${pname}-${lib.replaceStrings ["/"] ["-"] dir}";
+            path = src + "/${dir}";
+          }
+      )
+      resourceRoots;
     # The dependency classpath arrives as a file, so the runtime classpath is
     # assembled in a derivation rather than as a Nix string. The launcher
     # embeds this file's contents at compile time, which keeps the classpath
@@ -228,6 +298,9 @@ in {
         ${lib.escapeShellArg (concatStringsSep ":" (unitOutputs ++ resources ++ extraClasspath))} \
         > "$out"
     '';
+    # Tests read the application's compiled units plus their own source, so
+    # they exercise exactly the bytecode the launcher runs.
+    testSources = concatStringsSep ":" (map (dir: "${testSrc}/${dir}") testRoots);
     # Clojure munges the namespace into the generated class name the same way
     # it munges the file path, so `:gen-class` on `com.example.reading-list`
     # emits `com.example.reading_list`.
@@ -258,12 +331,48 @@ in {
     // {
       passthru = {
         inherit units graph version;
+        # Nothing else in the build starts a JVM against the assembled
+        # application, so a namespace missing from the graph, or a unit whose
+        # classes do not link, builds green and dies at boot with
+        # `Could not locate ...__init.class`. Requiring the main namespace off
+        # the real runtime classpath costs seconds and closes that whole class.
+        smoke =
+          pkgs.runCommand "${pname}-smoke" {
+            nativeBuildInputs = [jdk];
+            strictDeps = true;
+          } ''
+            java -cp "$(cat ${runtimeClasspathFile})" clojure.main \
+              -e "(require '${mainNamespace}) (println \"loaded ${mainNamespace}\")"
+            mkdir -p "$out"
+          '';
+        # The project's own suite, so `nix run .#lint`'s sibling gate covers
+        # what `clojure -M:test` covers. Without this the tests are 101
+        # assertions nothing runs, which is the same defect as a service
+        # module asserted against `/bin/true`.
+        tests = lib.optionalAttrs (testNamespace != null) {
+          clojure =
+            pkgs.runCommand "${pname}-clojure-tests" {
+              nativeBuildInputs = [jdk] ++ testInputs;
+              strictDeps = true;
+            } ''
+              # A writable HOME and cwd: the suites open SQLite files
+              # relative to the working directory.
+              export HOME="$NIX_BUILD_TOP/home"
+              mkdir -p "$HOME" run
+              cd run
+              java -cp "$(cat ${runtimeClasspathFile}):${testSources}" \
+                clojure.main -m ${testNamespace}
+              mkdir -p "$out"
+            '';
+        };
         # Exposed for the source-independence gate in tests/, which reads the
         # builder text of every derivation in the graph and asserts that
         # neither the package's own source tree nor the repository root
         # appears in it.
         inherit src;
         classpath = classpathJars;
+        runtimeClasspath = runtimeClasspathFile;
+        graphRender = graphFile;
       };
     };
 }
