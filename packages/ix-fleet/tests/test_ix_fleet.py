@@ -646,7 +646,6 @@ class SwitchSourceTests(unittest.TestCase):
         calls: list[list[str]] = []
         cwds: list[Path | None] = []
         node_data = fleet_node("api")
-        node_data["switch"]["buildVm"] = "builder"
         node_data["switch"]["overrideInputs"] = {
             "ix": "github:indexable-inc/ix",
             "ix-images": "path:/workspace/index",
@@ -669,8 +668,6 @@ class SwitchSourceTests(unittest.TestCase):
                 "api",
                 "--workdir",
                 "subdir",
-                "--build-vm",
-                "builder",
                 "--override-input",
                 "ix=github:indexable-inc/ix",
                 "--override-input",
@@ -704,12 +701,10 @@ class SwitchSourceTests(unittest.TestCase):
 def remote_node(
     name: str,
     *,
-    build_vm: str = "builder",
     depends_on: list[str] | None = None,
 ) -> dict[str, typing.Any]:
     node = fleet_node(name, depends_on=depends_on)
     node["switch"]["buildOn"] = "remote"
-    node["switch"]["buildVm"] = build_vm
     return node
 
 
@@ -746,36 +741,32 @@ class SwitchBatchTests(unittest.TestCase):
 
     def test_is_batchable_switch(self) -> None:
         assert ix_fleet.is_batchable_switch(self._node(remote_node("api")))
-        # local build: no shared builder to batch on.
+        # A local build activates an already-built closure by store path, which
+        # the multi form cannot express.
         local = fleet_node("api")
         local["switch"]["buildOn"] = "local"
         assert not ix_fleet.is_batchable_switch(self._node(local))
-        # remote but no build VM: multi `ix apply` requires --build-vm.
-        no_vm = fleet_node("api")
-        no_vm["switch"]["buildOn"] = "remote"
-        assert not ix_fleet.is_batchable_switch(self._node(no_vm))
         # installable attr must equal the node name (multi derives the VM name
         # from it and rejects --name).
         custom = remote_node("api")
         custom["switch"]["sourceInstallable"] = ".#api-system"
         assert not ix_fleet.is_batchable_switch(self._node(custom))
 
-    def test_batch_groups_split_by_build_vm_region_and_overrides(self) -> None:
-        a = self._node(remote_node("a", build_vm="b1"))
-        b = self._node(remote_node("b", build_vm="b1"))
-        c = self._node(remote_node("c", build_vm="b2"))
-        d = remote_node("d", build_vm="b1")
-        d["switch"]["overrideInputs"] = {"ix": "github:indexable-inc/ix"}
+    def test_batch_groups_split_by_region_and_overrides(self) -> None:
+        a = self._node(remote_node("a"))
+        b = self._node(remote_node("b"))
+        c = remote_node("c")
+        c["switch"]["overrideInputs"] = {"ix": "github:indexable-inc/ix"}
+        c_node = self._node(c)
+        # CAS chunks are region-scoped, so a different region splits off rather
+        # than failing the whole batch.
+        d = remote_node("d")
+        d["region"] = "us-east-1"
         d_node = self._node(d)
-        # Same build VM as a/b, but a different region: the server's multi-switch
-        # requires every target to share the builder's region, so it splits off.
-        e = remote_node("e", build_vm="b1")
-        e["region"] = "us-east-1"
-        e_node = self._node(e)
 
-        groups = ix_fleet.batch_groups([a, b, c, d_node, e_node])
+        groups = ix_fleet.batch_groups([a, b, c_node, d_node])
         names = [[node.name for node in group] for group in groups]
-        assert names == [["a", "b"], ["c"], ["d"], ["e"]]
+        assert names == [["a", "b"], ["c"], ["d"]]
 
     def test_switch_nodes_from_source_builds_one_multi_ix_apply(self) -> None:
         nodes = [self._node(remote_node("web")), self._node(remote_node("worker"))]
@@ -789,16 +780,14 @@ class SwitchBatchTests(unittest.TestCase):
             ),
         )
 
-        # One native multi-VM `ix apply`: every installable, one shared --build-vm,
-        # and no --name (multi derives each VM name from its installable attr).
+        # One native multi-VM `ix apply`: every installable, and no --name
+        # (multi derives each VM name from its installable attr).
         assert calls == [
             [
                 "ix",
                 "apply",
                 ".#web",
                 ".#worker",
-                "--build-vm",
-                "builder",
                 "--workdir",
                 "subdir",
             ]

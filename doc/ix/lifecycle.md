@@ -36,7 +36,7 @@ of each positional target:
   system in place. Re-running converges the VM to the current config: the same
   contract as `nixos-rebuild switch`, with no separate switch command for an
   existing VM. Bare `ix apply` defaults to `.`; several targets in one run (for
-  example `.#web .#worker`) need `--build-vm`.
+  example `.#web .#worker`) converge one VM each, named from each target's attr.
 - **A snapshot UUID** warm-restores that snapshot into a new VM.
 - **Anything else** (`ix/base:latest`, `ubuntu:24.04`) is the **imperative**
   path: you hand ix an OCI image and it boots a long-running VM around it. The
