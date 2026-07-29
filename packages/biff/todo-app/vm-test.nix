@@ -1,20 +1,28 @@
+# Boots the real Todo App under the shipped `services.biff-todo-app` module and
+# drives it end to end (HTTP, sign-in, SQLite, Datastar in a real browser,
+# restart, and SIGKILL recovery).
+#
+# The node runs the module in isolation rather than a full ix image: only the
+# two `ix` helpers the module actually consumes are supplied as specialArgs,
+# and `ix.networking.expose` / `ix.healthChecks` are stubbed as free-form
+# options, so the test exercises the module's own config without pulling in the
+# platform module tree.
 {
-  biffApp,
-  index,
+  ix,
+  paths,
   pkgs,
 }: let
+  packages = ix.packageSetFor pkgs;
   browserPython = pkgs.python3.withPackages (python: [python.selenium]);
 in
   pkgs.testers.runNixOSTest {
     name = "biff-todo-app";
 
     node.specialArgs.ix = {
-      inherit (index.lib) systemdHardening writeRustApplication;
+      inherit (ix) systemdHardening writeRustApplication;
     };
     nodes.server = {lib, ...}: {
-      imports = [
-        (import ./service.nix {inherit biffApp;})
-      ];
+      imports = [(paths.modules + "/services/biff-todo-app")];
       options.ix = {
         networking.expose = lib.mkOption {
           type = lib.types.attrsOf lib.types.anything;
@@ -26,6 +34,13 @@ in
         };
       };
       config = {
+        # `package` is set from the caller's package set: the test node runs a
+        # stock nixpkgs instance, which carries no repo overlay for
+        # `mkPackageOption` to resolve the default against.
+        services.biff-todo-app = {
+          enable = true;
+          package = packages.biff-todo-app;
+        };
         environment.etc."todo-app/browser-test.py".source = ./browser-test.py;
         environment.systemPackages = [
           browserPython

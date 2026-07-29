@@ -1,8 +1,0 @@
-// The flake supplies a fully locked Clojure application closure. The VM does
-// not download Maven artifacts, browser assets, or migration tools at runtime.
-export default ({ index, biffApp }) =>
-  index.lib.mkVm({
-    name: "biff-todo-app",
-    deployment: { snapshot: true },
-    modules: [import("./service.nix")({ biffApp })],
-  });

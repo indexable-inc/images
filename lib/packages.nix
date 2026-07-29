@@ -3,6 +3,8 @@
   packageRegistry,
   ixSpecialArgs,
   cargoUnitFor,
+  cljLockFor,
+  cljUnitFor,
   goUnitFor,
   rustWorkspaceFor,
   clippy-src,
@@ -17,6 +19,8 @@
       # instead of the x86_64-linux pkgs the top-level ixSpecialArgs bundle
       # is bound to.
       cargoUnit = cargoUnitFor pkgs;
+      cljLock = cljLockFor pkgs;
+      cljUnit = cljUnitFor pkgs;
       goUnit = goUnitFor pkgs;
       rustWorkspace = rustWorkspaceFor pkgs;
       # unibind build glue bound to the caller's pkgs, for the same reason as

@@ -7471,6 +7471,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix-clj-unit"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "color-eyre",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "nix-dag"
 version = "0.1.0"
 dependencies = [

@@ -48,6 +48,17 @@
       paths
       ;
   };
+  # The two Biff 2 applications booted under their service modules. Same deal
+  # again: each boots a qemu VM, so each is its own check
+  # (`checks.<system>.biff-{reading-list,todo-app}-vm`). The todo-app script
+  # lives beside its package because it ships a Selenium driver script
+  # (`browser-test.py`) the VM installs into /etc.
+  biffReadingListVmTest = import ./biff-reading-list-vm.nix {
+    inherit ix paths pkgs;
+  };
+  biffTodoAppVmTest = import (paths.packagesRoot + "/biff/todo-app/vm-test.nix") {
+    inherit ix paths pkgs;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
@@ -85,7 +96,6 @@
   # references to the pre-`default.ix` config name.
   applyReadmes = [
     "biff/reading-list"
-    "biff/todo-app"
     "declared/groups"
     "dev/vm"
     "east-west/firewall"
@@ -2129,43 +2139,31 @@
     timer = config.systemd.timers.daily-scraper;
   };
 
-  # The Biff example's nested flake builds its Clojure application with
-  # clj-nix. At Index eval time we only need to prove the public `.ix` entry
-  # point and NixOS module contract, so use a small stand-in derivation here;
-  # the example flake's own VM check boots the real Biff package.
+  # The reading-list example is a plain `mkVm` that enables the auto-discovered
+  # `services.biff-reading-list` module, so this eval covers the same package
+  # the deployed VM runs: the application resolves off the repo overlay through
+  # the module's `package` option rather than being threaded in as an argument.
   biffReadingListExample = let
-    biffApp = pkgs.linkFarm "biff-reading-list-test-app" [
-      {
-        name = "bin/biff-reading-list";
-        path = lib.getExe' pkgs.coreutils "true";
-      }
-    ];
     fleet = ix.importIx (paths.examples + "/biff/reading-list/default.ix") {
       index = {lib = ix;};
-      inherit biffApp;
     };
     config = fleet.nodes.biff-reading-list;
   in {
-    inherit fleet config biffApp;
+    inherit fleet config;
+    package = repoPackages.biff-reading-list;
     plan = fleet.planValue.nodes.biff-reading-list;
     service = config.systemd.services.biff-reading-list;
   };
 
-  biffTodoAppExample = let
-    biffApp = pkgs.linkFarm "biff-todo-app-test-app" [
-      {
-        name = "bin/biff-todo-app";
-        path = lib.getExe' pkgs.coreutils "true";
-      }
-    ];
-    fleet = ix.importIx (paths.examples + "/biff/todo-app/default.ix") {
-      index = {lib = ix;};
-      inherit biffApp;
-    };
-    config = fleet.nodes.biff-todo-app;
+  # Todo App is a package plus a service module, not an example: there is no
+  # `default.ix` and therefore no fleet plan, so the module goes through the
+  # same image evaluator every VM uses and the checks read off `config`
+  # directly (`ix.healthChecks` is where a plan's `healthChecks` come from).
+  biffTodoApp = let
+    config = evalConfig [{services.biff-todo-app.enable = true;}];
   in {
-    inherit fleet config biffApp;
-    plan = fleet.planValue.nodes.biff-todo-app;
+    inherit config;
+    package = repoPackages.biff-todo-app;
     service = config.systemd.services.biff-todo-app;
   };
 
@@ -3953,7 +3951,7 @@
           && biffReadingListExample.service.serviceConfig.NoNewPrivileges
           && biffReadingListExample.service.serviceConfig.PrivateDevices
           && biffReadingListExample.service.serviceConfig.SuccessExitStatus == [143]
-          && biffReadingListExample.service.serviceConfig.ExecStart == "${biffReadingListExample.biffApp}/bin/biff-reading-list";
+          && biffReadingListExample.service.serviceConfig.ExecStart == lib.getExe' biffReadingListExample.package "biff-reading-list";
         message = "biff reading-list should run as a hardened, durable systemd service";
       }
       {
@@ -4014,51 +4012,53 @@
 
     biff-todo-app = [
       {
+        # The module ships in the auto-discovered registry, so every image
+        # evaluates it. An image that does not ask for the Todo App must not
+        # get its unit or the shared `biff` identity.
         assertion =
-          biffTodoAppExample.config.networking.hostName
-          == "biff-todo-app"
-          && biffTodoAppExample.plan.snapshot
-          && !biffTodoAppExample.plan.ipv4;
-        message = "biff todo-app should remain a private, stateful mkVm target";
+          !(base.config.systemd.services ? biff-todo-app)
+          && !(base.config.users.users ? biff)
+          && !(base.config.users.groups ? biff);
+        message = "services.biff-todo-app should stay inert until enabled";
       }
       {
         assertion =
-          biffTodoAppExample.service.serviceConfig.User
+          biffTodoApp.service.serviceConfig.User
           == "biff"
-          && biffTodoAppExample.service.serviceConfig.Group == "biff"
-          && biffTodoAppExample.service.serviceConfig.StateDirectory == "biff-todo-app"
-          && biffTodoAppExample.service.serviceConfig.StateDirectoryMode == "0750"
-          && biffTodoAppExample.service.serviceConfig.WorkingDirectory == "/var/lib/biff-todo-app"
-          && biffTodoAppExample.service.serviceConfig.UMask == "0077"
-          && biffTodoAppExample.service.serviceConfig.ProtectSystem == "strict"
-          && biffTodoAppExample.service.serviceConfig.NoNewPrivileges
-          && biffTodoAppExample.service.serviceConfig.PrivateDevices
-          && biffTodoAppExample.service.serviceConfig.SuccessExitStatus == [143];
+          && biffTodoApp.service.serviceConfig.Group == "biff"
+          && biffTodoApp.service.serviceConfig.StateDirectory == "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.StateDirectoryMode == "0750"
+          && biffTodoApp.service.serviceConfig.WorkingDirectory == "/var/lib/biff-todo-app"
+          && biffTodoApp.service.serviceConfig.UMask == "0077"
+          && biffTodoApp.service.serviceConfig.ProtectSystem == "strict"
+          && biffTodoApp.service.serviceConfig.NoNewPrivileges
+          && biffTodoApp.service.serviceConfig.PrivateDevices
+          && biffTodoApp.service.serviceConfig.SuccessExitStatus == [143];
         message = "biff todo-app should run as a hardened, durable systemd service";
       }
       {
         assertion =
-          biffTodoAppExample.config.users.users.biff.isSystemUser
-          && biffTodoAppExample.config.users.users.biff.group == "biff"
-          && biffTodoAppExample.config.users.groups ? biff
-          && biffTodoAppExample.service.serviceConfig.Restart == "on-failure"
-          && biffTodoAppExample.service.serviceConfig.RestartSec == "2s"
-          && lib.hasSuffix "/bin/biff-todo-app-cookie-secret" biffTodoAppExample.service.serviceConfig.ExecStartPre
-          && biffTodoAppExample.service.serviceConfig.ExecStart == "${biffTodoAppExample.biffApp}/bin/biff-todo-app"
-          && biffTodoAppExample.service.serviceConfig.EnvironmentFile == "-/var/lib/biff-todo-app/config.env"
-          && lib.any (package: lib.getName package == "sqldef") biffTodoAppExample.service.path
-          && builtins.elem "multi-user.target" biffTodoAppExample.service.wantedBy;
+          biffTodoApp.config.users.users.biff.isSystemUser
+          && biffTodoApp.config.users.users.biff.group == "biff"
+          && biffTodoApp.config.users.groups ? biff
+          && biffTodoApp.service.serviceConfig.Restart == "on-failure"
+          && biffTodoApp.service.serviceConfig.RestartSec == "2s"
+          && lib.hasSuffix "/bin/biff-todo-app-cookie-secret" biffTodoApp.service.serviceConfig.ExecStartPre
+          && biffTodoApp.service.serviceConfig.ExecStart == lib.getExe' biffTodoApp.package "biff-todo-app"
+          && biffTodoApp.service.serviceConfig.EnvironmentFile == "-/var/lib/biff-todo-app/config.env"
+          && lib.any (package: lib.getName package == "sqldef") biffTodoApp.service.path
+          && builtins.elem "multi-user.target" biffTodoApp.service.wantedBy;
         message = "biff todo-app should provision a least-privilege identity, persistent secret, migration tool, and restart policy";
       }
       {
         assertion = let
-          claim = biffTodoAppExample.config.ix.networking.portClaims.http;
-          env = biffTodoAppExample.service.environment;
+          claim = biffTodoApp.config.ix.networking.portClaims.http;
+          env = biffTodoApp.service.environment;
         in
           claim.protocol
           == "tcp"
           && claim.port == 8080
-          && builtins.elem 8080 biffTodoAppExample.config.networking.firewall.allowedTCPPorts
+          && builtins.elem 8080 biffTodoApp.config.networking.firewall.allowedTCPPorts
           && env.HOST == "0.0.0.0"
           && env.PORT == "8080"
           && env.BASE_URL == "http://localhost:8080"
@@ -4068,19 +4068,22 @@
           && env.SQLITE_DB_PATH == "/var/lib/biff-todo-app/todo-app.db"
           && env.SQLITE_SCHEMA_PATH == "/var/lib/biff-todo-app/schema.sql"
           && !(env ? COOKIE_SECRET)
-          && builtins.elem "network.target" biffTodoAppExample.service.after;
+          && builtins.elem "network.target" biffTodoApp.service.after;
         message = "biff todo-app should declare its listener, mutable state, and private-demo auth boundary without exporting its cookie secret";
       }
       {
+        # `ix.healthChecks` is what a fleet plan's `healthChecks` is built
+        # from (lib/image/fleet.nix `planHealthChecks`), so asserting the
+        # derived argv here covers the same contract the example's plan did.
         assertion = let
-          unit = biffTodoAppExample.plan.healthChecks.biff-todo-app;
-          http = biffTodoAppExample.plan.healthChecks.biff-todo-app-http;
+          unit = biffTodoApp.config.ix.healthChecks.biff-todo-app;
+          http = biffTodoApp.config.ix.healthChecks.biff-todo-app-http;
         in
           unit.from
           == "guest"
           && unit.command
           == [
-            (lib.getExe' biffTodoAppExample.config.systemd.package "systemctl")
+            (lib.getExe' biffTodoApp.config.systemd.package "systemctl")
             "is-active"
             "--quiet"
             "biff-todo-app.service"
@@ -6863,6 +6866,29 @@
     cargoUnitPrebuiltScript;
 
   imageRegistryPinTest = mkTest "image-registry-pin" imageRegistryPinAssertions "";
+
+  # The namespace graph `nix-clj-unit` renders from the real Biff todo-app
+  # tree, diffed against a committed golden. 16 namespaces with real edges
+  # between them, which is the only tree in this repo where the Clojure unit
+  # graph is more than one node.
+  #
+  # It lives here rather than as a `#[test]` in the crate because cargo-unit
+  # scopes each crate's source to its own package directory, so
+  # packages/biff/todo-app/src is not reachable from a test derivation
+  # (ENG-10990). The crate's own tests cover the parsing shapes against
+  # synthetic trees; this covers the one real tree.
+  cljUnitTodoAppGraphTest =
+    pkgs.runCommand "ix-test-clj-unit-todo-app-graph" {
+      nativeBuildInputs = [pkgs.diffutils];
+      strictDeps = true;
+    } ''
+      # Rendered from inside the tree so the recorded paths are relative,
+      # which is what makes a golden comparison stable across store paths.
+      cd ${paths.packagesRoot + "/biff/todo-app"}
+      ${lib.getExe repoPackages.nix-clj-unit} render --src src --out "$TMPDIR/graph.json"
+      diff -u ${./fixtures/clj-unit-todo-app-graph.json} "$TMPDIR/graph.json"
+      mkdir -p "$out"
+    '';
 in {
   inherit
     groupTests
@@ -6878,6 +6904,9 @@ in {
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
+  biffReadingListVm = biffReadingListVmTest;
+  biffTodoAppVm = biffTodoAppVmTest;
+  cljUnitTodoAppGraph = cljUnitTodoAppGraphTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
 
@@ -6891,6 +6920,7 @@ in {
       portableServicesTest
       provenanceTest
       cargoUnitPrebuiltTest
+      cljUnitTodoAppGraphTest
     ]
   );
 }

@@ -3,6 +3,8 @@
   packageRegistry,
   buildIxRustTool,
   cargoUnitFor,
+  cljLockFor,
+  cljUnitFor,
   clippy-src,
   rustWorkspaceFor,
   writeNushellApplication,
@@ -85,6 +87,8 @@ let
       // {
         pkgs = final;
         cargoUnit = cargoUnitFor final;
+        cljLock = cljLockFor final;
+        cljUnit = cljUnitFor final;
         rustWorkspace = rustWorkspaceFor final;
         patchedSrc = ix.patchedSrcFor final;
       };

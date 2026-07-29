@@ -1,9 +1,9 @@
-# Reading List
+# Biff reading list
 
-Reading List is the smallest complete Biff 2 service on Index. Submit a link,
-cross an explicit effect and authorization boundary, and persist it in SQLite
-inside a private VM. The application stays in one namespace so the full request
-path is visible before [Todo App](../todo-app/README.md) splits it into modules.
+A Biff 2 Clojure web application on SQLite, running as a hardened non-root
+systemd service in one private ix VM. Submit a title and a URL and the entry is
+written to `/var/lib/biff-reading-list/reading-list.db`. The VM keeps ix's
+rollback snapshot, so a bad deploy can be rolled back with the database intact.
 
 ## Run
 
@@ -15,55 +15,35 @@ ix port-forward biff-reading-list 8080:8080
 
 Get the repo with `git clone https://github.com/indexable-inc/index`.
 
-Open `http://127.0.0.1:8080`. The page shows a title-and-URL form; saved links
-persist under `/var/lib/biff-reading-list`.
+Open `http://127.0.0.1:8080`.
 
 ## Shape
 
-- [`reading_list.clj`](src/com/example/reading_list.clj) contains the ordered
-  modules, routes, SQLite schema, state transition, and authorization boundary.
-- [`deps.edn`](deps.edn) declares the Clojure closure, while
-  [`deps-lock.json`](deps-lock.json) makes it reproducible in Nix.
-- [`service.nix`](service.nix) runs the package as a hardened non-root service,
-  provides `sqlite3def` from Nix, persists state, and declares health checks.
+[`default.ix`](default.ix) is the whole example. It names the VM and sets
+`services.biff-reading-list.enable = true`. The two pieces it reaches for live
+outside this directory:
 
-Every split Biff library is pinned to revision
-`b3abe5b13824af2f83f89ec31c63a430417ac457`, so the example evaluates against
-one tested API surface.
+- [`modules/services/biff-reading-list`](../../../modules/services/biff-reading-list)
+  is the service. It owns the `biff` system user, the systemd hardening, the
+  claim on port 8080, the two deployment health checks, and the cookie secret
+  generated into the state directory before first start. Set `port` or `host`
+  on the module if 8080 is taken.
+- [`packages/biff/reading-list`](../../../packages/biff/reading-list) is the
+  application, resolved here as `pkgs.biff-reading-list` through the repo
+  overlay. Its README covers the source layout and how to relock dependencies.
 
 ## Verify
 
-```sh
-nix build .#default
-nix shell nixpkgs#clojure nixpkgs#sqldef -c clojure -M:test
-nix build .#checks.x86_64-linux.biff-reading-list-vm -o result-vm
-ls result-vm
-```
-
-The unit tests exercise URL normalization and effect construction. The VM test
-proves that rejected or unauthorized submissions cannot write, titles are HTML
-escaped, duplicate URLs upsert, SQLite stays valid, and both data and the cookie
-secret survive clean and forced service restarts. `result-vm` contains
-`biff-reading-list.html` and `biff-reading-list.db`, never the secret.
-
-The `.ix` output requires `ix` or Index's patched Nix with `wasm-builtin`; stock
-`nix flake check` cannot evaluate it.
-
-After changing dependencies:
+`ix apply` reports the node healthy only once the unit is active and `/`
+answers, so a successful apply already proves both. To look at the state
+directory:
 
 ```sh
-nix run .#deps-lock
-nix build .#default
+ix shell biff-reading-list -- ls -l /var/lib/biff-reading-list
 ```
 
-This is deliberately single-user: `authorize-local-write` accepts every local
-write. Replace it with identity-aware rules before sharing the app. Add
-`biff.graph` or Litestream only when the query or recovery requirements justify
-them.
+`cookie-secret` is written 0400 on first start and reused across restarts, so
+sessions survive a restart of the service.
 
-## Next step
-
-Continue with [Todo App](../todo-app/README.md) for authentication, live query
-updates, background jobs, user isolation, and the admin surface. The
-[parent guide](../README.md) compares both examples and states their shared
-deployment boundary.
+The service authorizes every local write. Treat the VM as single-user and add
+identity-aware rules before putting it anywhere shared.
