@@ -696,8 +696,17 @@ impl MonitorState {
         } else {
             None
         };
+        // The machine field is the empty string for a build running on this
+        // daemon, so an empty value means "no host reported", not "a host
+        // named nothing". This matters because a *remote* build produces two
+        // build activities for one derivation: the local hook goal names the
+        // machine (nix derivation-building-goal.cc:661), and the remote
+        // daemon's own activity, relayed back over the ssh-ng connection,
+        // reports an empty machine (:833) because from where it runs the
+        // builder is local. The relayed one arrives second and carries the
+        // build log, so it must be kept -- but it must not overwrite the host.
         let host = if action.activity_type.code == activity_code::BUILD {
-            text_field(&action.fields, 1)
+            text_field(&action.fields, 1).filter(|host| !host.is_empty())
         } else {
             None
         };
@@ -742,9 +751,19 @@ impl MonitorState {
                 Entry::Occupied(mut entry) => {
                     let node = entry.get_mut();
                     node.activity_id = Some(action.id);
-                    node.host = host;
+                    // Never trade a known builder for an unknown one: the
+                    // second activity of a remote build reports no machine.
+                    if host.is_some() {
+                        node.host = host;
+                    }
+                    // Only a node that was not already running restarts its
+                    // clock. A planned node lights up here and should count
+                    // from now; a running one picking up its relayed second
+                    // activity has been building since its first.
+                    if node.status != BuildStatus::Running {
+                        node.started_at_ms = now_ms;
+                    }
                     node.status = BuildStatus::Running;
-                    node.started_at_ms = now_ms;
                     node.stopped_at_ms = None;
                     node.content_addressed |= content_addressed;
                 }
@@ -2121,6 +2140,41 @@ mod tests {
         assert_eq!(build.status, BuildStatus::Running);
         assert_eq!(build.activity_id, Some(7));
         assert_eq!(build.host.as_deref(), Some("ssh://builder"));
+    }
+
+    /// A remote build emits *two* `actBuild` starts for one derivation, and
+    /// only the first knows where it is running. Captured verbatim from
+    /// `nix build --log-format internal-json` against `ssh-ng://root@vm-builder`
+    /// (hydra, 2026-07-29): the local hook goal announces the machine
+    /// (derivation-building-goal.cc:661), then the remote daemon's own build
+    /// activity is relayed over the ssh-ng connection with an empty machine
+    /// field (:833, where the builder is by definition local to *that* daemon).
+    /// The relayed activity is also the one that carries the build log lines,
+    /// so it cannot simply be ignored.
+    #[test]
+    fn a_relayed_remote_activity_does_not_erase_the_builder_host() {
+        let drv = "/nix/store/nvgp8lh0lap0lsqk0fr89aahsr2bkb2y-nixtop-probe-a.drv";
+        let mut state = MonitorState::default();
+
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{drv}","ssh-ng://root@vm-builder",1,1],"id":351504418471946,"level":3,"parent":0,"text":"building '{drv}' on 'ssh-ng://root@vm-builder'","type":105}}"#
+        ));
+        let started = state.snapshot().builds.remove(0).started_at_ms;
+
+        state.apply_line(&format!(
+            r#"@nix {{"action":"start","fields":["{drv}","",1,1],"id":351504418471959,"level":3,"parent":351504418471941,"text":"building '{drv}'","type":105}}"#
+        ));
+
+        let build = state.snapshot().builds.remove(0);
+        assert_eq!(
+            build.host.as_deref(),
+            Some("ssh-ng://root@vm-builder"),
+            "the relayed activity reports no machine and must not overwrite the one that does"
+        );
+        assert_eq!(
+            build.started_at_ms, started,
+            "the same build restarting its activity must not restart its clock"
+        );
     }
 
     #[test]
