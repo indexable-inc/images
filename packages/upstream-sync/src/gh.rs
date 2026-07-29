@@ -374,7 +374,7 @@ pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Read> {
             if detail.is_empty() {
                 format!("gh exited {}", res.status)
             } else {
-                detail.clone()
+                detail
             }
         ));
     }
