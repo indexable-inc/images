@@ -2261,8 +2261,22 @@ in {
     # they live here rather than in `packages`, whose names IFD-forbidding
     # evals enumerate (index#4087). The `health-checks{,-zellij}` runners
     # keep their static names in `packages`.
-    examplePackages
-    // healthChecks.lifecyclePackages
+    #
+    # Guarded on `builtins ? wasm`: nix's installable resolution probes
+    # `legacyPackages.<system>.<attr>` for every `nix run` / `nix build` /
+    # `nix eval` against this flake -- even when the attr already resolves
+    # in `packages` -- and the probe forces this set's key set. On a stock
+    # evaluator (no `builtins.wasm`) the converter's guard throw therefore
+    # killed EVERY CLI invocation against the flake, including the
+    # `nix run .#nix-ix` bootstrap `ix apply` / `ix eval` rely on: the
+    # evaluator needed to read the flake was only obtainable by reading the
+    # flake (regression from 9228563b, which turned the fan-out keys
+    # wasm-derived). A stock evaluator only loses attrs whose values it
+    # could never evaluate anyway; nix-ix sees the full set.
+    lib.optionalAttrs (builtins ? wasm) (
+      examplePackages
+      // healthChecks.lifecyclePackages
+    )
     // lib.optionalAttrs (system == "x86_64-linux") {
       kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
         inherit (pkgs.linux_6_12) src;
