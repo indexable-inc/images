@@ -152,6 +152,11 @@
         }
         ++ [
           ./platform.nix
+          # Keeps the system bus off the `Requires=` end of a mount unit,
+          # so a switch that removes one does not stop the bus it is
+          # issuing its own jobs over (ENG-11080). Its own file because
+          # the VM test that proves it cannot import platform.nix.
+          (paths.modules + "/system/dbus-survives-mount-removal.nix")
           ./oci-layer.nix
           ./cas-layer.nix
           # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

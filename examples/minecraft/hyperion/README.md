@@ -229,13 +229,45 @@ journal, and byte-for-byte the same on proxy-1 one second later:
     15:04:29 systemd[1]: Unmounted /tmp.
              (silence)
 
-Diffing the running system against the target system found the cause in one
+Diffing the running system against the target system found half the cause in one
 comparison: `tmp.mount` is present in the old system and **absent** in the new
-one. `switch-to-configuration` correctly stops a unit the new configuration no
-longer declares -- but `local-fs.target` depends on it, so stopping it cascades
-to D-Bus and to everything ordered after, including the process performing the
-switch. It cannot finish, exits 1, and leaves the services it already stopped
-stopped.
+one, and `switch-to-configuration` correctly stops a unit the new configuration
+no longer declares.
+
+The other half took a reproduction to find, and it is not the `local-fs.target`
+cascade this file first blamed. It is one line in nixpkgs. From the unit systemd
+actually loaded, in a clean NixOS VM with no ix image involved:
+
+    # systemctl show dbus-broker.service -p Requires -p RequiresMountsFor -p WantsMountsFor
+    Requires=tmp.mount
+    RequiresMountsFor=/tmp
+    WantsMountsFor=/tmp /var/tmp
+
+`nixos/modules/services/system/dbus.nix` puts `RequiresMountsFor = [ "/tmp" ]`
+on the system bus, under a comment asking for **ordering**: "We get errors when
+reloading the dbus-broker service if /tmp got remounted after this service
+started". But `RequiresMountsFor=` is `Requires=` plus `After=`, so it also
+tells systemd to stop the bus whenever it stops the mount.
+`switch-to-configuration` is issuing that stop over that bus and is blocked
+waiting for it, so it loses its own connection, exits 1, and leaves the services
+it already stopped stopped.
+
+The ordering that comment wanted was never at risk. `WantsMountsFor=/tmp
+/var/tmp` in the same output is `PrivateTmp=`'s contribution and carries the
+same `After=`, so the nixpkgs line was supplying nothing but the kill switch.
+`modules/system/dbus-survives-mount-removal.nix` drops it to
+`WantsMountsFor=`, and `tests/switch-stops-a-mount-vm.nix` runs a real switch to
+prove the machine survives one -- the first check in this repo that runs a
+switch rather than reading the generation it would build.
+
+That is the catastrophic half fixed, not the whole thing. With the bus alive the
+same switch reaches activation, repairs `/tmp`, and records the new generation,
+but still exits **4** on `Failed to stop tmp.mount` when anything holds /tmp
+open, and the node agent reads any nonzero as a failed apply. Closing that needs
+the generation *before* a mount is retired to carry `X-StopOnRemoval = false` on
+it, because `switch-to-configuration` reads that key from the **running**
+generation and does its `daemon-reload` after the stop phase, so nothing shipped
+later can reach it. ENG-11080 has the measurements.
 
 The cause is index commit `dac64977`, *"image: keep /tmp on the rootfs instead
 of a tmpfs sized by the boot base"*. **That commit is correct and should not be
@@ -246,9 +278,11 @@ giving a measured 1.42 GiB /tmp on a guest reporting 256 GiB, one of them
 already full. This is a **missing migration, not a regression**: removing a
 mount unit is not a safe in-place transition, and nothing noticed that.
 
-ENG-11315, urgent. The property it asks for is one sentence and is checkable
-statically, from the two systems' unit graphs, before any deploy: *a switch must
-never stop a unit the switch itself depends on.*
+ENG-11080, urgent. The property it asks for is one sentence: *a switch must never
+stop a unit the switch itself depends on.* It is also checkable statically, from
+the two systems' unit graphs, before any deploy -- which would be a better gate
+than a VM test, because it can run on every apply rather than on every commit.
+Nothing does that yet.
 
 Three things worth keeping from how this failed:
 
@@ -269,7 +303,7 @@ Three things worth keeping from how this failed:
   `~/.ix/trace/`. Worth knowing before scripting an apply.
 
 **The game version bump is deferred, not done.** The lock change is merged and
-correct; the fleet cannot receive it by the supported path until ENG-11315 is
+correct; the fleet cannot receive it by the supported path until ENG-11080 is
 fixed. Do not retry the apply before then -- it will fail identically, because
 the unit diff is a property of the two closures rather than of timing.
 
@@ -377,12 +411,14 @@ Fixed since this example landed:
 
 Open:
 
-- **`ix apply` cannot update an existing guest in this fleet at all.** ENG-11315,
-  urgent. A switch across index `dac64977` stops `tmp.mount`, which the new
-  system no longer declares, and that cascades through `local-fs.target` to
-  D-Bus and to the process performing the switch. Detail above. Until it is
-  fixed, the only way to move a node to a new build is to recreate it, which is
-  why the newest node in the fleet is the one that was created rather than
+- **`ix apply` still cannot update a guest that is running a tmpfs `/tmp`.**
+  ENG-11080 (ENG-11315 is the same defect). A switch across index `dac64977`
+  stops `tmp.mount`, and nixpkgs' `RequiresMountsFor=/tmp` on the system bus
+  turns that into a dead bus and an aborted switch. Detail above. The bus half
+  is fixed and gated; the exit code is not, and cannot be from the new
+  generation, so a guest already running the tmpfs needs either a runtime
+  drop-in resetting `RequiresMountsFor=` before the apply, or a recreate. That
+  is why the newest node in the fleet is the one that was created rather than
   updated.
 - **Public ingress. This is the only thing left between the fleet and a
   player.** The region's one Additional IP block, `15.204.22.192/26`, is

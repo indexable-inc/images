@@ -48,6 +48,12 @@
       paths
       ;
   };
+  # The only test in the suite that runs a generation switch rather than
+  # reading the generation it would build. Same deal again: qemu VM, so its
+  # own check (`checks.<system>.switch-stops-a-mount-vm`).
+  switchStopsAMountVmTest = import ./switch-stops-a-mount-vm.nix {
+    inherit lib pkgs paths;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
@@ -3567,6 +3573,33 @@
           && base.config.systemd.units."serial-getty@hvc0.service".enable == false;
         message = "ix guests must mask the serial gettys systemd-getty-generator invents for ttyS0 and hvc0; either one left unmasked fails every switch (ENG-11063)";
       }
+      # The other way one apply broke every guest: nixpkgs puts
+      # `RequiresMountsFor = [ "/tmp" ]` on the system bus, which is
+      # `Requires=` plus `After=`, so systemd stops the bus whenever it stops
+      # tmp.mount -- and switch-to-configuration is issuing that very job over
+      # that very bus. Removing the tmpfs killed the switch mid-transaction
+      # and left /tmp at 0555 (ENG-11080).
+      #
+      # `modules/system/dbus-survives-mount-removal.nix` drops the edge to
+      # `WantsMountsFor=`, keeping the ordering and losing the teardown
+      # propagation, and tests/switch-stops-a-mount-vm.nix runs a real switch
+      # to prove that works. What the VM test cannot see is whether an IMAGE
+      # imports the module at all, which is the failure this assertion holds:
+      # the module could be perfect and unreferenced.
+      {
+        # `implementation` is in the assertion rather than assumed: nixpkgs only
+        # attaches `RequiresMountsFor` under the broker, so on the reference
+        # daemon the two checks below would both hold with nothing overridden
+        # and the fix aimed at a unit nobody runs. Then this would pass
+        # vacuously, which is the worse failure -- a guard that reports green
+        # for a reason unrelated to the property.
+        assertion =
+          base.config.services.dbus.implementation
+          == "broker"
+          && base.config.systemd.services.dbus-broker.unitConfig.RequiresMountsFor == []
+          && base.config.systemd.services.dbus-broker.unitConfig.WantsMountsFor == ["/tmp"];
+        message = "ix guests must not give the system bus a Requires-strength dependency on /tmp; a switch that removes the mount then stops the bus it is talking over (ENG-11080)";
+      }
       {
         # The FHS compat heal exists because /bin, /sbin and /usr were baked as
         # absolute symlinks into the closure that built the IMAGE, which the
@@ -6707,6 +6740,7 @@ in {
   provenance = provenanceTest;
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
+  switchStopsAMountVm = switchStopsAMountVmTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
 
