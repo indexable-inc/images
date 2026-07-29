@@ -1943,6 +1943,17 @@
             # 2026-07-22 (index#3981, fixed in #3988). Pure eval; its own
             # check so a regression fails by name, not inside `eval`.
             image-registry-pin = tests.imageRegistryPin;
+            # Holds the premise that `unitHardeningDisable` in
+            # lib/rust/cargo-unit.nix exists for: glibc refuses to fortify
+            # below `-O`, so a dev-profile C dependency probing under `-Werror`
+            # cannot configure. Compiles C both ways and fails if either the
+            # seam stops being sufficient OR the glibc behaviour stops
+            # happening, the second being the one that would otherwise leave
+            # the seam as dead code nobody finds. Its own check because it
+            # invokes a compiler; the eval-only half that asserts the flag
+            # actually reaches the rendered units rides in `eval`. See
+            # tests/dev-profile-fortify.nix.
+            dev-profile-fortify = tests.dev-profile-fortify;
             # The commented knob/env reference at the Home Manager consumption
             # site (index#3710) is asserted, at eval, against what the
             # claude-code wrapper actually accepts (functionArgs plus

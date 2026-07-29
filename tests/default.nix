@@ -6726,6 +6726,13 @@
     cargoUnitPrebuiltScript;
 
   imageRegistryPinTest = mkTest "image-registry-pin" imageRegistryPinAssertions "";
+
+  # Guard for the dev-profile fortify seam in lib/rust/cargo-unit.nix. Two
+  # halves: `premiseStillHolds` compiles C and so is its own check;
+  # `wiringReachesUnits` is eval-only and joins the aggregate below.
+  devProfileFortifyTest = import ./dev-profile-fortify.nix {
+    inherit lib pkgs ix;
+  };
 in {
   inherit
     groupTests
@@ -6744,6 +6751,7 @@ in {
   switchStopsAMountVm = switchStopsAMountVmTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
+  dev-profile-fortify = devProfileFortifyTest.premiseStillHolds;
 
   # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.
@@ -6755,6 +6763,7 @@ in {
       portableServicesTest
       provenanceTest
       cargoUnitPrebuiltTest
+      devProfileFortifyTest.wiringReachesUnits
     ]
   );
 }
