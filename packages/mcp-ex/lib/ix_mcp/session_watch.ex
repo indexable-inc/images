@@ -122,17 +122,21 @@ defmodule IxMcp.SessionWatch do
           ""
       end
 
+    meta = %{
+      "source" => "requests",
+      "event" => Atom.to_string(event.event),
+      "request" => Integer.to_string(event.request_id),
+      "kind" => Atom.to_string(event.kind),
+      "session" => label,
+      "level" => "info"
+    }
+
+    # An adhoc request has no ref; the key is omitted rather than sent empty.
+    meta = if event.ref, do: Map.put(meta, "ref", event.ref), else: meta
+
     Notifier.channel(
       "request #{event.event}: ##{event.request_id} #{what} by session #{label}#{detail}",
-      %{
-        "source" => "requests",
-        "event" => Atom.to_string(event.event),
-        "request" => event.request_id,
-        "kind" => Atom.to_string(event.kind),
-        "ref" => event.ref,
-        "session" => label,
-        "level" => "info"
-      }
+      meta
     )
   end
 
@@ -147,7 +151,7 @@ defmodule IxMcp.SessionWatch do
       %{
         "source" => "sessions",
         "from" => from,
-        "from_id" => message.from_session,
+        "from_id" => Integer.to_string(message.from_session),
         "to" => scope,
         "level" => "info"
       }

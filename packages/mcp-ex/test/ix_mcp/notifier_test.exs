@@ -97,7 +97,7 @@ defmodule IxMcp.NotifierTest do
     assert content =~ a
     assert content =~ b
     assert content =~ "went sideways"
-    assert meta["digest"] == 2
+    assert meta["digest"] == "2"
     # One failure makes the whole digest loud.
     assert meta["severity"] == "failure"
     refute_receive {:mcp_send, _}, 400
@@ -149,7 +149,7 @@ defmodule IxMcp.NotifierTest do
 
     assert_receive {:mcp_send, %{"params" => %{"content" => content, "meta" => meta}}}, 3_000
     assert content =~ id
-    assert meta["watch"] == 1
+    assert meta["watch"] == "1"
     assert meta["severity"] == "info"
 
     # The row is the owning session's to deliver and ack, not the watcher's.
@@ -188,6 +188,54 @@ defmodule IxMcp.NotifierTest do
     assert_receive {:mcp_send,
                     %{"params" => %{"meta" => %{"severity" => "info", "source" => "test"}}}},
                    1_000
+  end
+
+  # The client renders meta as tag attributes and drops any event carrying a
+  # value it cannot render, saying nothing to the sender: an integer count or
+  # a nil ref cost the whole notification. Three of the kernel's own frames
+  # shipped that way -- the coalesced digest, the reconnect replay, and every
+  # cross-session watch hit -- so the shape is asserted here, not assumed.
+  test "channel refuses a meta value the wire cannot carry" do
+    register_transport()
+
+    assert_raise ArgumentError, ~r/meta values must be strings/, fn ->
+      Notifier.channel("counted", %{"source" => "test", "digest" => 2})
+    end
+
+    assert_raise ArgumentError, ~r/meta values must be strings/, fn ->
+      Notifier.channel("absent ref", %{"source" => "test", "ref" => nil})
+    end
+
+    refute_receive {:mcp_send, _}, 200
+  end
+
+  test "every frame the notifier sends carries string meta values" do
+    %{session_id: own} = Session.ids()
+    register_transport()
+
+    a = ledger_job(own, "wire a")
+    b = ledger_job(own, "wire b")
+    {:notify, outbox_a} = ActionLog.finish_job(a, :done, ":a")
+    {:notify, outbox_b} = ActionLog.finish_job(b, :done, ":b")
+    Notifier.publish(outbox_a)
+    Notifier.publish(outbox_b)
+
+    assert_receive {:mcp_send, %{"params" => %{"meta" => digest}}}, 2_000
+    assert_wire_meta(digest)
+
+    # The replay digest a reconnecting transport gets is the same shape.
+    replayed = ledger_job(own, "wire replayed")
+    {:notify, _outbox} = ActionLog.finish_job(replayed, :done, ":c")
+    register_transport()
+
+    assert_receive {:mcp_send, %{"params" => %{"meta" => replay}}}, 2_000
+    assert_wire_meta(replay)
+  end
+
+  defp assert_wire_meta(meta) do
+    for {key, value} <- meta do
+      assert is_binary(value), "meta #{inspect(key)} is #{inspect(value)}, not a string"
+    end
   end
 
   # Register the test process as this session's transport and sync on the

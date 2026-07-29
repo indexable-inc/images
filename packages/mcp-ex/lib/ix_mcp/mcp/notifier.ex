@@ -89,16 +89,47 @@ defmodule IxMcp.MCP.Notifier do
     GenServer.call(__MODULE__, {:watch, watcher_session_id, target})
   end
 
+  @typedoc """
+  Wire meta: string keys to string values, no exceptions. A key with nothing
+  to say is left out, never sent as nil.
+  """
+  @type meta :: %{optional(String.t()) => String.t()}
+
   @doc """
   Push one event into the connected Claude session. `content` becomes the
   body of the `<channel>` tag the client injects; each `meta` entry becomes
-  a tag attribute, so values must be short scalars. `severity` defaults to
+  a tag attribute, so values are short strings. `severity` defaults to
   `"info"`; pass `"failure"` for events a harness should render loudly.
   """
-  @spec channel(String.t(), %{optional(String.t()) => String.t() | number()}) :: :ok
+  @spec channel(String.t(), meta()) :: :ok
   def channel(content, meta) do
     meta = Map.put_new(meta, "severity", "info")
-    notify("notifications/claude/channel", %{"content" => content, "meta" => meta})
+
+    notify("notifications/claude/channel", %{
+      "content" => content,
+      "meta" => strings_only!(meta, content)
+    })
+  end
+
+  # The client parses meta as string-to-string and drops the whole event on
+  # anything else -- an integer or a nil costs the notification, and nothing
+  # reaches the sender to say so: the ledger row is written and acked, the
+  # session simply never hears. Raising puts the failure at the producer's
+  # own call site, where its test sees it, rather than in an operator's
+  # missing wake. Raised in the caller's process on purpose: the Notifier
+  # holds every session's coalesce buffer and its transport registry, so a
+  # crash there would silence more than the one bad event.
+  @spec strings_only!(meta(), String.t()) :: meta()
+  defp strings_only!(meta, content) do
+    case Enum.reject(meta, fn {_key, value} -> is_binary(value) end) do
+      [] ->
+        meta
+
+      bad ->
+        raise ArgumentError,
+              "channel meta values must be strings, got #{inspect(Map.new(bad))} " <>
+                "on #{inspect(String.slice(content, 0, 60))}"
+    end
   end
 
   @spec notify(String.t(), map()) :: :ok
@@ -341,7 +372,7 @@ defmodule IxMcp.MCP.Notifier do
 
         meta = %{
           "source" => "jobs",
-          "replay" => length(rows),
+          "replay" => Integer.to_string(length(rows)),
           "severity" => severity(rows)
         }
 
@@ -395,14 +426,20 @@ defmodule IxMcp.MCP.Notifier do
       "severity" => severity([row])
     }
 
-    {content, if(kind == :watch, do: Map.put(meta, "watch", 1), else: meta)}
+    {content, if(kind == :watch, do: Map.put(meta, "watch", "1"), else: meta)}
   end
 
   defp render_entries(entries) do
     rows = Enum.map(entries, & &1.row)
     lines = Enum.map_join(rows, "\n", &("- " <> line_of(&1)))
     content = "#{length(rows)} job(s) finished:\n" <> lines
-    {content, %{"source" => "jobs", "digest" => length(rows), "severity" => severity(rows)}}
+
+    {content,
+     %{
+       "source" => "jobs",
+       "digest" => Integer.to_string(length(rows)),
+       "severity" => severity(rows)
+     }}
   end
 
   defp line_of(row) do
