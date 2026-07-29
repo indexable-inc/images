@@ -814,7 +814,9 @@
         surface. Open it from a kernel cell with
         `Dashboard.open("<id>")`, which serves the document and returns
         its browser URL; `Dashboard` is in the workspace prelude, so a
-        cell needs no other setup. Publish each section as a pane:
+        cell needs no other setup. Its source is
+        `packages/mcp-ex/lib/ix_mcp/dashboard.ex`. Publish each section as
+        a pane:
         `Dashboard.html(doc, pane, title, markup)` for prose and layout,
         `Dashboard.data(doc, pane, title, renderer, term)` for
         structured results. Publishing a pane id again replaces that
@@ -893,7 +895,13 @@
         statements after rehydrate. A pane republished under the same id
         is what a promote used to be. The document is editable by the
         reader, which mkapp pages were not, so the question you want
-        answered next can be answered in place. `IxMcp.Serve` only ever
+        answered next can be answered in place. Naming where `Dashboard`
+        lives absorbs index#4374, which asked the same of `mkapp` on the
+        same day and would otherwise have been closed on timing: a rule
+        that names a thing you cannot find from its name is the complaint,
+        and it outlived the tool that prompted it. `Dashboard` needs no
+        `nix run` and no path, so the source location was the only gap.
+        `IxMcp.Serve` only ever
         served mkapp scaffolds and is sequenced to follow, once dashboard
         can carry a response on its own; the rule points at dashboard now
         either way, so nothing here waits on that.
