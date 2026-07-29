@@ -42,11 +42,11 @@ def revision_data(git_dir: Path) -> list[dict]:
     revs = git_dir / "revs"
     if not revs.is_dir():
         fail(f"{revs} does not exist")
-    records = []
-    for path in sorted(revs.iterdir()):
-        if path.is_file():
-            records.append(json.loads(path.read_text()))
-    return records
+    return [
+        json.loads(path.read_text())
+        for path in sorted(revs.iterdir())
+        if path.is_file()
+    ]
 
 
 def resolve_commit(records: list[dict], token: str) -> str | None:
