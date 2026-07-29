@@ -455,4 +455,71 @@ defmodule IxMcp.FleetAlertsTest do
       assert length(Watch.run_poll("warning", [query_fun: &unreachable/1] ++ opts).announced) == 1
     end
   end
+
+  describe "the disposition table, which is the specification" do
+    # Three bugs came from collapsing "deliberately filtered" and "could not be
+    # attempted" into one "was not announced". These pin all three rows, so a
+    # future edit that re-collapses them fails here rather than in production.
+
+    test "delivered: consumes the fingerprint", %{log: log} do
+      opts = [
+        query_fun: &only_kernel_storage/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
+
+      assert length(Watch.run_poll("warning", opts).announced) == 1
+      assert [%{predicate: "kernel_storage"}] = ActionLog.fleet_alerts_seen(log)
+      # ...and does not announce twice.
+      assert Watch.run_poll("warning", opts).announced == []
+    end
+
+    test "filtered by the level floor: consumes, so lowering the floor cannot replay it",
+         %{log: log} do
+      opts = [query_fun: &only_oom/1, action_log: log, notify: fn _ -> :ok end, deliverable: true]
+
+      # oom_burst is a warning; a critical floor drops it.
+      assert Watch.run_poll("critical", opts).announced == []
+      assert [%{predicate: "oom_burst"}] = ActionLog.fleet_alerts_seen(log)
+
+      assert Watch.run_poll("warning", opts).announced == [],
+             "a deliberately filtered hit must not come back when the floor drops"
+    end
+
+    test "could not be attempted: does NOT consume, so it still announces later",
+         %{log: log} do
+      opts = [query_fun: &only_kernel_storage/1, action_log: log, notify: fn _ -> :ok end]
+
+      assert Watch.run_poll("warning", Keyword.put(opts, :deliverable, false)).announced == []
+
+      assert ActionLog.fleet_alerts_seen(log) == [],
+             "nothing was attempted, so nothing may be recorded"
+
+      assert length(Watch.run_poll("warning", Keyword.put(opts, :deliverable, true)).announced) ==
+               1
+    end
+
+    test "the three rows are genuinely different, not two spellings of one", %{log: log} do
+      # Same hit, same absence of an announcement, opposite ledger effects.
+      filtered = [
+        query_fun: &only_oom/1,
+        action_log: log,
+        notify: fn _ -> :ok end,
+        deliverable: true
+      ]
+
+      Watch.run_poll("critical", filtered)
+      after_filter = length(ActionLog.fleet_alerts_seen(log))
+
+      ActionLog.forget_fleet_alerts(:all, log)
+
+      undeliverable = Keyword.put(filtered, :deliverable, false)
+      Watch.run_poll("warning", undeliverable)
+      after_defer = length(ActionLog.fleet_alerts_seen(log))
+
+      assert after_filter == 1, "a filtered hit is consumed"
+      assert after_defer == 0, "an unattempted hit is not"
+    end
+  end
 end

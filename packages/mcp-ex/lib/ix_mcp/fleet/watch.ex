@@ -31,6 +31,17 @@ defmodule IxMcp.Fleet.Watch do
   on the next reconnect, which means the operator who muted a spamming alert
   gets it back a few minutes later and concludes muting does not work.
 
+  ## What the tests cannot see
+
+  The predicates are SQL, and every test here stubs the query function. That
+  makes the query text the one layer nothing looks at, and it is exactly where
+  the worst defect in this module has already hidden once: an over-broad device
+  exclusion left `kernel_storage` matching zero rows in thirty days while its
+  own documented rate claimed one hit a month. **A layer that every test mocks
+  is a layer with no tests.** Two tests in `fleet_alerts_test.exs` therefore
+  assert on the SQL text itself rather than on values fed around it, and any
+  new predicate should get the same treatment.
+
   ## Deduplication
 
   A condition that keeps being true is not news twice. Each hit carries a
@@ -394,18 +405,31 @@ defmodule IxMcp.Fleet.Watch do
         {_id, {:error, _reason}} -> []
       end)
 
-    # Nothing is recorded as seen unless it can actually be delivered. The
-    # fingerprint write is durable and one-way, so recording it while no
-    # transport is attached would bury the fault forever -- the fleet path has
-    # no outbox replay the way jobs do (#3839), so "announced" here has to mean
-    # announced. With no listener we simply do not decide, and the next poll
-    # sees the same fault fresh.
-    if deliverable do
-      decide(hits, threshold, log, notify, errors)
-    else
-      %{announced: [], suppressed: 0, errors: errors}
-    end
+    dispose(hits, threshold, log, notify, errors, deliverable)
   end
+
+  @typedoc """
+  What should happen to one hit, and the distinction three separate bugs came
+  from collapsing.
+
+  `fleet_alert_new?/4` is a query that is also a commit: it answers "is this
+  new?" and records "this has been announced" in the same call. So "was not
+  announced" has to be split, because two of these three consume the
+  fingerprint and one must not:
+
+    * `:deliver` -- goes to a transport. Consumes.
+    * `:consume` -- deliberately dropped by the level floor. Consumes, because
+      raising the floor means "stop telling me about these" and lowering it
+      later must not dump the backlog.
+    * `:defer`   -- could not be attempted at all: no transport attached, or a
+      degraded ledger. Must NOT consume. Nothing happened, so nothing is
+      recorded, and the next poll sees the fault fresh.
+
+  Collapsing `:consume` and `:defer` is what produced the level-filter
+  ordering bug, the fingerprint written with no listener, and the degraded log
+  answering "already seen" to everything. They were one defect in three places.
+  """
+  @type disposition :: :deliver | :consume | :defer
 
   # A blind fingerprint has no time bucket, so without this a second outage is
   # silent forever: the heartbeat and anomaly paths deliberately swallow their
@@ -415,35 +439,51 @@ defmodule IxMcp.Fleet.Watch do
     if errors == [], do: ActionLog.forget_fleet_alerts("observability_blind", log)
   end
 
-  defp decide(hits, threshold, log, notify, errors) do
+  # Every hit routes through one classification rather than three guards in
+  # three places. The table in the disposition typedoc is the specification;
+  # this is it, executable.
+  defp dispose(_hits, _threshold, _log, _notify, errors, false = _deliverable) do
+    # Nothing can be attempted, so nothing is classified and nothing is
+    # recorded. The fleet path has no outbox replay the way jobs do (#3839),
+    # so a fingerprint written with no listener buries the fault forever.
+    %{announced: [], suppressed: 0, errors: errors}
+  end
+
+  defp dispose(hits, threshold, log, notify, errors, true = _deliverable) do
     rearm_blind(errors, log)
-    # Newness is decided for EVERY hit, before the level filter, so that
-    # raising the floor and later lowering it cannot replay a backlog of faults
-    # the operator already lived through. The previous version filtered first
-    # and the comment claiming otherwise sat directly above the bug.
-    {fresh, suppressed} =
-      Enum.split_with(
-        hits,
-        &ActionLog.fleet_alert_new?(&1.fingerprint, &1.predicate, &1.summary, log)
-      )
+    # Newness is asked for EVERY hit, before the level floor is applied, so
+    # that raising the floor and later lowering it cannot replay a backlog the
+    # operator already lived through. Filtering first is the ordering bug this
+    # replaced, and the comment claiming otherwise sat directly above it.
+    classified =
+      Enum.map(hits, fn hit ->
+        if ActionLog.fleet_alert_new?(hit.fingerprint, hit.predicate, hit.summary, log) do
+          {classify(hit, threshold), hit}
+        else
+          # Already announced on an earlier poll: still true, not still news.
+          {:consume, hit}
+        end
+      end)
 
-    # "I cannot see the fleet" is exempt from the level floor. It is a warning
-    # so that ordinary noise-reduction does not treat it as an outage, but the
-    # natural response to noise -- raise the floor to error -- must not be the
-    # thing that hides blindness.
-    announce_now =
-      Enum.filter(
-        fresh,
-        &(&1.predicate == "observability_blind" or at_or_above?(&1.level, threshold))
-      )
-
-    if announce_now != [], do: notify.(announce_now)
+    announced = for {:deliver, hit} <- classified, do: hit
+    if announced != [], do: notify.(announced)
 
     %{
-      announced: announce_now,
-      suppressed: length(suppressed) + length(fresh) - length(announce_now),
+      announced: announced,
+      suppressed: Enum.count(classified, &match?({:consume, _}, &1)),
       errors: errors
     }
+  end
+
+  # "I cannot see the fleet" ignores the level floor. It is a `warning` so that
+  # ordinary noise-reduction does not read it as an outage, but the natural
+  # response to noise -- raise the floor to `error` -- must not be the thing
+  # that hides blindness.
+  @spec classify(map(), String.t()) :: disposition()
+  defp classify(%{predicate: "observability_blind"}, _threshold), do: :deliver
+
+  defp classify(hit, threshold) do
+    if at_or_above?(hit.level, threshold), do: :deliver, else: :consume
   end
 
   # Whether any transport is attached to receive a channel event. Tests inject
