@@ -132,6 +132,24 @@ defmodule IxMcp.MCP.Notifier do
     end
   end
 
+  @doc """
+  How many transports are attached right now.
+
+  Fleet alerts (ENG-11209) ask before writing their durable "already
+  announced" fingerprint: unlike a job finish, a fleet hit has no outbox row,
+  so recording it with nobody listening would bury the fault permanently
+  rather than replay it on reconnect.
+  """
+  @spec transports() :: non_neg_integer()
+  def transports do
+    case Process.whereis(__MODULE__) do
+      nil -> 0
+      pid -> GenServer.call(pid, :transport_count)
+    end
+  catch
+    :exit, _reason -> 0
+  end
+
   @spec notify(String.t(), map()) :: :ok
   def notify(method, params) do
     case Process.whereis(__MODULE__) do
@@ -174,6 +192,10 @@ defmodule IxMcp.MCP.Notifier do
   end
 
   @impl true
+  def handle_call(:transport_count, _from, state) do
+    {:reply, map_size(state.transports), state}
+  end
+
   def handle_call({:watch, watcher, target}, _from, state) do
     watches =
       Map.update(state.watches, watcher, add_watch(empty_watch(), target), &add_watch(&1, target))

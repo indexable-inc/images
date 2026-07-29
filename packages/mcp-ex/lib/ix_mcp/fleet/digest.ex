@@ -81,7 +81,13 @@ defmodule IxMcp.Fleet.Digest do
 
   alias IxMcp.Fleet.ClickHouse
 
-  @notable ~w(warning warn error crit alert emerg)
+  # The fleet's journal uses "warn", not "warning" -- verified against
+  # logs.journald_logs, whose only levels are info, notice, warn, error, crit,
+  # debug and alert. Carrying both spellings meant render/1 could print
+  # "5 warnings, 3 warnings", and it is what forced the one-way mapping in
+  # Watch.drop_muted_levels/2. The mute id stays "digest:warning" because that
+  # is what an operator types; the mapping happens there, once.
+  @notable ~w(warn error crit alert emerg)
 
   # Quantile defining "out of band". Chosen for its measured consequence --
   # 10.3 lines a day -- rather than for looking principled.
@@ -105,7 +111,6 @@ defmodule IxMcp.Fleet.Digest do
           minute: String.t(),
           count: non_neg_integer(),
           threshold: float(),
-          hour: non_neg_integer(),
           hosts: [{String.t(), non_neg_integer()}]
         }
 
@@ -197,12 +202,42 @@ defmodule IxMcp.Fleet.Digest do
     )
     """
 
+    # A threshold of 0.0 disables detection for the whole hour, because
+    # `judge/2` requires `threshold > 0`. So a missing or unparseable answer
+    # must be an error, never a number: decaying to 0.0 would read as "nothing
+    # was out of band this hour" when what happened is that we never looked.
     case query_fun.(sql) do
-      {:ok, [%{"threshold" => t} | _]} -> {:ok, as_float(t)}
-      {:ok, _empty} -> {:ok, 0.0}
+      {:ok, [%{"threshold" => t} | _]} when is_number(t) -> {:ok, t * 1.0}
+      {:ok, [%{"threshold" => t} | _]} when is_binary(t) -> parse_threshold(t, hour)
+      {:ok, [%{"threshold" => nil} | _]} -> {:error, no_history(hour)}
+      {:ok, []} -> {:error, no_history(hour)}
+      {:ok, other} -> {:error, "unexpected threshold row for hour #{hour}: #{inspect(other)}"}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp no_history(hour),
+    do: "no p#{@anomaly_quantile * 100} for hour #{hour}: no journal history in the last 7 days"
+
+  defp parse_threshold(text, hour) do
+    case Float.parse(text) do
+      {value, _rest} -> {:ok, value}
+      :error -> {:error, "unparseable threshold #{inspect(text)} for hour #{hour}"}
+    end
+  end
+
+  @doc """
+  The clock hour the next `check_anomaly/2` will measure.
+
+  Not `DateTime.utc_now().hour`: the window is the last COMPLETE minute, so at
+  HH:00:ss it belongs to HH-1. Scoring it against HH's threshold is wrong 24
+  times a day, deterministically, and wrong by a lot -- hour 1's p99.5 is
+  33,448 against hour 2's 3,121, so the boundary minute is either a guaranteed
+  false alarm or a guaranteed miss depending on which way the step goes.
+  """
+  @spec measured_hour(DateTime.t()) :: non_neg_integer()
+  def measured_hour(now \\ DateTime.utc_now()),
+    do: now |> DateTime.add(-60, :second) |> Map.fetch!(:hour)
 
   @doc """
   Check the last complete minute against `threshold`. `{:ok, nil}` when it is
@@ -246,7 +281,6 @@ defmodule IxMcp.Fleet.Digest do
         minute: rows |> Enum.map(& &1["minute"]) |> Enum.min() |> to_string(),
         count: total,
         threshold: threshold,
-        hour: 0,
         hosts: hosts
       }
     end
@@ -291,18 +325,6 @@ defmodule IxMcp.Fleet.Digest do
   defp as_int(v) when is_binary(v), do: String.to_integer(v)
   defp as_int(v) when is_float(v), do: trunc(v)
   defp as_int(_), do: 0
-
-  defp as_float(v) when is_float(v), do: v
-  defp as_float(v) when is_integer(v), do: v * 1.0
-
-  defp as_float(v) when is_binary(v) do
-    case Float.parse(v) do
-      {f, _rest} -> f
-      :error -> 0.0
-    end
-  end
-
-  defp as_float(_), do: 0.0
 
   @doc """
   The detail behind a heartbeat or an anomaly: what was actually counted in
