@@ -439,17 +439,52 @@ Open:
   edge is unconditional). A recreated guest keeps its tmpfs `/tmp`, gets the
   target build, and is out of the way of this permanently.
 
-- **Nothing in the NixOS configuration appears to control whether guest `/tmp`
-  is a tmpfs.** The currently pinned index rev sets `boot.tmp.useTmpfs = true`
-  and the system it builds contains no `tmp.mount` fragment at all; every
-  guest has a tmpfs `/tmp` regardless, sized like the frozen-percentage cap
-  `dac64977` set out to remove -- 2.1 GiB on `hyperion-game`, 1.4 GiB on
-  `hyperion-proxy-2`, both reporting `MemTotal` 256 GiB. So the mount comes
-  from somewhere outside the configuration (the base image, the host-side VM
-  setup, or the golden snapshot) and nothing here says which. Until that is
-  established, `boot.tmp.useTmpfs` should not be trusted to do anything on a
-  guest, and it is an open question whether `dac64977` has the effect its
-  commit message describes.
+- **`dac64977` did not do what its commit message says, and guest `/tmp` is
+  still a tmpfs with the identical frozen cap.** ENG-11365. The mount is made
+  by ix's injected PID 1, before systemd exists at all:
+  `crates/vm/guest/remote-bootstrap/src/main.rs:257` lists
+  `("tmpfs", "/tmp", "tmpfs")` in `ESSENTIAL_MOUNTS`, with no size option, so
+  the kernel's 50%-of-RAM default is resolved once against the 3 GiB
+  virtio-mem boot base and frozen -- which is exactly the failure `dac64977`
+  set out to remove. Measured, one mount each, no stacking:
+
+      hyperion-game      /tmp tmpfs size=2172796k    MemTotal 256G
+      hyperion-proxy-1   /tmp tmpfs size=1966976k    MemTotal 256G
+      hyperion-proxy-2   /tmp tmpfs size=1491836k    MemTotal 256G
+
+  So index#4332's ENOSPC is unfixed, `boot.tmp.useTmpfs` does not control
+  whether a guest has a tmpfs `/tmp`, and the comment `dac64977` added to
+  `lib/image/platform.nix` ("/tmp lives on the rootfs, like a normal
+  machine") describes behaviour no guest has. What `useTmpfs` still controls
+  is whether the GENERATION declares a `tmp.mount` unit -- which is the whole
+  of this bug, because systemd adopts the existing mount under that unit and
+  a switch that removes the unit unmounts it.
+
+  Corrects an earlier version of this entry that said the pinned index rev
+  sets `useTmpfs = true`. It does not: the example's lock has two `index`
+  nodes and the root maps `index -> index_2` at `57962328`, where the value
+  is `lib.mkDefault false`. `5e3b95c1` is the `hyperion` flake's own
+  transitive `index`, and reading it was reading the wrong node.
+
+- **A transitional generation is constructible, so the upgrade needs no
+  destructive step.** Verified by eval rather than argued: `useTmpfs` is
+  `lib.mkDefault false`, so one plain definition in the fleet's `defaults`
+  wins, and both properties then hold at once -- `tmp.mount` declared, and
+  `modules/system/dbus-survives-mount-removal` in effect.
+
+      apply 1  index input >= 66c0bcca, plus { boot: { tmp: { useTmpfs: true } } }
+      apply 2  drop that line
+
+  Apply 1 removes no unit, so nothing is stopped; mount units are reloaded
+  rather than restarted by switch-to-configuration and `dbus-broker` is
+  `reloadIfChanged`, so the bus is not bounced. Apply 2 then retires the
+  mount with the fix already in the RUNNING generation.
+
+  Note what the currently pinned target is until that happens: `57962328`
+  carries `dac64977` but **not** the bus fix (which landed at `66c0bcca`,
+  15:09 the same day), and its built system still has
+  `dbus-broker.service.d/overrides.conf` containing `RequiresMountsFor=/tmp`.
+  Applying it to an existing guest is the landmine, not a step away from it.
 - **Public ingress. This is the only thing left between the fleet and a
   player.** The region's one Additional IP block, `15.204.22.192/26`, is
   delivered nowhere: OVH reports `routedTo.serviceName = null` for it. The fix
