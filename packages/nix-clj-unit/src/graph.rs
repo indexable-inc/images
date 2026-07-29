@@ -46,12 +46,25 @@ pub fn render(roots: &[PathBuf]) -> Result<Graph> {
 
     let mut namespaces = BTreeMap::new();
     for unit in &units {
-        let requires = internal_requires(unit, &by_namespace);
+        let loads = sorted(unit.requires.iter().cloned());
+        // Graph membership is the ownership boundary. A namespace absent from
+        // the source roots may legitimately come from a jar or git dependency
+        // even when its name shares every segment of an application namespace,
+        // so a common string prefix cannot classify it as a missing source
+        // file. The JVM remains the authority for reporting a truly missing
+        // external namespace, which it does while loading `loads`.
+        let requires = sorted(
+            unit.requires
+                .iter()
+                .filter(|required| by_namespace.contains_key(required.as_str()))
+                .cloned(),
+        );
         namespaces.insert(
             unit.namespace.clone(),
             Namespace {
                 file: unit.source.display_path.clone(),
                 requires,
+                loads,
             },
         );
     }
@@ -149,22 +162,10 @@ fn index_by_namespace(units: &[Unit]) -> Result<BTreeMap<&str, &Unit>> {
     Ok(index)
 }
 
-/// Keep only requires whose namespaces are present in this graph.
-///
-/// Graph membership is the ownership boundary. A namespace absent from the
-/// source roots may legitimately come from a jar or git dependency even when
-/// its name shares every segment of an application namespace, so a common
-/// string prefix cannot classify it as a missing source file. The JVM remains
-/// the authority for reporting a truly missing external namespace during the
-/// unit's `require` step.
-fn internal_requires(unit: &Unit, by_namespace: &BTreeMap<&str, &Unit>) -> Vec<String> {
-    unit.requires
-        .iter()
-        .filter(|required| by_namespace.contains_key(required.as_str()))
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+/// Both edge lists are sorted and deduplicated so the JSON is byte-identical
+/// across runs and a reordered `ns` form does not move a derivation.
+fn sorted(names: impl Iterator<Item = String>) -> Vec<String> {
+    names.collect::<BTreeSet<_>>().into_iter().collect()
 }
 
 fn find_cycle(namespaces: &BTreeMap<String, Namespace>) -> Option<Vec<String>> {
@@ -257,7 +258,7 @@ fn position(text: &str, offset: usize) -> LineColumn {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
+    use super::{Namespace, render};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -282,13 +283,25 @@ mod tests {
             self.directory.path().to_path_buf()
         }
 
-        fn edges(&self) -> BTreeMap<String, Vec<String>> {
+        /// One of the two edge lists per namespace, chosen by `of`.
+        fn lists(
+            &self,
+            of: impl Fn(Namespace) -> Vec<String>,
+        ) -> BTreeMap<String, Vec<String>> {
             render(&[self.root()])
                 .expect("tree should render")
                 .namespaces
                 .into_iter()
-                .map(|(name, entry)| (name, entry.requires))
+                .map(|(name, entry)| (name, of(entry)))
                 .collect()
+        }
+
+        fn edges(&self) -> BTreeMap<String, Vec<String>> {
+            self.lists(|entry| entry.requires)
+        }
+
+        fn loads(&self) -> BTreeMap<String, Vec<String>> {
+            self.lists(|entry| entry.loads)
         }
 
         fn failure(&self) -> String {
@@ -317,34 +330,71 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hyphenated_namespaces_are_found_under_underscored_paths() {
-        let tree = Tree::new(&[
-            (
-                "com/example/todo_app/model/todo.clj",
-                "(ns com.example.todo-app.model.todo (:require [com.example.todo-app.model.tab-state :as t]))",
-            ),
-            (
-                "com/example/todo_app/model/tab_state.clj",
-                "(ns com.example.todo-app.model.tab-state)",
-            ),
-        ]);
-        assert_eq!(
-            tree.edges()["com.example.todo-app.model.todo"],
-            ["com.example.todo-app.model.tab-state"]
-        );
+    /// A two-file tree in which `from` requires `to`, and nothing else.
+    struct EdgeCase {
+        /// What the case is about, printed when its assertion fails.
+        about: &'static str,
+        files: [(&'static str, &'static str); 2],
+        from: &'static str,
+        to: &'static str,
     }
 
+    /// One table rather than a test apiece: the axis under test is how a
+    /// namespace name and its file extension find each other on disk, and every
+    /// case asserts the same single edge over the same shape of graph.
     #[test]
-    fn cljc_sources_are_units_too() {
+    fn a_namespace_is_found_however_its_name_spells_its_path() {
+        let cases = [
+            EdgeCase {
+                about: "hyphens in a name are underscores in its path",
+                files: [
+                    (
+                        "com/example/todo_app/model/todo.clj",
+                        "(ns com.example.todo-app.model.todo (:require [com.example.todo-app.model.tab-state :as t]))",
+                    ),
+                    (
+                        "com/example/todo_app/model/tab_state.clj",
+                        "(ns com.example.todo-app.model.tab-state)",
+                    ),
+                ],
+                from: "com.example.todo-app.model.todo",
+                to: "com.example.todo-app.model.tab-state",
+            },
+            EdgeCase {
+                about: "a .cljc source is a unit, and its `:clj` branch is its edge",
+                files: [
+                    (
+                        "app/core.cljc",
+                        "(ns app.core (:require #?(:clj [app.jvm :as j] :cljs [app.browser :as b])))",
+                    ),
+                    ("app/jvm.cljc", "(ns app.jvm)"),
+                ],
+                from: "app.core",
+                to: "app.jvm",
+            },
+        ];
+
+        for case in cases {
+            let tree = Tree::new(&case.files);
+            assert_eq!(tree.edges()[case.from], [case.to], "{}", case.about);
+        }
+    }
+
+    /// The builder preloads `loads` before compiling and takes its build edges
+    /// from `requires`. Collapsing the two makes `compile` reach an external
+    /// library for the first time with `*compile-files*` bound true, which
+    /// writes that library's classes into the unit's output.
+    #[test]
+    fn loads_keeps_the_external_requires_that_edges_drop() {
         let tree = Tree::new(&[
             (
-                "app/core.cljc",
-                "(ns app.core (:require #?(:clj [app.jvm :as j] :cljs [app.browser :as b])))",
+                "app/core.clj",
+                "(ns app.core (:require [clojure.string :as str] [app.util :as util]))",
             ),
-            ("app/jvm.cljc", "(ns app.jvm)"),
+            ("app/util.clj", "(ns app.util)"),
         ]);
-        assert_eq!(tree.edges()["app.core"], ["app.jvm"]);
+        assert_eq!(tree.edges()["app.core"], ["app.util"]);
+        assert_eq!(tree.loads()["app.core"], ["app.util", "clojure.string"]);
     }
 
     #[test]

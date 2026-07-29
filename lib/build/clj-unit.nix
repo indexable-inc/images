@@ -165,14 +165,21 @@ the value of having a graph at all.
       # has just emitted while compiling the rest of the namespace.
       classpath="${applicationClasspath}${lib.optionalString (applicationClasspath != "") ":"}$unitSource:$out:$(cat ${classpathJars})"
 
-      # Require only this unit's direct dependencies, then compile the target.
+      # Require everything this unit's `ns` form loads, then compile the target.
       # `compile` binds `*compile-files*` true across the transitive load, so
       # compiling straight away makes every library namespace reached from
       # this one compile into `$out` as well: the libraries arrive from jars
       # and git checkouts as source with no class file, or with one at store
       # mtime 1 that ties and loses by the same RT.load rule this file's header
-      # describes. Requiring the target first is also wrong: non-idempotent
+      # describes. Requiring the target itself is also wrong: non-idempotent
       # top-level code would run once in `require` and again in `compile`.
+      #
+      # So this preloads `node.loads`, not `node.requires`. `requires` is the
+      # graph-internal subset that gives this derivation its build edges;
+      # preloading only that leaves the external libraries to be reached for the
+      # first time by `compile`, which writes their classes here and trips the
+      # foreign-class guard below. Measured: `com.example.todo-app.lib.email`
+      # emitted `clojure/tools/logging$call_str$fn__333.class`.
       #
       # Measured before this line existed: one unit held 7244 class files of
       # which exactly one was its own, the 16 units totalled 437 MiB against
@@ -184,7 +191,7 @@ the value of having a graph at all.
       # is written. `compile` then loads this namespace's file directly, and
       # its `ns` form's requires are no-ops against `*loaded-libs*`.
       java -cp "$classpath" clojure.main \
-        -e "(doseq [dependency '${builtins.toJSON node.requires}] (require dependency)) (binding [*compile-path* \"$out\"] (compile '${namespace}))"
+        -e "(doseq [dependency '${builtins.toJSON node.loads}] (require dependency)) (binding [*compile-path* \"$out\"] (compile '${namespace}))"
 
       # The guard has to name this namespace's own class. Checking merely for
       # `*.class` could not fail while the whole library closure was landing
