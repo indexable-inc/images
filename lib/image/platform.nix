@@ -772,6 +772,48 @@ in {
       };
     };
 
+    # No serial login prompt. systemd-getty-generator instantiates a serial
+    # getty for every console in /sys/class/tty/console/active plus the first
+    # virtio console it finds, so an ix guest gets serial-getty@ttyS0 (the
+    # host's DEFAULT_CMDLINE sets `console=ttyS0`,
+    # crates/vm/host/vmm/kvm/src/cmdline.rs) and serial-getty@hvc0 (the
+    # generator probes /sys/class/tty/hvc0, which the virtio-console driver
+    # registers whether or not a host end is attached). Neither device can
+    # carry a login session:
+    #
+    #   * hvc0 is output only. The host drains the transmitq into a per-VM log
+    #     file and deliberately never drains the receiveq, so no keystroke can
+    #     reach a getty there (crates/vm/host/vmm/device/src/virtio/console.rs).
+    #   * ttyS0 carries kernel printk, is captured to a log file and ingested
+    #     into ClickHouse `vm_serial_logs`, and `ix serial` claims it as a
+    #     single-holder attach. A getty would only write its login banner into
+    #     that log.
+    #
+    # Interactive access is ix-console over vsock (port 5001, claimed above),
+    # which allocates its own PTY and wants no getty at all.
+    #
+    # Left in place they do not idle, they fail every switch: serial-getty@
+    # carries `BindsTo=dev-%i.device`, and no .device unit EVER activates in an
+    # ix guest, because `boot.isContainer = true` drops both
+    # systemd-udev-trigger.service and every udev rule, so nothing is ever
+    # tagged `systemd` (ENG-11064 has the measurements; dev-vda.device, the
+    # root disk, reads `tentative` for the same reason). Each job waits out its
+    # 90s JobTimeoutSec and fails, the getty is dependency-failed, and
+    # switch-to-configuration exits 4, so EVERY `ix apply` of a guest reported
+    # failure while having actually switched cleanly (ENG-11063). Same shape as
+    # the modprobe/nftables case in ix#8408.
+    #
+    # `enable = false` renders each instance as a /dev/null symlink in
+    # /etc/systemd/system, which outranks the generator's /run/systemd/generator
+    # copy in systemd's unit load path, so the generator stays free to keep
+    # inventing them. Masking the `serial-getty@.service` template instead
+    # would not work: the generator symlinks straight at the unit file in the
+    # systemd store path, so the instances would still load.
+    systemd.services = {
+      "serial-getty@ttyS0".enable = false;
+      "serial-getty@hvc0".enable = false;
+    };
+
     # Capture native crashes (JVM segfault, Rust panics in extern, anything
     # that takes SIGSEGV/SIGABRT) into /var/lib/systemd/coredump where
     # `coredumpctl list/info/gdb` can find them. Without this, a crashed
@@ -870,6 +912,46 @@ in {
       binsh = lib.mkForce "";
       # astlog-ignore: no-mkforce nixpkgs sets this unconditionally; the image bakes /usr/bin/env (ix#8307)
       usrbinenv = lib.mkForce "";
+
+      # Heal the FHS compat entries when they dangle. An image root can bake
+      # /bin, /sbin and /usr as absolute symlinks into the closure that built
+      # the IMAGE rather than into anything stable. Nothing repoints them on a
+      # switch, and the guest's own nix-gc then collects that closure, so on
+      # any VM that has switched once all three dangle at the same time.
+      # Measured on hyperion-game (2026-07-29), which had switched away from
+      # its image closure and GC'd it:
+      #
+      #   /usr -> /nix/store/fna5ylak...-nixos-system-nixos-26.11.../sw  [DANGLING]
+      #
+      # The consequences are not subtle. /bin/sh stops existing, so every
+      # `#!/bin/sh` script in the guest is broken; systemd-update-done dies on
+      # `Failed to stat /usr/`; and logrotate dies at step NAMESPACE building
+      # its mount namespace. The last two exit a switch 4, which an apply
+      # reports as a failed target (ENG-11063).
+      #
+      # /run/current-system/sw is the stable target: activation repoints it on
+      # every switch and it is itself a GC root, so it cannot go the same way.
+      # Only a symlink that fails to resolve is touched, so a root laid out
+      # with real /bin and /usr directories (oci-layer.nix since ix#8307) is
+      # left exactly as the image built it. /lib is deliberately not in the
+      # list: the host injects the running kernel's module tree at
+      # /lib/modules/<kver> in the rootfs, and a symlink into the system
+      # closure would not carry it (ix toplevels ship no kernel-modules link).
+      #
+      # Activation runs at boot AND during a switch, so an already-booted VM
+      # heals through a plain `ix apply` with no image rebuild and no recreate.
+      fhsCompatLinks = ''
+        heal() {
+          # $1 = FHS entry, $2 = the path it should point at instead.
+          if [ -L "$1" ] && [ ! -e "$1" ]; then
+            echo "platform: $1 dangles, repointing at $2"
+            ln -sfn "$2" "$1"
+          fi
+        }
+        heal /bin /run/current-system/sw/bin
+        heal /sbin /run/current-system/sw/sbin
+        heal /usr /run/current-system/sw
+      '';
     };
 
     system.stateVersion = "25.05";
