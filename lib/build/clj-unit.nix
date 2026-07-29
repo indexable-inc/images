@@ -258,6 +258,12 @@ in {
     // {
       passthru = {
         inherit units graph version;
+        # Exposed for the source-independence gate in tests/, which reads the
+        # builder text of every derivation in the graph and asserts that
+        # neither the package's own source tree nor the repository root
+        # appears in it.
+        inherit src;
+        classpath = classpathJars;
       };
     };
 }

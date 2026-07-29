@@ -40,23 +40,40 @@ means it.
 
 # The lock is a download set, not a classpath
 
-`deps-lock.json` records every artifact `clojure -P` *fetched*, which includes
-versions that lost dependency resolution. A Biff lock carries twelve versions of
-`org/clojure/clojure` (1.10.3 through 1.12.5) and three each of `spec.alpha` and
-`core.specs.alpha`. Putting all of them on a classpath would let Clojure 1.10.3
-shadow the 1.12.5 the project pinned, so `classpathFor` keeps the newest version
-of each `(group, artifact)` coordinate and drops the rest. That is `tools.deps`'
-own tiebreak but not its whole algorithm -- it resolves by top proximity first,
-newest version second -- so a lock whose top-level `deps.edn` deliberately pins
-an *older* version than something transitive requests would resolve differently
-here. Nothing in the lock records the pin. Running `clojure -Spath` against
-`mkDepsCache`'s tree is the exact answer, at the cost of an IFD and clj-nix's
-`git` shim.
+`deps-lock.json` records every artifact `clojure -P` *fetched*, which is a
+superset of any one classpath and says almost nothing about how to build one.
+A Biff lock carries twelve versions of `org/clojure/clojure` (1.10.3 through
+1.12.5) and three each of `spec.alpha` and `core.specs.alpha`, only one of each
+of which wins resolution. For git dependencies it records the checkout but not
+which directories inside it are code, nor the sibling libraries a `:local/root`
+reaches -- Biff's `com.biffweb/sqlite` pulls in `../graph` that way, and nothing
+in the lock hints at it.
 
-The lock says as little about git dependencies: it records the checkout but not
-which directories inside it are code, and not the sibling libraries a
-`:local/root` reaches. `classpathFor` recovers both by reading the checkout's
-own EDN at build time -- see its doc-comment.
+So nothing here decides what belongs on a classpath. `classpathFor` runs
+`tools.deps` against the fetched artifacts, offline, and writes down its answer.
+
+# The classpath is platform-dependent, and should be
+
+`tools.deps` resolves classifier-scoped natives for the platform it runs on, so
+the same lock can produce a different classpath per system. It only does so
+where such an artifact is in play: `reading-list` resolves byte-identically on
+`x86_64-linux` and `aarch64-darwin`, while `todo-app`, which reaches `brotli4j`
+through Jetty, does not.
+
+That dependence is the correct behaviour and is strictly safer than a
+platform-invariant answer. A lock generated on Linux carries
+`brotli4j/native-linux-x86_64` and no `native-osx-aarch64`, so resolving it on
+darwin fails the build with
+
+    Error building classpath. The following artifacts could not be resolved:
+      com.aayushatharva.brotli4j:native-osx-aarch64:jar:1.23.0 (absent):
+      Could not find artifact ... in central (file:///ix-clj-lock-offline)
+
+where a platform-invariant classpath hands the JVM a Linux native it cannot load
+and defers the failure to the first request that touches compression. A lock
+that does not carry the target platform's artifacts refuses to build for that
+platform. Regenerate the lock there, or set `meta.platforms` to the systems its
+lock covers.
 */
 {
   lib,
@@ -78,11 +95,6 @@ own EDN at build time -- see its doc-comment.
   supportedGitFetcher = "pkgs.fetchgit";
 
   jsonFormat = pkgs.formats.json {};
-
-  # A Maven repository path is `<group>/<artifact>/<version>/<file>`, so the
-  # coordinate and the version are the two directories above the file.
-  coordinateOf = path: dirOf (dirOf path);
-  versionOf = path: baseNameOf (dirOf path);
 
   # `mvn-repo` carries a trailing slash and `mvn-path` does not carry a leading
   # one, but the lock format guarantees neither, so normalise both edges.
@@ -131,28 +143,6 @@ own EDN at build time -- see its doc-comment.
     entry = removeAttrs library.entry ["lib"];
     name = lib.strings.sanitizeDerivationName "${baseNameOf library.url}-${library.rev}";
   };
-
-  # Newest version per coordinate, in lock order. See the note on download sets
-  # in this file's header for why this filter has to exist at all.
-  resolvedJarsFor = artifacts: let
-    jars = lib.filter (artifact: lib.hasSuffix ".jar" artifact.path) artifacts;
-    newest =
-      lib.foldl' (
-        chosen: artifact: let
-          coordinate = coordinateOf artifact.path;
-          incumbent = chosen."${coordinate}" or null;
-        in
-          chosen
-          // {
-            "${coordinate}" =
-              if incumbent == null || lib.versionOlder (versionOf incumbent.path) (versionOf artifact.path)
-              then artifact
-              else incumbent;
-          }
-      ) {}
-      jars;
-  in
-    lib.filter (artifact: newest."${coordinateOf artifact.path}".path == artifact.path) jars;
 
   # No `name`: `fetchurl` derives it from the URL basename, which is the Maven
   # file name, and which `lib/build/gradle-fat-jar.nix` -- the repo's other
@@ -275,34 +265,38 @@ own EDN at build time -- see its doc-comment.
     `java -cp "$(cat ${cljClasspath})"`; the store paths inside the file are
     ordinary references, so depending on the file pulls in every jar.
 
-    It is a derivation rather than a Nix string because the git half cannot be
-    known at evaluation time -- see below -- and reading it through IFD would
-    make every consumer's evaluation build a checkout.
+    `tools.deps` does the resolving, not this file. It runs inside the
+    derivation against `mkDepsCache`'s tree, with both `:mvn/repos` pointed at
+    a `file://` path that cannot exist, so a resolution the lock does not fully
+    serve fails here instead of quietly reaching the network for an artifact
+    nothing pinned. There is no second implementation and no fallback: a
+    resolution failure is a build failure naming the artifact Maven could not
+    read.
 
-    Entries are the individual fetch outputs, not paths inside `mkDepsCache`'s
-    tree, so a `.pom`-only change in the lock leaves this file byte-identical
-    and nothing built against it rebuilds. `clojure.jar` comes through here like
-    every other dependency: `pkgs.clojure` ships `clojure-tools.jar` and
-    `exec.jar` but not the compiler.
+    Resolution is a build step rather than an eval-time one because it needs
+    bytes -- the poms in the local repository, and the `deps.edn` files inside
+    the git checkouts. Reading those at eval would mean IFD, so every consumer's
+    evaluation would build the whole dependency closure before it could produce
+    a derivation.
 
-    Git libraries are placed by reading EDN inside the fetched checkout at build
-    time, in [`./clj-lock-paths.clj`](./clj-lock-paths.clj). The lock says where
-    a git dependency came from and nothing about what inside it is code: the
-    `:deps/root` that selects a subdirectory is in the consuming project's
-    `deps.edn`, the `:paths` that select source and resource directories are in
-    that subdirectory's own `deps.edn`, and a library reached by `:local/root`
-    (Biff's `com.biffweb/sqlite` pulls in `../graph` that way) appears in
-    neither the lock nor our `deps.edn`. A missing directory or `deps.edn`
-    fails the build naming the library, the resolved path and the rev.
+    The output holds the individual fetch outputs, resolved through the cache's
+    symlinks, and never a path into the cache tree itself. The derivation is
+    content-addressed for the reason `clj-unit.nix` gives for its units: an edit
+    that changes an input without changing the resolved classpath resolves to
+    the same output path, so nothing downstream rebuilds. The project's own
+    `:paths` come back from `-Spath` as relative entries and are dropped;
+    `clj-unit` puts its own source and resource roots on the classpath.
+    `clojure.jar` arrives like every other dependency, since `pkgs.clojure`
+    ships `clojure-tools.jar` and `exec.jar` but not the compiler.
 
     Arguments:
     - `lock`: path to a `deps-lock.json`.
-    - `depsEdn`: path to the consuming project's `deps.edn`, which is where
-      `:deps/root` lives. Defaults to the `deps.edn` beside the lock.
+    - `depsEdn`: the project `deps.edn` to resolve. Defaults to the one beside
+      the lock.
     - `name`: derivation name.
 
     Returns a derivation whose output is that one file, with `passthru.lock`
-    and `passthru.mvnJars` (the resolved jar derivations, known at eval time).
+    and `passthru.cache`.
     */
     classpathFor = {
       lock,
@@ -310,32 +304,116 @@ own EDN at build time -- see its doc-comment.
       name ? "clj-classpath",
     }: let
       parsed = self.loadLock lock;
-      checkouts = checkoutsFor parsed.gitRepositories;
-      mvnJars = map fetchMvnArtifact (resolvedJarsFor parsed.mvnArtifacts);
-      plan = jsonFormat.generate "${name}-plan.json" {
-        gitLibraries =
-          map (library: {
-            inherit (library) rev;
-            lib = library.library;
-            checkout = "${checkouts."${library.checkout}"}";
-          })
-          parsed.gitLibraries;
-        jars = map (jar: "${jar}") mvnJars;
+      # Path names for build-time diagnostics, with their string context
+      # discarded. A path interpolated into the builder carries the context of
+      # the store path it came from, which inside a flake is the whole
+      # repository source, so a message merely NAMING the lock would make this
+      # derivation depend on every file in the repo. Measured before the fix:
+      # editing one .clj moved all 16 of todo-app's units, because two error
+      # strings mentioned these paths.
+      #
+      # Discarding the context is not enough on its own: the store path is
+      # still IN the string, so the builder's bytes change whenever the
+      # repository's source hash does, and the derivation moves anyway. The
+      # message therefore names the last two segments, which is what a reader
+      # needs and is stable across every unrelated edit.
+      readable = path: let
+        segments = lib.splitString "/" (builtins.unsafeDiscardStringContext (toString path));
+        count = builtins.length segments;
+      in
+        lib.concatStringsSep "/" (lib.sublist (count - 2) 2 segments);
+      # Carve `deps.edn` out as a store path of its own. Interpolating the
+      # path directly would carry the context of whatever store path it came
+      # from, which inside a flake is the whole repository source: an edit
+      # anywhere would then move this derivation, and with it every Clojure
+      # unit that reads the classpath. `builtins.path` keys the input on this
+      # one file's bytes instead. Measured before the fix: editing one .clj
+      # moved all 16 of todo-app's units.
+      projectDeps = builtins.path {
+        name = "${name}-deps.edn";
+        path = depsEdn;
       };
+      # The default name, so a caller that also asks for `mkDepsCache` on this
+      # lock gets the same derivation rather than a second copy of the tree.
+      cache = self.mkDepsCache {inherit lock;};
+      # Every store path this lock pays for. A resolved classpath entry outside
+      # this set is an artifact Maven found somewhere the lock does not
+      # describe, which is the one thing the `file://` repositories cannot rule
+      # out on their own (the local repository is a real directory).
+      fetched = pkgs.writeText "${name}-fetched" (
+        lib.concatMapStringsSep "\n" (artifact: "${artifact}") (
+          map fetchMvnArtifact parsed.mvnArtifacts
+          ++ lib.attrValues (checkoutsFor parsed.gitRepositories)
+        )
+      );
     in
       pkgs.runCommand name {
         __structuredAttrs = true;
-        nativeBuildInputs = [pkgs.babashka];
+        __contentAddressed = true;
+        outputHashAlgo = "sha256";
+        outputHashMode = "recursive";
+        nativeBuildInputs = [pkgs.clojure];
         passthru = {
-          inherit mvnJars plan;
+          inherit cache;
           lock = parsed;
         };
       } ''
         # shell
-        # Not one pipeline: a pipe would report `paste`'s exit code and turn a
-        # failed resolution into an empty classpath.
-        bb ${./clj-lock-paths.clj} ${plan} ${depsEdn} > entries
-        paste -sd: - < entries | tr -d '\n' > "$out"
+        # The CLI writes .cpcache beside deps.edn and wants a HOME, so resolve
+        # from a writable copy rather than from the store path.
+        export HOME="$NIX_BUILD_TOP/home"
+        export CLJ_CACHE="$NIX_BUILD_TOP/cpcache"
+        export CLJ_CONFIG="$HOME/.clojure"
+        export GITLIBS="${cache}/.gitlibs"
+        mkdir -p "$HOME" "$CLJ_CACHE" "$NIX_BUILD_TOP/m2" project
+        cp -rL ${cache}/.clojure "$CLJ_CONFIG"
+        chmod -R u+w "$CLJ_CONFIG"
+        cp ${projectDeps} project/deps.edn
+
+        # Maven creates a directory per coordinate it looks up, including ones
+        # it will not find. Against the read-only store that surfaces as
+        # AccessDeniedException, which buries the real "this artifact is not in
+        # the lock" behind a permissions error. Copying the tree is cheap
+        # (a few hundred symlinks) and lets the resolver report what it could
+        # not read. Copy the CONTENTS: `.m2/repository` is itself a symlink, and
+        # copying it as one leaves every later write aimed back at the store.
+        cp -R ${cache}/.m2/repository/. "$NIX_BUILD_TOP/m2"
+        # Only the directories, and never through a link: `chmod -R` follows
+        # symlinks on BSD, which walks straight back into the store.
+        find "$NIX_BUILD_TOP/m2" -type d -exec chmod u+w {} +
+
+        (
+          cd project
+          clojure -Srepro -Spath -Sdeps '{:mvn/local-repo "'"$NIX_BUILD_TOP"'/m2"
+                                          :mvn/repos {"central" {:url "file:///ix-clj-lock-offline"}
+                                                      "clojars" {:url "file:///ix-clj-lock-offline"}}}'
+        ) > resolved
+
+        tr ':' '\n' < resolved > resolved-lines
+        : > entries
+        while IFS= read -r entry; do
+          # A relative entry is one of the project's own :paths.
+          case "$entry" in
+            /*) ;;
+            *) continue ;;
+          esac
+          target="$(readlink -f "$entry")"
+          suffix="''${target#/nix/store/}"
+          if [ "$suffix" = "$target" ] || ! grep -qxF "/nix/store/''${suffix%%/*}" ${fetched}; then
+            echo "clj-lock: tools.deps resolved $entry to $target, which ${readable lock} did not fetch" >&2
+            exit 1
+          fi
+          printf '%s\n' "$target" >> entries
+        done < resolved-lines
+
+        if [ ! -s entries ]; then
+          echo "clj-lock: tools.deps resolved an empty classpath from ${readable depsEdn}" >&2
+          exit 1
+        fi
+
+        # Not one pipeline: a pipe would report `tr`'s exit code.
+        paste -sd: - < entries > joined
+        tr -d '\n' < joined > "$out"
       '';
 
     /**

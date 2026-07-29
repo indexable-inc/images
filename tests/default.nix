@@ -3933,6 +3933,13 @@
 
     biff-reading-list = [
       {
+        inherit (cljSourceIndependence) assertion;
+        message =
+          "Clojure derivations must not depend on the whole repository source, "
+          + "or one edit rebuilds every namespace unit; offenders: "
+          + lib.concatStringsSep ", " cljSourceIndependence.offenders;
+      }
+      {
         assertion =
           biffReadingListExample.config.networking.hostName
           == "biff-reading-list"
@@ -6866,6 +6873,76 @@
     cargoUnitPrebuiltScript;
 
   imageRegistryPinTest = mkTest "image-registry-pin" imageRegistryPinAssertions "";
+
+  # No Clojure derivation may depend on the whole repository source.
+  #
+  # This is a gate, not a spot check. Three separate times while building
+  # clj-unit, a store path leaked into a derivation and quietly tied every
+  # namespace unit to every file in the repo, so editing one .clj rebuilt all
+  # 16 of todo-app's units instead of the 3 that depend on it. Each leak came
+  # from somewhere different and none of them looked like a dependency:
+  #
+  #   1. a COMMENT inside a Nix indented string that named the source root
+  #      while explaining why the source root must not be an input;
+  #   2. an error message interpolating the lock's path;
+  #   3. the same message after `unsafeDiscardStringContext`, which drops the
+  #      dependency but leaves the store path in the builder's bytes, so the
+  #      derivation still moved whenever the repo's source hash did.
+  #
+  # Reviewing for this by eye does not work: (1) and (3) both read as correct.
+  #
+  # The builder TEXT is what to inspect, not the string context.
+  # `builtins.getContext "${drv}"` sees only the derivation itself, never its
+  # inputs, so it cannot see a leak at all; and leak (3) had no context left
+  # yet still moved the derivation, because the store path was still in the
+  # bytes. A substring check over `buildCommand` catches all three.
+  cljSourceIndependence = let
+    # Two whole-tree paths, both of which a unit must be independent of: the
+    # repository root (what leaked through clj-lock's error messages) and the
+    # package's own filtered source (what leaked through clj-unit's comment).
+    # Both are store paths ending in `-source`, so checking only one of them
+    # misses half the class.
+    #
+    # Context discarded on both, and that is not cosmetic: a plain
+    # `toString` of a source path carries its context into this test's own
+    # derivation, and the eval fails with "the string ... is not allowed to
+    # refer to a store path". The gate against store-path leaks leaks a store
+    # path if you write it the obvious way.
+    forbidden = package:
+      map (path: builtins.unsafeDiscardStringContext (builtins.toString path)) [
+        paths.root
+        package.passthru.src
+      ];
+    leaks = package: drv:
+      lib.any (path: lib.hasInfix path (drv.buildCommand or "")) (forbidden package);
+    # `writeRustApplication` names the launcher through `name`, not `pname`,
+    # so read both or the failure message says `?` and helps nobody.
+    labelOf = package: package.pname or package.name or "unnamed";
+    checked = package:
+      [
+        {
+          label = "${labelOf package} (launcher)";
+          drv = package;
+        }
+        {
+          label = "${labelOf package} (classpath)";
+          drv = package.passthru.classpath;
+        }
+      ]
+      ++ lib.mapAttrsToList (namespace: unit: {
+        label = "${labelOf package}: ${namespace}";
+        drv = unit;
+      }) (package.passthru.units or {});
+    offenders = lib.concatMap (
+      package:
+        map (entry: entry.label) (
+          lib.filter (entry: leaks package entry.drv) (checked package)
+        )
+    ) [repoPackages.biff-reading-list];
+  in {
+    inherit offenders;
+    assertion = offenders == [];
+  };
 
   # The namespace graph `nix-clj-unit` renders from the real Biff todo-app
   # tree, diffed against a committed golden. 16 namespaces with real edges
