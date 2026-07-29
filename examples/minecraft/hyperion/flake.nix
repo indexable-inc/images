@@ -1,5 +1,5 @@
 {
-  description = "ix example: hyperion, one game server behind two proxies";
+  description = "ix example: hyperion, one game server behind three proxies";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -23,13 +23,15 @@
     fleet = index.lib.importIxWasm ./default.ix {inherit index hyperion;};
   in {
     inherit (fleet) nixosConfigurations;
-    # One build for the whole fleet. The three nodes share 99.8% of their
-    # closure, so building them together costs barely more than building one,
-    # and `ix apply` then exports the finished system to each VM rather than
-    # asking three guests to compile the same thing three times:
+    # One build for the whole fleet. The nodes share 99.8% of their closure, so
+    # building them together costs barely more than building one, and `ix apply`
+    # then exports the finished system to each VM rather than asking every guest
+    # to compile the same thing over again. The proxies are `replicas` of one
+    # spec in `default.ix`, so each still needs naming here: raising the count
+    # adds a `-system` attr and an apply target, not a node definition.
     #
-    #   nix build .#hyperion-game-system .#hyperion-proxy-0-system .#hyperion-proxy-1-system
-    #   ix apply .#hyperion-game .#hyperion-proxy-0 .#hyperion-proxy-1
+    #   nix build .#hyperion-game-system .#hyperion-proxy-0-system .#hyperion-proxy-1-system .#hyperion-proxy-2-system
+    #   ix apply .#hyperion-game .#hyperion-proxy-0 .#hyperion-proxy-1 .#hyperion-proxy-2
     #
     # Exposed under every system, not only `x86_64-linux`, because these are
     # x86_64-linux guest systems whatever machine you build them from: the

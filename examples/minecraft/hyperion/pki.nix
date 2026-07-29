@@ -19,23 +19,6 @@
   cfg = config.hyperion.pki;
   dir = "/var/lib/hyperion-pki";
 in {
-  options.hyperion = {
-    gameAddress = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "2604:2dc0:500:8400:45:110a:2e70:881";
-      description = ''
-        The game server's address, pinned into every proxy's hosts file.
-
-        Null means the proxies resolve the game server by name over the group,
-        which is how this is supposed to work and what this fleet does.
-
-        Set it to pin the address instead, which is what a fleet whose
-        proxies live outside the group would need.
-      '';
-    };
-  };
-
   options.hyperion.pki = {
     caKeyFile = lib.mkOption {
       type = lib.types.path;
