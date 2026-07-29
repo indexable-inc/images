@@ -177,6 +177,28 @@ one-concept-one-implementation, git worktrees, delegation through the index
 kernel, no force merges, no em dashes, and more
 (`packages/agent-prompt/rules.nix`). Set to `null` to ship the stock prompt alone.
 
+It covers the main conversation only. A subagent starts on the SDK base prompt
+(`You are a Claude agent, built on Anthropic's Claude Agent SDK.`) plus the body
+of its own `.claude/agents/<name>.md`, so a house rule reaches it only through a
+channel that is not this one. What each channel reaches, measured on 2.1.220
+(index#4339):
+
+- `systemPrompt` here, and output styles: main conversation. A fork
+  (`subagent_type: fork`) is the exception, since it inherits the parent prompt
+  whole.
+- The CLAUDE.md hierarchy (`~/.claude/CLAUDE.md`, project, `CLAUDE.local.md`):
+  main conversation and every subagent, so it is the channel for a rule that
+  must hold everywhere. The built-in `Explore` and `Plan` agents skip it.
+- An agent file's body, and hooks declared in its frontmatter: that one agent.
+  Hooks in a settings file fire everywhere, including inside subagents.
+- `--append-subagent-system-prompt`: every subagent, nested ones included, and
+  not the main conversation. Absent from `claude --help` on 2.1.220, accepted
+  and effective.
+
+`tools:` in an agent file narrows, it never grants: a subagent's list is
+filtered against the parent's, so declaring a tool the session lacks resolves to
+nothing and the spawn is refused.
+
 ### Hooks (`packages/agent/policy/hook-runner.nix`, `default.nix:209-285`)
 
 Lifecycle hooks, all subcommands of one compiled binary (`packages/claude-hooks`)
