@@ -6,13 +6,13 @@
 //! row off would rejoin lines that were never joined and nothing else in the
 //! system would notice.
 
-use ix_vt::{CellWide, Terminal};
+use ix_vt::{CellWide, Terminal, scrollback_bytes_for_lines};
 
 /// Rows the terminal broke because it ran out of columns are marked; the row
 /// the program ended with a newline is not.
 #[test]
 fn soft_wrapped_rows_are_marked_and_hard_ones_are_not() {
-    let mut term = Terminal::new(24, 10, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     // 25 characters across a 10 column grid: two full rows that continue,
     // then five characters that do not.
     term.vt_write(b"abcdefghijklmnopqrstuvwxy");
@@ -29,7 +29,7 @@ fn soft_wrapped_rows_are_marked_and_hard_ones_are_not() {
 /// A line the program ended itself is never marked, however full it is.
 #[test]
 fn an_exactly_full_row_ended_by_a_newline_is_not_wrapped() {
-    let mut term = Terminal::new(24, 10, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     term.vt_write(b"0123456789\r\nnext");
 
     let snap = term.render().expect("render snapshot");
@@ -46,7 +46,7 @@ fn an_exactly_full_row_ended_by_a_newline_is_not_wrapped() {
 /// it, so a reader knows the pair is one character.
 #[test]
 fn a_double_width_character_tags_its_two_cells() {
-    let mut term = Terminal::new(24, 10, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     term.vt_write("漢字".as_bytes());
 
     let snap = term.render().expect("render snapshot");
@@ -69,7 +69,7 @@ fn a_double_width_character_tags_its_two_cells() {
 /// says the program printed a space, and the tag is what says so.
 #[test]
 fn a_double_width_character_that_does_not_fit_leaves_a_spacer_head() {
-    let mut term = Terminal::new(24, 10, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     // Nine narrow characters leave one column, which a kanji cannot use.
     term.vt_write("123456789漢".as_bytes());
 
