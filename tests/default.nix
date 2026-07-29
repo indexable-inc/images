@@ -4142,20 +4142,20 @@
       }
       {
         assertion =
-          biffCombined.config.ix.networking.portClaims.biff-reading-list.port
+          biffCombined.ix.networking.portClaims.biff-reading-list.port
           == 8081
-          && biffCombined.config.ix.networking.portClaims.biff-todo-app.port == 8082
-          && biffCombined.config.systemd.services.biff-reading-list.serviceConfig.User
+          && biffCombined.ix.networking.portClaims.biff-todo-app.port == 8082
+          && biffCombined.systemd.services.biff-reading-list.serviceConfig.User
           == "biff-reading-list"
-          && biffCombined.config.systemd.services.biff-todo-app.serviceConfig.User
+          && biffCombined.systemd.services.biff-todo-app.serviceConfig.User
           == "biff-todo-app";
         message = "both Biff modules should coexist with distinct exposure keys and service identities";
       }
       {
         assertion =
-          lib.last biffReadingListBound.config.ix.healthChecks.biff-reading-list-http.command
+          lib.last biffReadingListBound.ix.healthChecks.biff-reading-list-http.command
           == "http://192.0.2.10:8080/"
-          && lib.last biffTodoAppBound.config.ix.healthChecks.biff-todo-app-http.command
+          && lib.last biffTodoAppBound.ix.healthChecks.biff-todo-app-http.command
           == "http://192.0.2.11:8080/";
         message = "Biff health checks should probe a configured concrete bind address";
       }
