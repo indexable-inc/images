@@ -1,0 +1,13 @@
+---
+id: nix-debugger-skill
+postedAt: 2026-07-29T09:00:00-07:00
+title: "`nix-debugger` skill: find what actually caused the rebuild"
+tags: [agent, skills]
+links:
+  - label: nix-debugger skill
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/nix-debugger/SKILL.md
+---
+
+Agents now carry a house skill for the question "why did this rebuild". It collects the tools that answer it from data that already exists: `nix-dag` scores a build plan from evaluation alone and ranks the nodes whose dependents reach them only through an environment variable holding a store path, `whence` names the .nix line that deployed a file or installed a package with zero eval, `nix log <drv>` shows the whole build log rather than the fixed tail nix prints on failure, and `nix store builds --json` lists every in-flight daemon build machine-wide.
+
+The worked example is a systemd unit that keeps restarting. On hil-compute-2, the cas fabric server unit changed in 34 of the 59 most recent consecutive generation pairs, and 29 of those 34 were byte identical once the store hashes were normalized away. A pure store-path bump and a real config change look the same in `diff` and take completely different fixes, so the skill makes that cut first. The `nixPlanShape` prompt rule points at the skill for the rest of that loop.
