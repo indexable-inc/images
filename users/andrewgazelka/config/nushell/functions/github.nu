@@ -74,8 +74,16 @@ export def glc [
     }
 }
 
-# Get the main branch name (fast, uses local cache)
-export def git_main_branch [] {
+# Get the default branch name (fast, uses local cache)
+#
+# Named for what it reads -- origin/HEAD, which is the remote's *default*
+# branch and is not always called main. The shared abbreviation table
+# (ix/crates/term/config/abbreviations.json) calls it by this name in seven
+# expansions, and ix's own nu helpers
+# (ix/nix/homes/modules/shell/../nushell/helpers.nu) already defined this
+# identical body under it, so one table feeding both panes can only spell it
+# one way. It was `git_main_branch` here until then.
+export def git_default_branch [] {
     # origin/HEAD is a symbolic ref created during `git clone` that points to
     # the remote's default branch. It's stored locally in .git/refs/remotes/origin/HEAD
     # as something like "ref: refs/remotes/origin/main"
