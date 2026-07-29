@@ -774,9 +774,13 @@
       text = ''
         Respond as generative UI, not chat text: for everything, by
         default, one mkapp app per session is the response surface.
-        Scaffold with `mkapp`, serve with `Serve.app` in a kernel cell;
-        the page opens in the terminal split and hot-reloads on every
-        green promote, so never tell the user to refresh. Build the page
+        Scaffold with `nix run .#mkapp -- <dir>`, whose source is
+        `packages/mkapp/` in the index repo; there is no `mkapp` on
+        the path. It prints the app path on stdout. Serve that path
+        with `Serve.app`, `packages/mcp-ex/lib/ix_mcp/serve.ex`, in a
+        kernel cell; the page opens in the terminal split and
+        hot-reloads on every green promote, so never tell the user to
+        refresh. Build the page
         while working, not after: put what you are doing right now and
         why in the store's status field, and give every in-progress step
         its own section marked loading, so the page always shows the work
@@ -843,6 +847,10 @@
         which the asker had proposed. The evidence split was the same
         page: a reboot cleared the stall and proved nothing about its
         cause, since all five hosts ran that kernel and one wedged.
+        Where the two tools live was added 2026-07-29 at the user's
+        request: the rule named `mkapp` and `Serve.app` and neither is
+        findable from its name, since `mkapp` is a flake output rather
+        than a command on the path.
       '';
     };
   }
