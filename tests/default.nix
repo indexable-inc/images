@@ -4637,6 +4637,38 @@
         message = "dev base should enforce root's Claude Code bypass via managed-settings.json";
       }
       {
+        # Channels are LOADED by argv and ALLOWED by policy, and the two sit in
+        # different scopes: `--dangerously-load-development-channels` wires the
+        # transport, while `channelsEnabled` in the managed layer decides
+        # whether a loaded channel may push at all. 2.1.220 blocks on
+        # `e!==null&&e.channelsEnabled!==!0`, so the mere presence of a
+        # managed-settings file turns channels off -- and a managed-settings
+        # file is exactly what every consumer of this render installs. Pin the
+        # key true in both places the render lands, so nothing can go back to
+        # shipping a channel that is loaded but muted.
+        assertion = let
+          policy = homeAgentConfig.programs.claude-code.package.passthru.settingsPolicy;
+          managed =
+            builtins.fromJSON
+            developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+        in
+          policy.channelsEnabled && managed.channelsEnabled;
+        message = "claude-code should enable channels by default through the managed settings render, both in a home configuration and in the dev image";
+      }
+      {
+        # The default is a house default rather than a controlled key, so a host
+        # that must refuse inbound pushes can still say no. Declared through
+        # `defaults` (the extraSettings layer, which outranks the house
+        # posture), it has to reach the render as false; if it could not, the
+        # default would be a lock and not a default.
+        assertion =
+          !(homeAgentHome.extendModules {
+            modules = [{programs.claude-code.defaults.channelsEnabled = false;}];
+          })
+          .config.programs.claude-code.package.passthru.settingsPolicy.channelsEnabled;
+        message = "a host must be able to turn claude-code channels back off through programs.claude-code.defaults";
+      }
+      {
         assertion =
           builtins.elem homeAgentConfig.programs.claude-code.finalPackage homeAgentConfig.home.packages
           && builtins.elem homeAgentConfig.programs.codex.finalPackage homeAgentConfig.home.packages;

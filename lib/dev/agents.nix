@@ -90,6 +90,14 @@ in {
             display = "summarized";
           };
         };
+        # Channels (MCP servers pushing inbound events into a live session) are
+        # gated by a managed-settings key, and the mere existence of THIS file
+        # flips the Console default from on to off, so a dev image that says
+        # nothing here has channels off. Not restated: taken from the wrapper's
+        # own policy render, which is where the house default for this key
+        # lives (packages/claude-code `houseSettingsDefaults`), so the image and
+        # a workstation cannot disagree about it.
+        inherit (pkgs.claude-code.passthru.settingsPolicy) channelsEnabled;
         # Keep session transcripts effectively forever (~2700 years). Claude Code
         # otherwise deletes `~/.claude/projects/**/*.jsonl` after
         # `cleanupPeriodDays` (default 30), the only on-disk record of a run's
