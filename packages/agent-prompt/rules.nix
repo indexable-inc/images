@@ -222,7 +222,8 @@
         trusting a green, name what the no-op path looks like and confirm it
         is not this one: a skipped test that returns Ok, a grep whose subject
         changed shape, a rollup field that reads pending as passing, a
-        verifier absent from the host it was meant to check. Where a check
+        verifier absent from the host it was meant to check, a wrapper
+        reporting its own exit code instead of the command's. Where a check
         can be skipped, make the skip an outcome something counts, never
         silence. Where it reads another tool, read that tool's state and not
         its rendering. Report the share of subjects the check reached and the
@@ -248,6 +249,13 @@
         carry that shape for ClickHouse joins, where an unmatched ASOF row
         fills with zeros rather than nulls, and reporting one number instead
         of two produced three confidently wrong measurements.
+
+        The wrapper clause was added a day later, after two more instances
+        the same afternoon. A background `nix build ... > out 2>&1; echo
+        "rc=$?" >> out` exited 0 while the build inside it exited 1, and the
+        task notification read "completed (exit code 0)"; only reading the
+        file caught it. A runner-liveness check returned 404 identically for
+        a healthy runner and a dead one. Both were greens that meant nothing.
       '';
     };
   }

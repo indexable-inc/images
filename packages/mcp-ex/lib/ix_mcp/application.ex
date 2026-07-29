@@ -8,7 +8,6 @@ defmodule IxMcp.Application do
       ├── IxMcp.Checkpoint      ETS keeper for workspace state (survives Workspace restarts)
       ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
       ├── IxMcp.Jobs.Registry   id -> job process
-      ├── IxMcp.Serve.State     served-app bookkeeping (url, jobs, gate outcome)
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out (+ outbox replay)
       ├── IxMcp.MCP.ClientRequests  server-initiated requests (elicitation) awaiting client replies
       ├── IxMcp.Dashboard.Bridge  dashboard watch streams -> per-viewer outbox notifications
@@ -49,9 +48,6 @@ defmodule IxMcp.Application do
         IxMcp.Checkpoint,
         IxMcp.Workspace,
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},
-        # Serve bookkeeping outlives the jobs it describes (gate results are
-        # read after a serve's jobs die), so it lives here, not in a job.
-        IxMcp.Serve.State,
         # Notifier and Reaper before the job supervisor: a job registers with
         # the reaper and publishes through the notifier, so both must be up
         # before any job can start (#3839).

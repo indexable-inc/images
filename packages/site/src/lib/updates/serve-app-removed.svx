@@ -1,0 +1,41 @@
+---
+id: serve-app-removed
+postedAt: 2026-07-30T09:00:00-07:00
+title: "Serve.app is gone from the kernel prelude"
+tags: [mkapp, dashboard, kernel, agent]
+links:
+  - label: Dashboard
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/dashboard.ex
+---
+
+`IxMcp.Serve` is deleted: `Serve.app/2`, `Serve.status/1`, `Serve.stop/1`,
+`Serve.State` and the alias in the workspace prelude. It served mkapp
+scaffolds and nothing else, and mkapp is already gone.
+
+It was never a general "serve a directory with a check-gated promote". It ran
+`npm run check:staging` and `npm run promote`, polled a `staging/` tree for an
+mtime signature, and preflighted with an error telling you to scaffold with
+`mkapp` first. Every one of those was a template invention.
+
+## Sequenced behind dashboard, not tidied up early
+
+This did not land with the mkapp removal on purpose. A live report page was
+still being served by `Serve` jobs inside a running kernel, and deleting the
+source does not kill running jobs but the next kernel restart does. With
+`Serve.app` gone and dashboard not yet able to carry a response, that would
+have left a window with no working generative-UI surface at all.
+
+`Dashboard.open("<id>")` now serves a document and returns a browser URL,
+`Dashboard.html/4` and `Dashboard.data/5` publish panes into it, and
+`Dashboard` is in the workspace prelude where `Serve` used to be. That is the
+condition this change was waiting on.
+
+## Also: a fifth no-op shape
+
+`noOpChecks` in the house prompt gains one more thing to check for before
+trusting a green: a wrapper reporting its own exit code instead of the
+command's. A background `nix build ... > out 2>&1; echo "rc=$?" >> out` exited
+0 while the build inside it exited 1, and the task notification read
+"completed (exit code 0)". Only reading the file caught it. A sibling case the
+same afternoon: a runner-liveness check whose 404 fires identically for a
+healthy runner and a dead one.
