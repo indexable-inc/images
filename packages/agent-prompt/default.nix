@@ -114,6 +114,7 @@
     "HTML"
     "HTTP"
     "ID"
+    "IP"
     "JS"
     "JSON"
     "OS"
