@@ -16,22 +16,24 @@ defmodule IxMcp.ServeTest do
     end
   end
 
-  describe "open_url_escape/1 (the ix#8185 byte contract)" do
-    test "emits exactly ESC ]5522;open-url;<url> BEL" do
-      assert Serve.open_url_escape("http://hydra:5173/") ==
-               <<0x1B, ?], ?5, ?5, ?2, ?2, ?;>> <>
-                 "open-url;http://hydra:5173/" <> <<0x07>>
-    end
-
-    test "accepts https" do
-      assert Serve.open_url_escape("https://hydra:5173/") ==
-               "\e]5522;open-url;https://hydra:5173/\a"
-    end
-
-    test "rejects non-http(s) schemes" do
+  describe "open_url/1" do
+    test "rejects non-http(s) schemes before anything is run" do
+      # The check that keeps a serve from handing a terminal a `file://` or a
+      # `javascript:` URL. It raises rather than returning an error tuple
+      # because every caller builds the URL itself, so a bad scheme here is a
+      # bug in this module and not a condition to handle.
       for url <- ["file:///etc/passwd", "javascript:alert(1)", "ftp://x/", "hydra:5173"] do
-        assert_raise ArgumentError, ~r/http\(s\)/, fn -> Serve.open_url_escape(url) end
+        assert_raise ArgumentError, ~r/http\(s\)/, fn -> Serve.open_url(url) end
       end
+    end
+
+    test "says which tool is missing rather than reporting success" do
+      # The regression. This module used to write the retired OSC 5522 escape
+      # and return `:ok` however that went, so a serve reported success while
+      # the pane rendered "ixterm is out of date". An answer that names what
+      # was missing is the whole point of the change.
+      assert {:error, reason} = Serve.open_url("http://hydra:5173/", fn _ -> nil end)
+      assert reason =~ "ixterm"
     end
   end
 
