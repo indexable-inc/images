@@ -39,19 +39,7 @@ pub fn parse(src: &str) -> Result<NsForm, ReadError> {
     let name_form = rest
         .next()
         .ok_or_else(|| ReadError::new(0, "`ns` form has no namespace name"))?;
-    let name = name_form
-        .symbol()
-        .ok_or_else(|| {
-            ReadError::new(
-                name_form.offset,
-                format!(
-                    "a namespace name must be a symbol, found {}",
-                    name_form.describe()
-                ),
-            )
-        })?
-        .to_owned();
-    validate_namespace_name(&name, name_form.offset)?;
+    let name = namespace_symbol(&name_form, "a namespace name must be a symbol")?;
 
     let mut requires = Vec::new();
     for clause in rest {
@@ -71,6 +59,21 @@ pub fn parse(src: &str) -> Result<NsForm, ReadError> {
     }
 
     Ok(NsForm { name, requires })
+}
+
+/// Every grammar position that rejects a form reports it the same way: what the
+/// position allows, then `describe()` of what was there instead.
+fn wrong_form(form: &Form, expected: &str) -> ReadError {
+    ReadError::new(form.offset, format!("{expected}, found {}", form.describe()))
+}
+
+/// A namespace name appears in four positions -- the `ns` name, a bare require,
+/// a flat libspec's head, a prefix list's head -- and each one requires the
+/// same thing of it: a symbol that is a well-formed namespace name.
+fn namespace_symbol(form: &Form, expected: &str) -> Result<String, ReadError> {
+    let name = form.symbol().ok_or_else(|| wrong_form(form, expected))?;
+    validate_namespace_name(name, form.offset)?;
+    Ok(name.to_owned())
 }
 
 fn validate_namespace_name(name: &str, offset: usize) -> Result<(), ReadError> {
@@ -107,15 +110,7 @@ fn collect_libspecs(args: &[Form], out: &mut Vec<String>) -> Result<(), ReadErro
                     collect_prefix_list(arg, items, out)?;
                 }
             }
-            _ => {
-                return Err(ReadError::new(
-                    arg.offset,
-                    format!(
-                        "a libspec must be a symbol or a vector, found {}",
-                        arg.describe()
-                    ),
-                ));
-            }
+            _ => return Err(wrong_form(arg, "a libspec must be a symbol or a vector")),
         }
     }
     Ok(())
@@ -144,14 +139,7 @@ fn flat_libspec_name(spec: &Form, items: &[Form]) -> Result<String, ReadError> {
     let head = items
         .first()
         .ok_or_else(|| ReadError::new(spec.offset, "an empty vector is not a libspec"))?;
-    let name = head.symbol().ok_or_else(|| {
-        ReadError::new(
-            head.offset,
-            format!("a libspec must name a namespace, found {}", head.describe()),
-        )
-    })?;
-    validate_namespace_name(name, head.offset)?;
-    Ok(name.to_owned())
+    namespace_symbol(head, "a libspec must name a namespace")
 }
 
 /// `[a.b [c :as x] [d] e]` means `a.b.c`, `a.b.d` and `a.b.e`. Clojure resolves
@@ -165,16 +153,7 @@ fn collect_prefix_list(
     let head = items
         .first()
         .ok_or_else(|| ReadError::new(spec.offset, "an empty vector is not a prefix list"))?;
-    let prefix = head.symbol().ok_or_else(|| {
-        ReadError::new(
-            head.offset,
-            format!(
-                "a prefix list must start with a symbol, found {}",
-                head.describe()
-            ),
-        )
-    })?;
-    validate_namespace_name(prefix, head.offset)?;
+    let prefix = namespace_symbol(head, "a prefix list must start with a symbol")?;
 
     for member in &items[1..] {
         let suffix = match &member.kind {
@@ -195,12 +174,9 @@ fn collect_prefix_list(
                 ));
             }
             _ => {
-                return Err(ReadError::new(
-                    member.offset,
-                    format!(
-                        "a prefix list member must be a symbol or a vector, found {}",
-                        member.describe()
-                    ),
+                return Err(wrong_form(
+                    member,
+                    "a prefix list member must be a symbol or a vector",
                 ));
             }
         };
