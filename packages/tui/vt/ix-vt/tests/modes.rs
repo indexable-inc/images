@@ -3,11 +3,11 @@
 //! needs to decide whether wheel input scrolls scrollback, becomes arrow
 //! keys, or is forwarded to the application as encoded mouse events.
 
-use ix_vt::{MouseReporting, Terminal};
+use ix_vt::{MouseReporting, Terminal, scrollback_bytes_for_lines};
 
 #[test]
 fn mouse_reporting_follows_decset_and_strongest_wins() {
-    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     assert_eq!(term.mouse_reporting().expect("query"), MouseReporting::None);
     assert!(!term.sgr_mouse().expect("query"));
 
@@ -31,7 +31,7 @@ fn mouse_reporting_follows_decset_and_strongest_wins() {
 
 #[test]
 fn alternate_screen_tracks_1049_and_1047() {
-    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     assert!(!term.alternate_screen().expect("query"));
 
     term.vt_write(b"\x1b[?1049h");
@@ -47,7 +47,7 @@ fn alternate_screen_tracks_1049_and_1047() {
 
 #[test]
 fn scrollbar_reports_history_and_bottom() {
-    let mut term = Terminal::new(4, 20, 100).expect("create terminal");
+    let mut term = Terminal::new(4, 20, scrollback_bytes_for_lines(100, 20)).expect("create terminal");
 
     let bar = term.scrollbar().expect("query");
     assert_eq!(bar.len, 4, "viewport height");
@@ -85,7 +85,7 @@ fn scrollbar_reports_history_and_bottom() {
 
 #[test]
 fn bracketed_paste_focus_and_synchronized_output_track_decset() {
-    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     assert!(!term.bracketed_paste().expect("query 2004"));
     assert!(!term.focus_events().expect("query 1004"));
     assert!(!term.synchronized_output().expect("query 2026"));
@@ -105,7 +105,7 @@ fn bracketed_paste_focus_and_synchronized_output_track_decset() {
 
 #[test]
 fn kitty_keyboard_flags_track_csi_u_set_and_push_pop() {
-    let mut term = Terminal::new(24, 80, 1000).expect("create terminal");
+    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     assert!(term.kitty_keyboard_flags().expect("query").is_empty());
 
     // CSI = 5 ; 1 u: set flags to disambiguate + report-alternates.

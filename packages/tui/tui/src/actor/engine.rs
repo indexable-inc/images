@@ -63,7 +63,7 @@ pub fn spawn(
     id: Uuid,
     rows: u16,
     cols: u16,
-    scrollback: usize,
+    scrollback_lines: usize,
     cursor_shape: Arc<SyncRwLock<CursorShape>>,
     app_cursor_keys: Arc<SyncRwLock<bool>>,
 ) -> Result<Sender<EngineRequest>> {
@@ -78,7 +78,7 @@ pub fn spawn(
                     id,
                     rows,
                     cols,
-                    scrollback,
+                    scrollback_lines,
                 },
                 &cursor_shape,
                 &app_cursor_keys,
@@ -116,7 +116,7 @@ struct EngineConfig {
     id: Uuid,
     rows: u16,
     cols: u16,
-    scrollback: usize,
+    scrollback_lines: usize,
 }
 
 /// The engine thread body: create the terminal, report init, then serve
@@ -132,9 +132,13 @@ fn engine_loop(
         id,
         rows,
         cols,
-        scrollback,
+        scrollback_lines,
     } = config;
-    let mut terminal = match ix_vt::Terminal::new(rows, cols, scrollback) {
+    // Rows, converted: ghostty budgets its grid in bytes, so a row count
+    // handed to `Terminal::new` unconverted is silently floored at whatever
+    // the active area needs (ix#9031).
+    let scrollback_bytes = ix_vt::scrollback_bytes_for_lines(scrollback_lines, cols);
+    let mut terminal = match ix_vt::Terminal::new(rows, cols, scrollback_bytes) {
         Ok(terminal) => terminal,
         Err(e) => {
             let _ = init_tx.send(Err(vt_engine_error(id, e)));
