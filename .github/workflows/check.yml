@@ -257,6 +257,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # The gate writes its output to a runner-local file, so a gate that is
+      # killed rather than failed leaves a job log with nothing in it from the
+      # gate at all. check-logged/run.sh traps TERM and INT to print the tail,
+      # but SIGKILL cannot be trapped, and that is the case this upload covers:
+      # without it the only copy is on the runner's filesystem, reachable solely
+      # by someone who can ssh to whichever host took the job.
+      #
+      # The path has to be recomputed here rather than passed out of the action,
+      # because a step that was killed never got to write an output.
+      - name: Upload gate log
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+          run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}"
+          log_root="${IX_CI_RUN_LOG_ROOT:-/var/log/ix-ci/runs}"
+          for candidate in \
+            "${log_root}/${commit}/${GITHUB_WORKFLOW:-local}/${run_tag}.stdout" \
+            "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/index-check-${run_tag}.stdout"; do
+            if [[ -r $candidate ]]; then
+              cp "$candidate" gate-log.txt
+              printf 'collected gate log from %s (%s bytes)\n' "$candidate" "$(wc -c <gate-log.txt)"
+              exit 0
+            fi
+          done
+          printf 'no gate log found; looked in %s and RUNNER_TEMP\n' "${log_root}" >&2
+
+      - name: Upload gate log artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gate-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gate-log.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Keep the existing required context while consuming no second self-hosted
   # runner. The single gate above builds closure roots and checks together;
   # this hosted terminal job fails closed for every non-success conclusion,
