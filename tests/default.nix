@@ -54,6 +54,12 @@
   switchStopsAMountVmTest = import ./switch-stops-a-mount-vm.nix {
     inherit lib pkgs paths;
   };
+  # The one-time recipe for a machine built before that fix, executed rather
+  # than described. Also a qemu VM, so its own check
+  # (`checks.<system>.mount-migration-vm`).
+  mountMigrationVmTest = import ./mount-migration-vm.nix {
+    inherit lib pkgs;
+  };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
   # dependency closure before it can be a reliable CI gate.
@@ -6741,6 +6747,7 @@ in {
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
   switchStopsAMountVm = switchStopsAMountVmTest;
+  mountMigrationVm = mountMigrationVmTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
 

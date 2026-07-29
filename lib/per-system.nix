@@ -1929,6 +1929,11 @@
             # into it, which is the gap ENG-11080 went through. See
             # tests/switch-stops-a-mount-vm.nix.
             switch-stops-a-mount-vm = tests.switchStopsAMountVm;
+            # Runs the one-time sequence a machine built before that fix needs
+            # before it can be updated at all, on a node that deliberately
+            # carries the unfixed dependency. The only check here that gets to
+            # assert the switch exits 0; see tests/mount-migration-vm.nix.
+            mount-migration-vm = tests.mountMigrationVm;
             # Builds the base OCI archive and asserts its baked nix store DB
             # registers the pinned nixpkgs source as valid, so a fresh VM's first
             # `nix` command does not re-copy the tree through VCFS (ix
