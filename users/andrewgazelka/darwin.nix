@@ -53,6 +53,8 @@ in {
       "emacs-app"
       "ghostty"
       "google-chrome"
+      # AI meeting notepad (granola.ai); macOS-only signed app, no Nix package.
+      "granola"
       "helium-browser"
       "linear"
       "lm-studio"
