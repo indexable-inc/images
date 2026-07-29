@@ -63,6 +63,7 @@
     ".wrangler"
     "**/.claude/settings.local.json"
     "**/.claude/worktrees/"
+    "**/.claude/fix"
     "result"
     "target"
     ".vercel"
