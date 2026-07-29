@@ -1,0 +1,55 @@
+---
+id: ix-term-region-env-icons
+postedAt: 2026-07-28T19:45:00-07:00
+title: "A running command's output no longer jumps sideways when it finishes"
+tags: [ix-term, terminal, rendering, environment, fonts]
+links:
+  - label: ix#9009 (live output drawn 24px left of the block it becomes)
+    href: https://github.com/indexable-inc/ix/issues/9009
+  - label: ix#9012 (panes inherit the launching shell's whole environment)
+    href: https://github.com/indexable-inc/ix/issues/9012
+  - label: ix#9015 (geometric shapes and braille fall through to a system font, open)
+    href: https://github.com/indexable-inc/ix/issues/9015
+  - label: ix#9024 (ixterm icon refuses SVG, and the cap refuses an ordinary logo)
+    href: https://github.com/indexable-inc/ix/issues/9024
+  - label: ix#9023 (a declared icon rides inline in every workspace frame, open)
+    href: https://github.com/indexable-inc/ix/issues/9023
+---
+
+Run `git pull` in an ix term shell pane and its output was drawn flush against the left of the pane while it ran, then jumped 24px right the moment it finished. Measured on a running app: the pane's content box starts at x=45 and the block that replaces the live output lands at x=69.
+
+A live external is not drawn in the transcript. `PaneView` stacks a terminal over the pane, the program paints on that, and the captured grid goes into the transcript as an `ExternalOutput` block when it exits. The region's `top` and `height` were already computed so the rows land where the block will; its left edge and width were not.
+
+The width was the expensive half. `Terminal` sent `conn.sendResize` from its own box while `ShellPane` sent `shell_resize` from a probe carrying the 16px output indent, both landed on the same pty in `workspace.rs:1153`, and `shell_resize` also reflows the stored blocks. So a program printed at one column count and its block was laid out again at another: on one pane, 152 columns live against 150 in the block, cell 8.01px. Long lines rewrapped as well as shifting.
+
+`ShellPane`'s `ontail` widened into `onoutputbox`, reporting `{top, left, width}` off the same probe the columns are counted from, and the region is positioned on all three. A region's terminal also drops ghostty's window padding, which never moved the grid -- the grid is absolutely positioned, so it resolves against the padding box -- and only took columns off the size reported to the pty. Mid-stream afterwards, overlay, terminal, grid, probe and block all measure `left 69, width 1202`.
+
+Two things in that area are still wrong and are written into #9009 rather than left implied: a region sits 2px above where its block lands, because the block carries a 2px top margin the region does not model; and a full-pane takeover still has two authorities on the pty's column count, which produces no jump only because a takeover produces no block.
+
+## A pane no longer inherits the agent session that launched the app
+
+`claude` in a pane was printing `Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker`. A pane inherits the server's whole environment and the server inherits the shell that launched the app, so an ix term started from a Claude Code shell carried that run's markers for its whole life and handed them to every tab. On the app in question, `ps -p <app> -wwE` showed `CLAUDE_CODE_CHILD_SESSION=1` and `CLAUDE_CODE_SESSION_ID` for a session in another window, and its `term-nu` had the same set. `CLAUDE_SYS_PROMPT` rode along too, putting one run's system prompt in front of every unrelated program started from any pane.
+
+`AGENT_SESSION_MARKERS` is nine variables that name one running session, removed at both places a pane starts: `Sessions::dressed` for a PTY session and `ShellManager::create` for the nu engine, since a shell pane's externals inherit from the engine rather than through a pts. A named list rather than a `CLAUDE_*` sweep, because `CLAUDE_CODE_DISABLE_*` and friends are the operator's login configuration and mean the same thing in a pane. The cost is that the next such variable leaks until someone adds it, and that is written next to the list.
+
+Verified against a server started with all sixteen `CLAUDE_*` variables set: both a `term-nu` and a `zsh -l` came out with the nine markers absent and the seven configuration variables present, `TERM`, `COLORTERM` and `IX_TERM_SESSION_ID` intact.
+
+The same environment diff also shows `TERM_PROGRAM=ghostty`, `TERM_PROGRAM_VERSION`, four `GHOSTTY_*`, `ATUIN_SESSION`, `ATUIN_HISTORY_ID` and `STARSHIP_SESSION_KEY`, all inherited from the window that launched the app. So a pane still tells every program it is ghostty 1.3.2 and hands out another shell's atuin and starship session ids. Same class, separate decision, in #9012.
+
+## Tab icons take an SVG
+
+`ixterm icon --image logo.png --pane claude` already worked for PNG, JPEG, GIF and WebP. SVG was refused, and `MAX_ICON` was 16 KiB, which turns away an ordinary logo.
+
+SVG had been left out because its safety is a property of the element that draws it and not of the bytes: through `<img>` it is script-disabled and cannot fetch subresources, while inlined as `<svg>` -- which is what somebody reaches for when they want the icon to take `currentColor` -- the same bytes run script in this origin. The comment argued that and nothing enforced it.
+
+So the rule is now a test. `icons.test.ts` reads `PaneIcon.svelte` and fails if a declared icon stops being drawn by an `<img>`, or if an inline `<svg>` or `{@html}` appears in it; dropping SVG again is the other way to satisfy it, and the test says so. Watched fail, then restored. The CLI needed a sniffer for the one format with no magic number: the first tag that names an element has to be `svg`, so an HTML page carrying an inline `<svg>` is not declared one. That clause was broken too, and the eight cases went red on `<?xml version="1.0"?>` ahead of the tag.
+
+`MAX_ICON` is 64 KiB now, with the cost beside it rather than implied: a declared icon rides inside every workspace frame, to every viewer, so ten iconned tabs make a 640 KiB frame on every rename, focus and progress update. #9023 is the shape that removes the ceiling rather than moving it.
+
+## What is not fixed
+
+The TUI bullets are still drawn by a system font. Advance per character at `font-size: 100px` in the terminal's own stack: `M`, `U+2502` and `U+2514` all come out at exactly 60.00, Berkeley Mono's cell; `U+25CB`, `U+25CF`, `U+25C7`, `U+25B8` and `U+26A0` at 60.21, from a face that is none of the three in the stack; and `U+2800`/`U+28FF` at 68.36, 13.9% wider than the cell, which is every spinner in every TUI.
+
+A cmap scan says why. Box drawing is covered 25 by Berkeley and 103 by the supplement, missing none, which is why the connectors look right. Geometric shapes are missing 85 of 96, miscellaneous symbols 253, arrows 102, and braille all 256.
+
+The fix is to draw them into the supplement face at Berkeley's cell, the way box drawing already is, and widen the `unicode-range`. It is not done. `make-supplement-font.py`'s `borrow()` path cannot help, because Symbols Nerd Font Mono has none of these codepoints either, so every one is a new outline. #9015 carries the numbers and the plan.
