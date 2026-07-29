@@ -3587,15 +3587,16 @@
       # imports the module at all, which is the failure this assertion holds:
       # the module could be perfect and unreferenced.
       {
-        # `implementation` is in the assertion rather than assumed: nixpkgs only
-        # attaches `RequiresMountsFor` under the broker, so on the reference
-        # daemon the two checks below would both hold with nothing overridden
-        # and the fix aimed at a unit nobody runs. Then this would pass
-        # vacuously, which is the worse failure -- a guard that reports green
-        # for a reason unrelated to the property.
+        # `enable` and `implementation` are in the assertion rather than
+        # assumed: nixpkgs only attaches `RequiresMountsFor` under the broker,
+        # so on the reference daemon the checks below would hold with nothing
+        # overridden at all and the fix aimed at a unit nobody runs. Then this
+        # would pass vacuously, which is the worse failure -- a guard reporting
+        # green for a reason unrelated to the property. `implementation` alone
+        # is not enough, because it reads "broker" whether or not dbus is on.
         assertion =
-          base.config.services.dbus.implementation
-          == "broker"
+          base.config.services.dbus.enable
+          && base.config.services.dbus.implementation == "broker"
           && base.config.systemd.services.dbus-broker.unitConfig.RequiresMountsFor == []
           && base.config.systemd.services.dbus-broker.unitConfig.WantsMountsFor == ["/tmp"];
         message = "ix guests must not give the system bus a Requires-strength dependency on /tmp; a switch that removes the mount then stops the bus it is talking over (ENG-11080)";

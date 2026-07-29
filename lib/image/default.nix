@@ -156,7 +156,7 @@
           # so a switch that removes one does not stop the bus it is
           # issuing its own jobs over (ENG-11080). Its own file because
           # the VM test that proves it cannot import platform.nix.
-          (paths.modules + "/system/dbus-survives-mount-removal.nix")
+          (paths.modules + "/system/dbus-survives-mount-removal")
           ./oci-layer.nix
           ./cas-layer.nix
           # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

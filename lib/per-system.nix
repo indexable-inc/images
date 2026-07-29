@@ -1923,10 +1923,13 @@
             # tests/minestom-spleef-vm.nix.
             minestom-spleef-vm = tests.minestomSpleefVm;
             # Boots a NixOS VM and runs a real generation switch that removes
-            # a mount unit, asserting the switch returns 0 and leaves a
-            # working machine. Every other check here reads a generation it
-            # would build; this one is the only thing that watches a switch
-            # into it, which is the gap ENG-11080 went through. See
+            # a mount unit, asserting the system bus survives it, activation
+            # runs, the new generation is recorded, and the bus can still be
+            # reloaded afterwards. Deliberately NOT the exit code, which the
+            # test driver makes unreachable for reasons no guest has; the test
+            # says why at length. Every other check here reads a generation it
+            # would build, and this is the only one that watches a switch into
+            # it -- the gap ENG-11080 went through. See
             # tests/switch-stops-a-mount-vm.nix.
             switch-stops-a-mount-vm = tests.switchStopsAMountVm;
             # Builds the base OCI archive and asserts its baked nix store DB
