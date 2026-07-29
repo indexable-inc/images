@@ -418,12 +418,24 @@
         Key upstreams are vendored forks (`lib/fork-packages.nix`). A bug in
         vendored code is ours: patch at the vendor point, never work around
         downstream. The fix reaches consumers only after their lock bump.
+        That list records what has been patched, not what may be. A defect
+        in a compiler, an evaluator, a C library or a kernel is fixed at the
+        layer that owns it, and vendoring something new is an ordinary edit
+        rather than an escalation; its procedure is in that file's header.
+        A workaround downstream leaves the defect in place for every other
+        consumer and hides the evidence that it exists, so where one is
+        right today, name the real fix in the same breath and file it.
       '';
       reason = ''
         Diagnosis ended at "upstream's problem" inside our own forks
         (index#3559, #3566). Authoring mechanics live in fork-patch memories
         and the `jjMegamergeForks` rule (index#3594); the `rebase-patches`
         driver that used to own them went with the megamerge migration.
+        An agent worked around nix dropping a fast-failing derivation's log
+        under a parallel build by moving its check to eval time and filing,
+        though nix is vendored here: the fork list read as a boundary on
+        what may be patched rather than a record of what has been
+        (ENG-11198, 2026-07-29).
       '';
     };
   }
