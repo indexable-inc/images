@@ -135,4 +135,5 @@ changelog. Skip the section entirely for fast-moving packages.
    README.
 4. Mirrored packages: README plus `assets/` must make sense standalone
    (relative links only to files that ride into the mirror).
-5. `nix run .#lint` passes (skill-lint checks this file's frontmatter too).
+5. index's `nix run .#lint` passes (skill-lint checks this file's frontmatter
+   too).
