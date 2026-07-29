@@ -92,7 +92,77 @@
       topics = value.topics or [];
     };
 
-  rulesFor = agentName: map normalizeRule (import ./rules.nix {inherit agentName;});
+  # Acronyms a rendered rule may leave bare. Closed on purpose: the
+  # `defineAcronyms` rule renders this same list, and `undefinedAcronyms`
+  # below fails any render that introduces an all-caps token which is
+  # neither listed here nor expanded as "... (TOKEN)" somewhere in the text.
+  # Every entry is a form present in the prompt today and readable without
+  # expansion by a programmer who has never seen this repo; `CDP` and `DAG`
+  # were in that text and were not, which is why the exception is a list
+  # rather than the author's judgment (index#1616).
+  bareAcronyms = [
+    "AI"
+    "API"
+    "CI"
+    "CLI"
+    "CPU"
+    "CSS"
+    "DOM"
+    "HTML"
+    "HTTP"
+    "JS"
+    "JSON"
+    "PR"
+    "SSH"
+    "UI"
+    "URL"
+  ];
+  # Wrapped to the width of the prose around it: the list renders inside a
+  # rule body, and one 118-character line in a 70-column prompt reads as a
+  # formatting bug.
+  bareAcronymList = let
+    items = lib.imap0 (index: acronym:
+      if index == builtins.length bareAcronyms - 1
+      then acronym
+      else "${acronym},")
+    bareAcronyms;
+    lines =
+      lib.foldl (
+        wrapped: item: let
+          current = lib.last wrapped;
+          joined =
+            if current == ""
+            then item
+            else "${current} ${item}";
+        in
+          if builtins.stringLength joined <= 66
+          then lib.init wrapped ++ [joined]
+          else wrapped ++ [item]
+      ) [""]
+      items;
+  in
+    lib.concatStringsSep "\n" lines;
+
+  rulesFor = agentName:
+    map normalizeRule (import ./rules.nix {
+      inherit agentName bareAcronymList;
+    });
+
+  # All-caps tokens in a rendered prompt that are neither on the list nor
+  # expanded somewhere in the text. Order is not checked: an expansion after
+  # first use satisfies this, so it catches undefined acronyms, not
+  # misplaced definitions. Backticked spans are dropped first: a token like
+  # `IX_MCP_ISSUE_WATCH_OWNERS` is an identifier the reader copies, not an
+  # acronym to expand, and splitting it on underscores invents five.
+  undefinedAcronyms = text: let
+    prose = lib.concatStrings (builtins.filter builtins.isString (builtins.split "`[^`]*`" text));
+    words = builtins.filter builtins.isString (builtins.split "[^A-Za-z]+" prose);
+    acronyms = builtins.filter (word: builtins.match "[A-Z][A-Z]+" word != null) words;
+  in
+    lib.unique (builtins.filter (
+        acronym: !(builtins.elem acronym bareAcronyms) && !(lib.hasInfix "(${acronym})" text)
+      )
+      acronyms);
 
   # Names and tags do not vary with agentName, so validate one instantiation.
   canonicalRules = rulesFor providers.claude.agentName;
@@ -125,6 +195,7 @@
         && !(builtins.any (topic: builtins.elem topic omitTopics) rule.topics)
         && applies rule
     ) (rulesFor providerConfig.agentName);
+    rendered = lib.concatStringsSep "\n\n" (map (rule: rule.text) kept);
   in
     assert lib.assertMsg (
       builtins.elem kind kinds
@@ -144,7 +215,9 @@
     assert lib.assertMsg (
       unknownOmitTopics == []
     ) "prompt: omitTopics not in the known topic list: ${lib.concatStringsSep ", " unknownOmitTopics}";
-      lib.concatStringsSep "\n\n" (map (rule: rule.text) kept);
+    assert lib.assertMsg (
+      undefinedAcronyms rendered == []
+    ) "prompt/rules.nix: acronyms used without an expansion: ${lib.concatStringsSep ", " (undefinedAcronyms rendered)}; expand each as \"words (ACRONYM)\" in the rule text, or add it to `bareAcronyms` in ./default.nix with a reason"; rendered;
 in {
   inherit render;
 
