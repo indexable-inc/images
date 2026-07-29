@@ -126,6 +126,27 @@ new system, leaves the others serving. A host failing may take all of them. The
 honest fix is a spread key the scheduler honours; a `--node` flag would only
 move the problem into whoever types the command.
 
+**The rule is deterministic, so it can be predicted even though it cannot be
+asked.** Before creating the third proxy, the three hosts reported:
+
+    hil-compute-1  MemAvailable 373963 MiB   <- carries proxy-0 and proxy-1
+    hil-compute-2  MemAvailable 313773 MiB
+    hil-compute-3  MemAvailable 389715 MiB   <- highest, so this should win
+
+Written down before the outcome so the record shows a prediction rather than a
+rationalisation. If it lands on hil-compute-3 the fleet ends up spread across
+two hosts, and that is **luck agreeing with the requirement, not the design
+meeting it** -- another VM created first would have changed the answer, and
+nothing here would have noticed. Anti-affinity being inexpressible in the fleet
+spec, in `mkFleet`, and on `ix apply` is the finding; ENG-11225 is where it
+lives.
+
+hil-compute-2 is worth avoiding for two reasons rather than one: it has not
+taken the east-west fix yet, and it is the host missing the group DNS gateway
+(ENG-11226). A member placed there fails twice over. The only thing making that
+unlikely today is that it also has the least free memory, which is not a reason
+anyone chose.
+
 ## There is no name in front of the endpoint
 
 A player is handed an address, so every correct fix to where this fleet lives
@@ -173,7 +194,29 @@ game server.
 
 `mcping.py` is in this directory. Run it from inside the group, where the names
 resolve; it speaks the protocol rather than asking systemd for an opinion, which
-is the difference that matters (see below).
+is the difference that matters.
+
+**That difference is now a health check rather than a warning.** The fleet used
+to declare only `ix.healthChecks.hyperion-proxy.unit`, and that check could not
+fail in the case that mattered. hyperion-proxy binds its listener at startup and
+holds one long-lived connection to the game server, multiplexing players over
+it; `ss -tn` inside a proxy shows a single ESTAB to the game port with nobody
+playing. The unit's state says nothing about that link, so it stayed
+`active (running)` for twelve hours while nothing could have played -- and when
+the link does break the proxy drops every player socket and cannot usefully
+re-establish, so `active` means neither "a player can join" nor "the players
+already here are still connected".
+
+`proxy.nix` now declares a second check that sends the same handshake to the
+proxy's own listener. Both were run side by side inside `hyperion-proxy-0`, with
+the game server's port dropped by a temporary nftables rule:
+
+    backend blocked:   unit check PASS  <- blind
+                       handshake  FAIL  <- fires
+    rule removed:      handshake  PASS
+
+It also fails when nothing is listening. That is the guard watched failing
+before being trusted, which is the only way to know a guard is one.
 
 The same test doubles as a check that the game server is not directly playable,
 which is the property the private segment and the client certificate exist for.
@@ -260,7 +303,8 @@ Open:
   AAAA. So a client told any of these opens a connection to the wrong region
   and hangs. Explicit records win over the wildcard and are generated from
   inventory in ix's `nix/terraform/cloudflare/dns-ix-dev.nix`; shape in
-  `proxy.nix`.
+  `proxy.nix`. The host names have to resolve before a fleet name pointing at
+  them means anything, so this is ordered rather than parallel.
 - **A group's DNS gateway is not consistently present.** ENG-11226. On the
   `hyperion` group's bridge, `fd00:1:1f:856f::1` is on hil-compute-1 and
   hil-compute-3 and absent on hil-compute-2, which carries two members of the

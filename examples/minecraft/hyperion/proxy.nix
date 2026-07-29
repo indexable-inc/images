@@ -6,7 +6,9 @@
   config,
   hyperionProxy,
   ix,
+  lib,
   nodes,
+  pkgs,
   ...
 }: let
   # Resolved from the game server's own `ix.networking.expose` declaration, so
@@ -105,6 +107,13 @@ in {
       # shape below is decided rather than open, so it is recorded here instead
       # of being re-derived by whoever wires it up.
       #
+      # It has an ordering dependency worth respecting rather than working
+      # around: the service records below point at host names, and those host
+      # names have certificate coverage but no records of their own. Publishing
+      # a fleet name before the host names resolve would hand players a name
+      # that resolves to the wrong region, which is the situation this note
+      # exists to end rather than to spread.
+      #
       # One name for the fleet, declared identically by every proxy -- never
       # one name per VM. A player's endpoint has to resolve to the *role*,
       # because any proxy will do; the record set is then the union of the
@@ -138,8 +147,63 @@ in {
       };
     };
 
-    healthChecks.hyperion-proxy.unit = "hyperion-proxy.service";
+    # Two checks, and they fail differently on purpose. The unit check says the
+    # process died. The handshake check says the process is up and cannot
+    # serve, and that is the twelve hours this fleet lost.
+    healthChecks = {
+      hyperion-proxy.unit = "hyperion-proxy.service";
+
+      # `systemctl is-active` cannot see the failure that matters here.
+      # hyperion-proxy binds its listener at startup and holds one long-lived
+      # connection to the game server, multiplexing every player over it --
+      # `ss -tn` inside a proxy shows exactly one ESTAB to the game port with
+      # no players connected. The unit's state says nothing about that link. It
+      # read `active (running)` for twelve hours while cross-host east-west was
+      # down and nothing could have played.
+      #
+      # It is worse than a stale reading. When the backend read loop fails the
+      # proxy signals every player task and drops every player socket, and a
+      # re-dialled server would wait forever for an opening handshake that a
+      # resumed connection never sends. So `active` means neither "a player can
+      # join" nor "the players already here are still connected", and nothing
+      # in the unit distinguishes those from healthy.
+      #
+      # This asks the question a player asks. The proxy does not answer a
+      # status request itself, it forwards it -- the reply carries the game
+      # server's own MOTD and player cap, which the proxy has no way to know --
+      # so one request proves the listener is bound, the group name resolved,
+      # the cross-host path carried the bytes, and the mutual-TLS handshake
+      # against the game server succeeded. Grepping for `protocol` is enough
+      # because any status document at all can only have come from the backend.
+      #
+      # Watched fail before being trusted, inside `hyperion-proxy-0`: with the
+      # game server's port dropped by a temporary nftables rule, the unit check
+      # passed and this one failed; with the rule removed, this one passed
+      # again. It also fails when nothing is listening.
+      #
+      # The payload is a Minecraft handshake (packet 0x00, intent 1 = status)
+      # followed by a status request, for host `127.0.0.1` port 25565. It is a
+      # constant, so it ships base64 rather than as shell escapes -- a
+      # `printf '\x10\x00...'` spelling of the same bytes is one backslash away
+      # from a check that connects and asks nothing.
+      hyperion-proxy-serves = {
+        description = "the proxy answers a Minecraft status handshake from the game server";
+        command = [
+          (lib.getExe pkgs.bash)
+          "-c"
+          "echo EACIBgkxMjcuMC4wLjFj3QEBAA== | base64 -d | ${lib.getExe' pkgs.netcat-openbsd "nc"} -w 5 127.0.0.1 25565 | grep -qa protocol"
+        ];
+      };
+    };
   };
+
+  # `nc` is in the closure only because this file puts it there. The platform
+  # pins a probe binary for the `http` and `tcp` check sugar, but an explicit
+  # `command` gets its string context stripped when the fleet plan is rendered
+  # (`planHealthChecks` in lib/image/fleet.nix), so nothing else retains what
+  # the command names. Drop this line and the check above becomes a store path
+  # that is not in the guest.
+  environment.systemPackages = [pkgs.netcat-openbsd];
 
   services.hyperion-proxy = {
     enable = true;
