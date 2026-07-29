@@ -59,6 +59,26 @@ Get the derivation path from `nix eval --raw .#<attr>.drvPath`, or from the
 A crate whose log stops at the compiler invocation with no diagnostic is usually
 a store problem, not a compile error.
 
+A worked instance, 2026-07-29. ix#8885's `nix` job failed. Neither `gh run view
+--log-failed` nor the full 4,348 line `gh run view --log` contains the word
+`error` anywhere; both end in hundreds of lines of `added 117 signatures` from a
+cache-push phase that ran after the build failed, plus a pointer to a file on an
+unnamed host. The cause was on line 634 of an 85 KB log on `hil-compute-2`:
+
+```
+error: Cannot build '/nix/store/lwpynj4...-cargo-unit-nextest-ix-vm-guest.drv'.
+       >   panicked at /build/vm-guest-daemon-0.1.0/src/vsock.rs:276:10:
+       >   AF_VSOCK connect: ENODEV
+```
+
+That is not truncation, it is a filter that kept the chattiest phase and dropped
+the diagnostic, so the job reads as failed with no stated reason under a wall of
+successful-looking output. Two habits follow. The store excerpt names your next
+command itself (`For full logs, run: nix log <drv>`). And a wrapper's own log
+usually lives on the host that ran the job rather than dying with an ephemeral
+runner, so `full log (unfiltered, on this runner)` means find the host, not give
+up. Filed as ix#9086.
+
 ## Evaluate before you build
 
 An attribute costs minutes; its closure costs hours. `nix eval --raw
