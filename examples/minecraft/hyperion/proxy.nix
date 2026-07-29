@@ -38,6 +38,11 @@ in {
       # came up unable to resolve, unable to substitute, and unable to complete
       # their switch at all. ENG-10881.
       #
+      # Still true from inside a guest, not only in the host's routing table:
+      # `vip-probe`, a scratch VM holding `15.204.22.195/32`, gets
+      # `Destination Host Unreachable from 10.0.0.1` pinging `1.1.1.1`, while a
+      # VM with no VIP answers in 0.7 ms.
+      #
       # What being off costs, stated plainly: this fleet has no public IPv4,
       # and it wants one. A Java client resolves through the JDK, which prefers
       # IPv4, and a large share of players have no IPv6 at all. Public IPv6 is

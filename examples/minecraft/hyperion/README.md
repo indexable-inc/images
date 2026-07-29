@@ -213,12 +213,19 @@ Open:
   block's gateway, is still `FAILED` in all three hil hosts' neighbour tables
   as of 2026-07-29, and `ip route show table 200` still points at it. Because
   the host source-routes VIP traffic out of that gateway, a VM that takes an
-  address from the block can send nothing at all:
+  address from the block can send nothing at all. Measured from inside a VM
+  that holds one, today, rather than only from the host's routing table --
+  `vip-probe` is a scratch VM carrying `15.204.22.195/32` on `eth0`:
 
   ```
-  hyperion-proxy-0  (VIP 15.204.22.195/32)  ping 1.1.1.1 -> 0 received, +2 errors
-  hyperion-game     (no VIP, 10.0.0.59)     ping 1.1.1.1 -> 2 received, 0.700ms
+  vip-probe      (VIP 15.204.22.195/32)  ping 1.1.1.1 -> 0 received, +2 errors
+                                         From 10.0.0.1 Destination Host Unreachable
+  hyperion-game  (no VIP, 10.0.0.x)      ping 1.1.1.1 -> 2 received, 0.700ms
   ```
+
+  The proxies themselves showed exactly this when they held VIPs, which is the
+  state that motivated turning the option off; they hold none now, so the live
+  demonstration is `vip-probe`.
 
   `ix.networking.ipv4` is therefore off in `proxy.nix` with the reasoning in
   place. Turn it back on and recreate the proxies once OVH delivers the block;
