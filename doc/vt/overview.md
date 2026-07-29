@@ -27,9 +27,12 @@ channel API (which is exactly what `tui`'s engine thread does); do not add an
 
 Public API:
 
-- `Terminal::new(rows, cols, scrollback) -> Result<Terminal>`
+- `Terminal::new(rows, cols, max_scrollback_bytes) -> Result<Terminal>`
   (`ix-vt/src/lib.rs:312`) and `with_options(TerminalOptions { cols, rows,
-  max_scrollback })` (`:325`). The `new` argument order reads as a screen size.
+  max_scrollback_bytes })` (`:325`). The `new` argument order reads as a screen
+  size. The third argument is a **byte** budget for the whole grid, not a row
+  count, whatever libghostty-vt's `terminal.h` says; reach it from a row count
+  with `scrollback_bytes_for_lines(lines, cols)` (ix#9031).
 - `vt_write(&mut self, &[u8])` (`:338`): feed raw VT bytes (text + escapes).
 - `resize(&mut self, rows, cols) -> Result<()>` (`:347`): both must be > 0.
 - `scroll_viewport(ScrollViewport::{Top, Bottom, Delta(isize)})` (`:357`): move
