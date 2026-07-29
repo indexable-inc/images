@@ -7,6 +7,13 @@
 # declares matches the target (see ./default.nix); `system` marks rules that
 # belong only when this text IS the agent's whole system prompt.
 #
+# This text is the MAIN conversation's system prompt and stops there. A subagent
+# starts on the SDK base prompt plus its own agent-file body and loads the
+# CLAUDE.md hierarchy instead, so a rule written here governs one conversation
+# however universally it reads (measured on 2.1.220, index#4339). A rule every
+# agent must follow belongs in a CLAUDE.md; `--append-subagent-system-prompt` is
+# the subagent-only channel.
+#
 # Texts are deltas only: what a frontier model would not already do, stated
 # once, in the register the `prose` rule defines (index#3164, index#3594).
 # Recipes and one-incident gotchas belong in memories and skills, not here.
