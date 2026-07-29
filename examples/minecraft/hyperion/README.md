@@ -411,15 +411,45 @@ Fixed since this example landed:
 
 Open:
 
-- **`ix apply` still cannot update a guest that is running a tmpfs `/tmp`.**
-  ENG-11080 (ENG-11315 is the same defect). A switch across index `dac64977`
-  stops `tmp.mount`, and nixpkgs' `RequiresMountsFor=/tmp` on the system bus
-  turns that into a dead bus and an aborted switch. Detail above. The bus half
-  is fixed and gated; the exit code is not, and cannot be from the new
-  generation, so a guest already running the tmpfs needs either a runtime
-  drop-in resetting `RequiresMountsFor=` before the apply, or a recreate. That
-  is why the newest node in the fleet is the one that was created rather than
-  updated.
+- **`ix apply` still cannot update the three guests whose generation declares
+  `tmp.mount`, and the answer is to recreate them.** ENG-11080 (ENG-11315 is
+  the same defect). Detail above; the bus half is fixed by
+  `modules/system/dbus-survives-mount-removal` and gated by
+  `tests/switch-stops-a-mount-vm.nix`, but a fix in the new generation cannot
+  reach a guest that has not taken it -- switch-to-configuration reads the
+  RUNNING generation's unit files and reloads only after its stop phase.
+
+  Four runtime mitigations were measured on `hyperion-proxy-1` on 2026-07-29
+  and all four fail. A `/run` drop-in setting `RequiresMountsFor=` empty does
+  not drop the edge; nor does it after `systemctl stop dbus-broker.service`,
+  nor after `systemctl daemon-reexec`, nor renamed to sort after nixpkgs' own
+  `overrides.conf`. `umount -l /tmp` beforehand does not survive either: the
+  running generation still declares the mount and `local-fs.target` still
+  wants it, so it is back before the switch reaches its stop phase. The apply
+  then failed exactly as before, and recovery was
+  `systemctl start hyperion-proxy.service`.
+
+  **Recreate is not a workaround here, it is the good state.**
+  `hyperion-proxy-2` was created rather than switched, and on it
+  `tmp.mount` has no `FragmentPath` at all -- it is synthesised from
+  `/proc/self/mountinfo` -- so `dbus-broker` shows
+  `Requires=dbus.socket system.slice` and nothing about /tmp. systemd only
+  adds the Requires half of a mount dependency for a mount unit that has a
+  fragment (`unit_add_mount_dependencies()`, src/core/unit.c; the `After=`
+  edge is unconditional). A recreated guest keeps its tmpfs `/tmp`, gets the
+  target build, and is out of the way of this permanently.
+
+- **Nothing in the NixOS configuration appears to control whether guest `/tmp`
+  is a tmpfs.** The currently pinned index rev sets `boot.tmp.useTmpfs = true`
+  and the system it builds contains no `tmp.mount` fragment at all; every
+  guest has a tmpfs `/tmp` regardless, sized like the frozen-percentage cap
+  `dac64977` set out to remove -- 2.1 GiB on `hyperion-game`, 1.4 GiB on
+  `hyperion-proxy-2`, both reporting `MemTotal` 256 GiB. So the mount comes
+  from somewhere outside the configuration (the base image, the host-side VM
+  setup, or the golden snapshot) and nothing here says which. Until that is
+  established, `boot.tmp.useTmpfs` should not be trusted to do anything on a
+  guest, and it is an open question whether `dac64977` has the effect its
+  commit message describes.
 - **Public ingress. This is the only thing left between the fleet and a
   player.** The region's one Additional IP block, `15.204.22.192/26`, is
   delivered nowhere: OVH reports `routedTo.serviceName = null` for it. The fix
