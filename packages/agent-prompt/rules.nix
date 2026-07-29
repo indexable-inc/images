@@ -445,9 +445,15 @@
         `--remote-debugging-port=9222`, so try `--auto-connect` (or
         `connect 9222`) first and act in their session; launch a fresh
         browser only when no Chrome DevTools Protocol (CDP) instance
-        answers. Read `agent-browser skills get core` before the first
-        command; the CLI serves guides matched to its own version
-        (`skills list` for electron, slack, dogfood and friends).
+        answers. Falling back to a fresh browser needs the daemon gone, not
+        just the flag dropped: `--auto-connect` is baked into the session
+        daemon's environment when that daemon spawns, and every later command
+        reuses it, so a plain `open` keeps refusing to launch and reports
+        `No running Chrome instance found` for a flag you did not pass. Run
+        `agent-browser close --all` first, and read that message as a stale
+        daemon rather than a broken URL. Read `agent-browser skills get core`
+        before the first command; the CLI serves guides matched to its own
+        version (`skills list` for electron, slack, dogfood and friends).
       '';
       reason = ''
         agent-browser ships in every dev environment (lib/dev/base) and the
@@ -457,6 +463,17 @@
         would drift; the vendored agent-browser skill (lib/skills.nix)
         carries upstream's discovery stub for the same content
         (index#3939).
+
+        The stale-daemon note is here because this rule causes the trap it
+        warns about: an agent told to try `--auto-connect` first spawns a
+        daemon holding `AGENT_BROWSER_AUTO_CONNECT=1`, and the daemon
+        outlives the command by hours. `daemon_config_fingerprint` decides
+        whether to restart on reuse and does not hash the connection target,
+        so every later `open` silently keeps auto-connect and fails with a
+        message naming a flag the caller never passed. One session read that
+        as Chrome being unable to load `http://` at all and spent 45 minutes
+        building a `file://` workaround; killing the daemon made the same
+        URL load in 2.3s (ix#9022, upstream agent-browser#1621).
       '';
     };
   }
