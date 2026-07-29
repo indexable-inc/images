@@ -20,10 +20,11 @@ its methods cell by cell, and `await t.close()` when done. Evaluating
 `await t.snapshot()` as the last expression in a cell renders the screen in
 color via `Snapshot._repr_html_`.
 
-Every spawned terminal auto-shows in the web dashboard. The first `Tui(...)`
-binds a process-global producer, so running `nix run .#dashboard` (it
-watches `socket_dir()`) renders this process's terminals with no explicit
-`tui.publish()`. Opt out by setting `IX_TUI_AUTOPUBLISH=0`.
+Every spawned terminal auto-publishes. The first `Tui(...)` binds a
+process-global producer in `socket_dir()`, so a consumer such as
+`nix run .#ix-windows` picks up this process's terminals with no explicit
+`tui.publish()`. Opt out by setting `IX_TUI_AUTOPUBLISH=0`. For a browser view
+of just this process, `await serve()` needs no producer at all.
 
 The public surface:
 
@@ -512,7 +513,7 @@ def _build_predicate(pattern: Pattern) -> Callable[[Snapshot], bool]:
 def _ensure_autopublish() -> None:
     """Bind the process-global dashboard producer once, on first `Tui(...)`.
 
-    Spawned terminals then appear in `nix run .#dashboard` with no explicit
+    Spawned terminals then reach any consumer of `socket_dir()` with no explicit
     `tui.publish()`. Idempotency (bind at most once per process) and the
     `IX_TUI_AUTOPUBLISH=0` opt-out both live in the Rust `ensure_published`, so
     this stays a thin call into it rather than re-implementing either guard here.
@@ -546,9 +547,9 @@ class Tui:
     shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
     are the only synchronous surface; everything else is a coroutine to await.
 
-    The first `Tui(...)` auto-publishes this process to the web dashboard, so
-    `nix run .#dashboard` shows the terminal without an explicit
-    `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
+    The first `Tui(...)` auto-publishes this process's terminals to
+    `socket_dir()`, so a consumer such as `nix run .#ix-windows` shows them
+    without an explicit `tui.publish()`. Set `IX_TUI_AUTOPUBLISH=0` to opt out.
 
     `kill()` sends SIGKILL; `interrupt()` sends a cooperative Ctrl+C; `close()`
     force-kills and drops the terminal from `list_all()`. `async with` blocks
@@ -870,19 +871,19 @@ async def serve(
 
 
 # --------------------------------------------------------------------------- #
-# Producer (multi-process dashboard)
+# Producer (multi-process publishing)
 # --------------------------------------------------------------------------- #
 
 
 class Publisher:
     """A running producer that exposes this process's terminals over a unix
-    socket for the standalone `tui-dashboard` aggregator.
+    socket in the shared discovery directory.
 
-    Many processes can publish at once; the aggregator discovers each socket in
-    the shared directory and renders every producer in one grid, so several
-    agents share a single dashboard URL instead of each starting their own
-    server. Each terminal appears under this process's `producer_id`. Stop with
-    `await stop()`, or use the handle as an async context manager.
+    Many processes can publish at once; a consumer discovers each socket in that
+    directory and renders every producer together, so several agents show up in
+    one place instead of each starting their own server. Each terminal appears
+    under this process's `producer_id`. Stop with `await stop()`, or use the
+    handle as an async context manager.
 
         async with await publish() as pub:
             ...
@@ -900,7 +901,7 @@ class Publisher:
 
     @property
     def producer_id(self) -> str:
-        """This process's scope on the aggregated dashboard."""
+        """This process's scope in the shared discovery directory."""
         return self._raw.producer_id
 
     async def stop(self) -> None:
@@ -926,10 +927,10 @@ async def publish(path: str | None = None, *, poll: float = 0.1) -> Publisher:
     """Publish every `Tui` alive in this process over a unix socket.
 
     With `path` unset the socket lands in the discovery directory
-    (`socket_dir()`) under a per-process name, where the `tui-dashboard`
-    aggregator finds it. Run that aggregator separately to watch every
-    publishing process in one browser grid. `poll` is the sampling interval in
-    seconds. Await this to get the handle.
+    (`socket_dir()`) under a per-process name, where a consumer finds it. Run a
+    consumer (`nix run .#ix-windows`) separately to watch every publishing
+    process at once. `poll` is the sampling interval in seconds. Await this to
+    get the handle.
     """
     raw = await _raw_publish(path, max(1, int(poll * 1000)))
     return Publisher(raw)

@@ -62,11 +62,11 @@ rusqlite = { workspace = true }
 plist = { workspace = true }
 objc2-security = { workspace = true }
 objc2-core-foundation = { workspace = true }
-# The interactive `drive` sessions publish the live guest screen to the local
-# dashboard as an image pane. Only the lightweight `Publisher` half of
-# `dashboard-core` is used; it pulls the aggregator's deps along until that crate
-# is split. tokio runs the publisher socket (this binary otherwise drives an
-# AppKit run loop), and base64 builds the frame data URL. All macOS-gated so the
+# The interactive `drive` sessions publish the live guest screen as an image
+# pane. Only the lightweight `Publisher` half of `dashboard-core` is used; it
+# pulls the server-side deps along until that crate is split. tokio runs the
+# publisher socket (this binary otherwise drives an AppKit run loop), and base64
+# builds the frame data URL. All macOS-gated so the
 # Linux stub graph stays dependency-free.
 dashboard-core.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time"] }

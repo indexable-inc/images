@@ -26,7 +26,7 @@ const SITE_HTML_ENV: &str = "IX_DASHBOARD_SITE_HTML";
 
 const STUB_HTML: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <title>dashboard</title></head><body style=\"font:14px system-ui;padding:2rem\">\
-<p>The dashboard UI was not built. Build through nix (e.g. <code>nix build .#dashboard</code>), \
+<p>The dashboard UI was not built. Build through nix rather than bare cargo, \
 which sets IX_DASHBOARD_SITE_HTML to the Vite output.</p></body></html>";
 
 fn main() -> Result<(), Box<dyn Error>> {

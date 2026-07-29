@@ -78,10 +78,10 @@ events are delivered straight to the guest's USB keyboard/pointing device by
 handing built `NSEvent`s to `VZVirtualMachineView` (`src/input.rs:1-7`), so the
 host event system and cursor are never involved.
 
-A `drive-*` session also publishes the live guest screen to the local dashboard
-as an image pane (a downscaled PNG sampled ~1/s, unchanged frames dropped),
-using `dashboard-core`'s `Publisher` over a producer socket in the discovery
-directory. Set `IX_VMKIT_NO_DASHBOARD` to any value to disable it. See
+A `drive-*` session also publishes the live guest screen as an image pane (a
+downscaled PNG sampled ~1/s, unchanged frames dropped), using `dashboard-core`'s
+`Publisher` over a producer socket in the discovery directory. Set
+`IX_VMKIT_NO_DASHBOARD` to any value to disable it. See
 [dashboard-core](../dashboard-core/overview.md).
 
 ## Modules (`packages/vmkit/src`)

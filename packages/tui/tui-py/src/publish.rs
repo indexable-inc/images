@@ -1,15 +1,15 @@
 //! Python binding for the producer side.
 //!
 //! [`publish`] binds a unix socket in the discovery directory and streams this
-//! process's terminals to whatever connects (the `tui-dashboard` aggregator).
-//! The producer logic lives in the `tui` crate; this module only hands a
-//! process-wide handle to Python. The returned [`Publisher`] keeps the socket
+//! process's terminals to whatever connects (today, `ix-windows`). The producer
+//! logic lives in the `tui` crate; this module only hands a process-wide handle
+//! to Python. The returned [`Publisher`] keeps the socket
 //! alive until stopped or dropped. Both `publish` and `stop` are awaitable so
 //! the binding surface is uniformly async.
 //!
 //! [`ensure_published`] is the synchronous twin that the high-level Python API
 //! calls on first `Tui(...)`: it binds one process-global producer so terminals
-//! show up in `tui-dashboard` with no explicit `tui.publish()`.
+//! reach any subscriber with no explicit `tui.publish()`.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -87,8 +87,8 @@ impl Publisher {
 /// Publish the global manager's terminals over a unix socket.
 ///
 /// With `path` unset the socket lands in the discovery directory under a
-/// per-process name, where the `tui-dashboard` aggregator finds it. `poll_ms` is
-/// the sampling interval in milliseconds.
+/// per-process name, where a subscriber finds it. `poll_ms` is the sampling
+/// interval in milliseconds.
 #[pyfunction]
 #[pyo3(signature = (path=None, poll_ms=100))]
 pub fn publish(py: Python<'_>, path: Option<String>, poll_ms: u64) -> PyResult<Bound<'_, PyAny>> {
@@ -120,8 +120,8 @@ pub fn publish(py: Python<'_>, path: Option<String>, poll_ms: u64) -> PyResult<B
 /// Synchronous and idempotent: the first call binds the producer on the global
 /// manager's tokio runtime and stashes the handle in [`AUTOPUBLISHER`]; later
 /// calls are a no-op. A no-op too when `IX_TUI_AUTOPUBLISH=0`. The high-level
-/// `tui.Tui` calls this once on construction so spawned terminals appear in
-/// `tui-dashboard` without an explicit `tui.publish()`.
+/// `tui.Tui` calls this once on construction so spawned terminals reach any
+/// subscriber without an explicit `tui.publish()`.
 ///
 /// The bind future is driven to completion on the pyo3-async-runtimes tokio
 /// runtime under `py.detach` (releasing the GIL); `tui::publish` then runs its

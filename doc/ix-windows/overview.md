@@ -1,13 +1,12 @@
 # ix-windows
 
 `packages/ix-windows` renders each live MCP resource as its own floating,
-blurred **overlay** webview window that auto-sizes to its content. It is a second
-consumer of the dashboard producer stream, alongside the
-[dashboard](../dashboard/overview.md) web aggregator: instead of folding
-producers into a web board, it maps each `resource/<id>` html pane to one OS
-window. A window opens when a resource appears, re-renders in place on update (no
-reload, so scroll and focus survive), and closes when the resource closes or its
-producer disconnects.
+blurred **overlay** webview window that auto-sizes to its content. It is the
+consumer of the dashboard producer stream: instead of folding producers into a
+web board, it maps each `resource/<id>` html pane to one OS window. A window
+opens when a resource appears, re-renders in place on update (no reload, so
+scroll and focus survive), and closes when the resource closes or its producer
+disconnects.
 
 It reuses [dashboard-core](../dashboard-core/overview.md) for the entire
 transport, so any producer needs no change: a dashboard-core producer publishes
@@ -43,7 +42,7 @@ it is plain `tao`).
 
 | flag | default | meaning |
 | --- | --- | --- |
-| `--dir` | discovery dir | producer-socket directory to watch, matching the `dashboard` aggregator. Defaults via [`discovery_dir`](../dashboard-core/overview.md#discovery-paths). |
+| `--dir` | discovery dir | producer-socket directory to watch, the same one every producer binds into. Defaults via [`discovery_dir`](../dashboard-core/overview.md#discovery-paths). |
 | `--rescan-ms` | `500` | how often to rescan the directory for new/removed sockets. |
 
 ## Threading model (`src/main.rs`)

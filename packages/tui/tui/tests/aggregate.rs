@@ -1,8 +1,9 @@
 //! End-to-end producer wire test: a real PTY's rendered screen reaches a reader
-//! (the aggregator's role) over the unix socket as a `ProducerSnapshot` of panes.
+//! (a subscriber's role) over the unix socket as a `ProducerSnapshot` of panes.
 //!
-//! Compiled only with the `dashboard` + `publish` features, the same pair the
-//! aggregator builds with. Without them the file is empty.
+//! Compiled only with the `dashboard` + `publish` features, the same pair a
+//! process that both serves and publishes builds with. Without them the file is
+//! empty.
 //!
 //! The manager's blocking spawn/write run outside any runtime; the producer and
 //! the reader run inside an explicit runtime. `TuiManager` owns its own runtime,

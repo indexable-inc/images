@@ -45,12 +45,7 @@ already run inside tokio.
 
 `tui` is a library crate in the index Cargo workspace, with no standalone
 mirror, so it is consumed through the workspace: inside the repo, depend on it
-with `tui.workspace = true` in your crate's `Cargo.toml`. The multi-process
-dashboard it feeds is runnable on its own:
-
-```sh
-nix run github:indexable-inc/index#dashboard
-```
+with `tui.workspace = true` in your crate's `Cargo.toml`.
 
 The `.#` commands in this README assume a clone:
 
@@ -131,26 +126,20 @@ its own manager) in one grid, the producer and the viewer are split:
   serialization, and the fan-out live in `dashboard-core`; this crate only adapts
   a live manager into terminal panes, so a publishing process stays HTTP- and
   CRDT-free.
-- **Aggregator** (the `dashboard` binary): run it by hand. It scans the discovery
-  directory, connects to every producer socket, folds each producer's panes into
-  one document under its own scope, and serves the same web canvas. No producer
-  owns the server and exactly one process binds a TCP port, so any number of
-  agents share one stable URL.
+- **Consumer**: `ix-windows` (`nix run .#ix-windows`, macOS) subscribes to the
+  same discovery directory and renders each producer's panes as native overlay
+  windows rather than one web board.
 
 ```sh
-nix run .#dashboard           # serve http://127.0.0.1:8080/ for the discovery dir
-nix run .#dashboard -- --help # --host, --port, --dir, --rescan-ms
-nix run .#dashboard demo      # publish one terminal/html/data pane to exercise it
+nix run .#ix-windows          # one window per pane, across every producer
 ```
 
-The two halves share [`serve_hub`], the page, and the SSE stream, so a single
-process (`serve`) and the aggregator render through exactly the same code. The
-discovery directory resolves to `$IX_DASH_DIR`, else `$XDG_RUNTIME_DIR/ix-dash`,
-else `/tmp/ix-dash-<user>`, kept short for the macOS 104-byte socket-path limit.
+The discovery directory resolves to `$IX_DASH_DIR`, else
+`$XDG_RUNTIME_DIR/ix-dash`, else `/tmp/ix-dash-<user>`, kept short for the macOS
+104-byte socket-path limit.
 
 [`ProducerSnapshot`]: ../dashboard-core/src/pane.rs
 [`discovery_dir`]: ../dashboard-core/src/pane.rs
-[`serve_hub`]: ../dashboard-core/src/dashboard/server.rs
 
 ## Configuration
 

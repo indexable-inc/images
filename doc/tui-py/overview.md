@@ -75,14 +75,14 @@ re-exported wrappers over layer 1.
 
 The first `Tui(...)` calls `ensure_published()` (`src/publish.rs:132`), which
 binds one process-global producer on the discovery socket so spawned terminals
-appear in the standalone aggregator with no explicit `tui.publish()`. It is
+appear to any subscriber with no explicit `tui.publish()`. It is
 idempotent, skipped when `IX_TUI_AUTOPUBLISH=0`, and superseded by an explicit
 `tui.publish(...)` so a process never exposes two producers
-(`src/publish.rs:38,98`). The producer/consumer transport and the aggregator
-live in the dashboard domain; the README and Python
-docstrings invoke the aggregator as `nix run .#dashboard`
-([dashboard](../dashboard/overview.md)), the registered flake output for the
-aggregator.
+(`src/publish.rs:38,98`). The producer/consumer transport lives in
+[dashboard-core](../dashboard-core/overview.md); the consumer that renders those
+sockets is [ix-windows](../ix-windows/overview.md) (`nix run .#ix-windows`,
+macOS). For a browser view of one process's own terminals, `tui.serve()` starts
+the in-process board without any producer socket.
 
 ## Layer 3: the agent harness (`python/tui/harness.py`)
 

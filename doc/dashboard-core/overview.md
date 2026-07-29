@@ -1,6 +1,6 @@
 # dashboard-core
 
-`packages/dashboard-core` is the engine-free crate every dashboard process
+`packages/dashboard/dashboard-core` is the engine-free crate every dashboard process
 links. It holds the wire types and discovery paths a producer and a consumer
 agree on, the unix-socket [`Publisher`]/[`subscribe`] transport, the
 browser-facing [`Hub`] Loro document and its SSE server, the durable
@@ -10,9 +10,12 @@ board touches the `dashboard` module.
 
 It is a workspace library crate (`packages/dashboard/dashboard-core/package.nix`:
 `inRustWorkspace = true`, no `flake`/`packageSet`), so it has no flake output of
-its own. It is consumed by [`dashboard`](../dashboard/overview.md),
-[`ix-windows`](../ix-windows/overview.md), and the `tui` crate. The deep
-reconcile mechanism and recordings are documented in [internals](internals.md).
+its own. Its consumers, from the `Cargo.toml` dependency edges: the `tui` crate
+(publish and dashboard features), [`vmkit`](../vmkit/overview.md) (publish only,
+the guest framebuffer as an image pane), [`ix-windows`](../ix-windows/overview.md)
+(subscribe side), and `dashboard-ex` (`packages/dashboard/ex`), the Elixir NIF
+that drives the [`Hub`] from the MCP kernel. The deep reconcile mechanism and
+recordings are documented in [internals](internals.md).
 
 ## Modules (`src/lib.rs:28-43`)
 

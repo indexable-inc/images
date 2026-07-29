@@ -117,8 +117,7 @@ millisecond timestamp, so one full snapshot replays the whole session. A
   to `KEEP_RECORDINGS - 1` (50, `recordings.rs:27`), writes one snapshot up front
   so a session shorter than the interval still produces its advertised recording,
   then refreshes it each `interval`, returning a [`Recorder`] (`id` + task
-  handle). A final snapshot on graceful shutdown is the caller's job (the
-  aggregator does this; see [dashboard](../dashboard/overview.md)).
+  handle). A final snapshot on graceful shutdown is the caller's job.
 - **Listing.** [`RecordingStore::list`] (`recordings.rs:104`) returns
   [`RecordingInfo`] `{ id, started_ms, updated_ms, bytes }` newest first, parsing
   `started_ms` out of the id and `updated_ms` from the file mtime.

@@ -39,11 +39,12 @@ Quick start, exactly the shape of a Playwright test:
 
 Why drive the real TUI instead of `claude -p`? A headless `-p` run is invisible
 and uninterruptible. A harness drives the actual TUI in a PTY, so the session
-shows up live on the `tui` web dashboard (`nix run .#dashboard`) just like a
-human's. You watch the current state, attach, interrupt. For an *experiment*
-that is the whole point: an agent you can observe beats a black box you diff.
-When you do want exactly that black box, `delegate()` is the one-call wrapper
-over the headless modes (`claude -p`, `codex exec`, `cursor-agent -p`):
+shows up live on the `tui` web dashboard (`await tui.serve()` in the harness
+process) just like a human's. You watch the current state, attach, interrupt.
+For an *experiment* that is the whole point: an agent you can observe beats a
+black box you diff. When you do want exactly that black box, `delegate()` is the
+one-call wrapper over the headless modes (`claude -p`, `codex exec`,
+`cursor-agent -p`):
 
     answer = await delegate("What is 2+2? Reply with just the number.")
 

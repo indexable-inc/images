@@ -6,10 +6,10 @@
 //! it as a [`ProducerEvent`] on a channel. When a producer hangs up it emits a
 //! [`ProducerEvent::Gone`] so the consumer can drop that producer's panes.
 //!
-//! Both consumers in the tree share this one implementation: the standalone
-//! `dashboard` aggregator folds each event into its Loro [`Hub`](crate::Hub),
-//! and `ix-windows` maps each event to native windows. Neither reimplements the
-//! discovery/reaping logic.
+//! Every consumer shares this one implementation rather than reimplementing the
+//! discovery/reaping logic: `ix-windows` maps each event to a native window, and
+//! anything folding producers into one board applies each event to a Loro
+//! [`Hub`](crate::Hub).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

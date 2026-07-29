@@ -24,7 +24,7 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 struct Cli {
     /// Directory of producer sockets to watch. Defaults to the ix discovery
     /// directory (`$IX_DASH_DIR`, `$XDG_RUNTIME_DIR/ix-dash`, or
-    /// `/tmp/ix-dash-*`), matching the `dashboard` aggregator.
+    /// `/tmp/ix-dash-*`), the same one every producer binds into.
     #[arg(long)]
     dir: Option<PathBuf>,
 

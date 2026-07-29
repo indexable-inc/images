@@ -56,8 +56,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [config-launch](config-launch/overview.md) | `packages/config-launch` is a spec-driven exec launcher: it reads a JSON spec, sets environment variables and `PATH`, injects CLI flags (static, argv-conditional, and config-file-gated `-... |
 | [cuda-hello](cuda-hello/overview.md) | `packages/cuda-hello` is a minimal CUDA kernel written in pure, idiomatic Rust and compiled to PTX with cuda-oxide, NVIDIA's experimental Rust-to-CUDA codegen backend. |
 | [dag-runner](dag-runner/overview.md) | `packages/dag-runner` is a tiny task runner: it takes a JSON DAG of shell commands, runs each node as soon as its dependencies finish (so graph shape, not fixed "levels", determines paral... |
-| [dashboard](dashboard/overview.md) | `packages/dashboard` is the standalone aggregator: one web canvas for every resource producer on the machine. |
-| [dashboard-core](dashboard-core/overview.md) | `packages/dashboard-core` is the engine-free crate every dashboard process links. |
+| [dashboard-core](dashboard-core/overview.md) | `packages/dashboard/dashboard-core` is the engine-free crate every dashboard process links. |
 | [dia](dia/overview.md) | `packages/dia` packages Dia, The Browser Company's AI browser, by unpacking its signed, notarized macOS `.dmg` verbatim. |
 | [distiller](distiller/overview.md) | `packages/distiller` (`ix-distiller`) distills ReasoningBank-style lessons from local Claude Code transcripts into three artifacts: human-readable facts markdown per `(user, project)`, a... |
 | [drgn](drgn/overview.md) | `packages/drgn` is the index repo's Nix repackaging of drgn, Meta's programmable debugger for live processes and kernels. |

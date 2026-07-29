@@ -1,5 +1,5 @@
 // Front-end-only demo data so the dashboard can be explored without a running hub:
-// load the page with `?demo`. Mirrors the kinds the Rust `dashboard demo` produces
+// load the page with `?demo`. Mirrors the pane kinds a Rust producer emits
 // and adds a traced exec pane to showcase the inline-trace view. Statically
 // imported (it is tiny) but only invoked from App.svelte when `?demo` is present.
 import { store } from './stream.svelte';

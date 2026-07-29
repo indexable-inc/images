@@ -80,7 +80,6 @@ members = [
   "packages/cve-scan",
   "packages/dag-runner",
   "packages/darwin-deploy",
-  "packages/dashboard/dashboard",
   "packages/dashboard/dashboard-core",
   "packages/dashboard/ex",
   "packages/efx/cli",

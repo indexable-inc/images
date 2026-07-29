@@ -14,8 +14,8 @@ Two repos, one boundary:
 - **`index` (this repo, MIT).** The open tooling: the NixOS library that builds
   VM images and fleet plans (`lib/`), the ready-made service modules
   (`modules/services/`), the base images (`images/`), and a large set of
-  standalone tools (search, mcp, tui, dashboard, `ix-fleet`, ...) under
-  `packages/`. Shared Nix primitives live here too: checked script writers,
+  standalone tools (search, mcp, tui, `ix-fleet`, ...) under `packages/`.
+  Shared Nix primitives live here too: checked script writers,
   generic check constructors, PostgreSQL packages such as `postgresql_18_ix`,
   and reusable `bw://folder/item/field` reference grammar. You can read, fork,
   and run all of it (`LICENSE`).

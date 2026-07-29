@@ -65,10 +65,16 @@ Three unrelated things:
 
 ## dashboard
 
-- **`.#dashboard`** - standalone web canvas that aggregates every ix resource
-  producer socket into one live board (`packages/dashboard/dashboard/Cargo.toml:2,6`).
 - **`dashboard-core`** - the shared library: wire types, pane publisher, canvas
-  server (`packages/dashboard/dashboard-core/Cargo.toml:2,6`).
+  server (`packages/dashboard/dashboard-core/Cargo.toml:2,6`). No flake output of
+  its own; it is linked by its consumers.
+- **`dashboard-ex`** - the Elixir NIF over that library's hub, loaded by the MCP
+  kernel as `IxMcp.Dashboard` (`packages/dashboard/ex/Cargo.toml:2,6`).
+- **`tui::serve`** - the in-process web board a single process starts over its
+  own terminals (`packages/tui/tui/src/dashboard/mod.rs`).
+- **`.#ix-windows`** - the consumer of the producer sockets, rendering each pane
+  as a native window rather than a web board
+  (`packages/ix-windows/Cargo.toml:2,6`).
 
 ## Wheel / import / binary names
 

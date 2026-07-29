@@ -342,16 +342,16 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Run the aggregator once, separately, to watch every publisher:
+Run a consumer once, separately, to watch every publisher:
 
 ```sh
-nix run .#dashboard               # http://127.0.0.1:8080/
+nix run .#ix-windows              # one native window per pane (macOS)
 ```
 
-Producers come and go freely: the aggregator discovers each socket in the shared
+Producers come and go freely: the consumer discovers each socket in the shared
 directory (`socket_dir()`) and drops a producer's terminals when it disconnects.
-No process owns the server, so there is no port collision and one URL shows them
-all. Pass `path=` to `publish()` to choose the socket path.
+Pass `path=` to `publish()` to choose the socket path. For a browser view of a
+single process, `serve()` above needs no producer socket at all.
 
 ## Agent harnesses (Playwright-style)
 
@@ -393,9 +393,9 @@ The vocabulary maps straight onto Playwright:
 
 **Why drive the real TUI, not `claude -p`?** A headless `-p` run is invisible and
 uninterruptible. A harness drives the actual TUI in a PTY, so the session shows
-up live on the web dashboard (`nix run .#dashboard`) exactly like a human's:
-you watch the current state, attach, interrupt. For an experiment, observability
-beats a black box you can only diff.
+up live on the web dashboard (`await tui.serve()` in the harness process) exactly
+like a human's: you watch the current state, attach, interrupt. For an
+experiment, observability beats a black box you can only diff.
 
 **Auto-waiting.** Like Playwright, actions wait for actionability and assertions
 retry: `prompt` waits for the input box to accept the text before submitting,

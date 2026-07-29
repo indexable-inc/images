@@ -360,7 +360,7 @@ pub struct MonitorState {
     /// Maps a resolved derivation back to the original (content-addressed) one
     /// Nix resolved it from. A CA build emits `resolved derivation: A -> B` and
     /// then builds `B`; folding `B`'s build onto `A` keeps the row the user
-    /// asked for (`.#dashboard` is `A`) instead of a second look-alike for `B`.
+    /// asked for (`.#ix-windows` is `A`) instead of a second look-alike for `B`.
     /// Nix logs the resolve immediately before the build, so the alias is always
     /// known by the time `B`'s build activity starts.
     #[serde(skip)]
