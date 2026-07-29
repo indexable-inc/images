@@ -444,7 +444,24 @@ jobs:
   # issue plus a Slack post (when the caller supplies slack-bot-token),
   # recorded as a body marker so later ticks do not re-fire. Watcher-internal
   # failures (API errors) exit loudly without claiming health or closing the
-  # issue. Callers must grant `issues: write` on the calling job.
+  # issue. Callers must grant `issues: write`, `checks: read` and
+  # `statuses: read` on the calling job.
+  #
+  # A WATCHDOG THAT CANNOT SAY WHICH RED IT IS, IS NOISE. The two exits below
+  # mean opposite things and are labelled apart so the run page says which one
+  # happened without anybody opening a log:
+  #
+  #   exit 1, annotation title `flake bump stuck`
+  #     the condition this job exists to report; the tracking issue has detail.
+  #   exit 2, annotation title `flake-bump watchdog broken (not a stuck bump)`
+  #     this job's own plumbing failed, so it knows NOTHING about the bump.
+  #
+  # They were indistinguishable until indexable-inc/ix#9157: on the first day
+  # this job ran for ix at all it failed on EVERY tick, on a missing GraphQL
+  # scope, so ix's main carried a permanent `escalate` red that carried no
+  # information -- and a bump that really did wedge would have looked identical.
+  # Same device as ci-budget's "CI budget exceeded (timeout, not a lint
+  # failure)" title.
   escalate:
     needs: update-flake-lock
     if: ${{ always() && inputs.direct-push != true }}
@@ -453,10 +470,26 @@ jobs:
     # workflow silently depend on GitHub capacity after the update job exits.
     runs-on: ["${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-update-flake-lock', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 10
+    # checks/statuses are what `--json statusCheckRollup` below actually costs:
+    # the field resolves `commit.statusCheckRollup`, which aggregates check runs
+    # (checks:read) and commit statuses (statuses:read). With only
+    # pull-requests:read, GraphQL refuses the nested field rather than the
+    # query, so `gh` exits non-zero with
+    #
+    #     GraphQL: Resource not accessible by integration
+    #       (repository.pullRequests.nodes.0.statusCheckRollup
+    #        .nodes.0.commit.statusCheckRollup)
+    #
+    # and this watchdog dies before it has read anything (indexable-inc/ix#9157).
+    # Dropping to REST buys nothing: `commits/{ref}/check-runs` wants checks and
+    # `commits/{ref}/status` wants statuses, so these two reads are the floor for
+    # knowing whether the bump PR is red, not a shortcut around it.
     permissions:
+      checks: read
       contents: read
       issues: write
       pull-requests: read
+      statuses: read
     env:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -510,14 +543,39 @@ jobs:
 
           note() { echo "::notice::escalate: $*"; }
           # Internal failure is loud and neither claims health nor closes the
-          # tracking issue (same contract as cache-push-watchdog.yml).
-          fail_loud() { echo "::error::flake-bump escalation internal failure: $*"; exit 2; }
+          # tracking issue (same contract as cache-push-watchdog.yml). The
+          # annotation title and the step summary both say it is the WATCHDOG
+          # that broke, because "escalate is red" otherwise reads as "the bump is
+          # stuck" and the two want opposite responses (see the job header).
+          # exit 2, never 1: 1 is reserved for a real escalation.
+          fail_loud() {
+            echo "::error title=flake-bump watchdog broken (not a stuck bump)::escalate could not determine bump health: $*"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### flake-bump watchdog broken -- this is NOT a stuck bump"
+                echo
+                echo "\`escalate\` failed in its own plumbing. Cause: $*"
+                echo
+                echo "It therefore reports **nothing** about whether the rolling"
+                echo "bump PR is stuck; that is still unknown. Fix the watcher."
+                echo "A real escalation exits 1 and says \`flake bump stuck\`."
+              } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+            exit 2
+          }
 
           reasons=""
           add_reason() { reasons="${reasons}$1"$'\n'; }
 
           # Slack signals rejection in-body (ok:false) with HTTP 200, so parse
           # the response; non-zero return means the message did NOT post.
+          #
+          # Annotated as a warning, not an error: a failed Slack post is never
+          # this job's verdict. Both call sites already handle the non-zero
+          # return -- the recovery note just warns, and the escalation path
+          # leaves the `slack-escalated` marker unset so the next tick retries --
+          # so an `::error::` here put a red annotation on runs that then exited
+          # 0, which is the same unreadable-red problem as ix#9157 one level down.
           slack_post() {
             local text="$1" resp
             resp="$(jq -n --arg channel "${SLACK_CHANNEL}" --arg text "$text" \
@@ -526,9 +584,9 @@ jobs:
                   -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
                   -H "Content-Type: application/json; charset=utf-8" \
                   --data @-)" \
-              || { echo "::error::slack chat.postMessage transport failed"; return 1; }
+              || { echo "::warning title=flake-bump watchdog: slack post did not go out::chat.postMessage transport failed"; return 1; }
             if [ "$(jq -r '.ok' <<<"$resp")" != "true" ]; then
-              echo "::error::slack rejected the escalation post: $(jq -r '.error // "unknown"' <<<"$resp")"
+              echo "::warning title=flake-bump watchdog: slack post did not go out::slack rejected the post: $(jq -r '.error // "unknown"' <<<"$resp")"
               return 1
             fi
           }
@@ -780,6 +838,18 @@ jobs:
             fi
           fi
 
-          # Red in the Actions tab too, not only in the issue.
-          echo "::error::flake bump stuck for ${failing_for_h}h; see ${issue_url}"
+          # Red in the Actions tab too, not only in the issue. Titled and
+          # summarised so this red is legible as the real thing next to a
+          # `flake-bump watchdog broken` red; exit 1 is the escalation code.
+          echo "::error title=flake bump stuck::flake bump stuck for ${failing_for_h}h; see ${issue_url}"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### flake bump stuck for ${failing_for_h}h"
+              echo
+              echo "The watchdog ran fine; the bump is the problem. Tracking:"
+              echo "${issue_url}"
+              echo
+              echo "${reasons}"
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
           exit 1
