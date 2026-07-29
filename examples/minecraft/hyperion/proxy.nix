@@ -1,6 +1,7 @@
 # A VM players connect to. It terminates the Minecraft connection and forwards
 # bytes to the game server without reading them, so this is the only part of
-# the fleet with any public reachability.
+# the fleet meant to be reachable from outside it. Whether it currently is, is
+# the `ipv4` comment below.
 {
   config,
   hyperionProxy,
@@ -63,20 +64,12 @@ in {
       # block. The address is allocated at create; there is no
       # `ix vm set --ipv4`.
 
-      # The one declaration of "players arrive here". Nothing outside the guest
-      # reads it yet -- `ix apply` reads `groups` and `ipv4` and nothing under
-      # `crates/` reads `expose` at all -- so today this opens the guest
-      # firewall and nothing more.
-      expose.minecraft = {
-        port = 25565;
-        description = "public Minecraft entrypoint";
-      };
-
-      # No name in front of that port, so a player is handed an address and
-      # every correct fix to where the fleet lives costs them a new one
-      # (ENG-11218; the claiming gate that has to exist first is ENG-11222).
-      # The shape is decided rather than open, so it is recorded here instead
-      # of being re-derived by whoever wires it up.
+      # Nothing declares a name in front of the port below, so a player is
+      # handed an address and every correct fix to where this fleet lives costs
+      # them a new one (ENG-11218; the claiming gate that has to exist before
+      # any name can be handed out is ENG-11222). The shape is decided rather
+      # than open, so it is recorded here instead of being re-derived by
+      # whoever wires it up.
       #
       # One name for the fleet, declared identically by every proxy -- never
       # one name per VM. A player's endpoint has to resolve to the *role*,
@@ -100,6 +93,15 @@ in {
       # arrive identical, and the demultiplexing key is gone. So either one
       # address record per fleet name, or a distinct SRV target per fleet.
       # ENG-11227.
+
+      # The one declaration of "players arrive here". Nothing outside the guest
+      # reads it yet -- `ix apply` reads `groups` and `ipv4` and nothing under
+      # `crates/` reads `expose` at all -- so today this opens the guest
+      # firewall and nothing more.
+      expose.minecraft = {
+        port = 25565;
+        description = "public Minecraft entrypoint";
+      };
     };
 
     healthChecks.hyperion-proxy.unit = "hyperion-proxy.service";
