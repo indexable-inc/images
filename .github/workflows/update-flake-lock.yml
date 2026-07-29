@@ -336,9 +336,14 @@ jobs:
                 done
             fi
 
-            # ix carries the stricter committed-tree guard. Run it when a
-            # caller provides it, before a direct ruleset-bypassing push.
-            if [ "$DIRECT_PUSH" = true ] && [ -x scripts/ci/check-submodule-lock-sync.sh ]; then
+            # ix carries the stricter committed-tree guard. Run it whenever a
+            # caller provides it, on both paths. On the direct path it is the
+            # last check before a ruleset-bypassing push. On the PR path it
+            # matters just as much: ix's `check-submodule-lock-sync` is a
+            # required check, so a candidate that fails it becomes a PR that
+            # can never merge and just sits on the rolling branch. Failing the
+            # bump job here says so once, loudly, instead.
+            if [ -x scripts/ci/check-submodule-lock-sync.sh ]; then
               scripts/ci/check-submodule-lock-sync.sh HEAD
             fi
           }
@@ -464,22 +469,34 @@ jobs:
       SLACK_CHANNEL: ${{ inputs.slack-channel || 'C0A4TD9G7HR' }}
       SLACK_BOT_TOKEN: ${{ secrets.slack-bot-token }}
     steps:
-      # Same minimal-PATH provisioning as the update job above; the escalate
-      # script needs gh, jq, and curl.
+      # The whole external surface of the script below, named up front. The
+      # ix-ci-run-* runner PATH is bash, coreutils, dash, git, tar, gzip,
+      # unzip and nix and nothing else (ci-dispatcher module.nix
+      # `runnerWrapper.runtimeInputs`), so `sed` and `grep` are as absent as
+      # `gh`; only `date`, `head` and `cat` come free with coreutils.
+      #
+      # Both were missing from the hand-rolled `ensure` loop this replaces,
+      # and both fail SILENTLY rather than 127-ing the job, which is why the
+      # gap survived:
+      #
+      #   - `sed` reads the `<!-- slack-escalated: -->` marker out of the
+      #     tracking issue body. A 127 there yields an empty marker, the
+      #     escalation looks un-fired, and the once-only Slack post fires
+      #     AGAIN on every tick -- the exact re-alert-forever behaviour the
+      #     marker exists to prevent.
+      #   - `grep` decides whether a failed ref read was a benign 404. A 127
+      #     takes the benign branch, so a real API failure is reported as a
+      #     healthy bump.
+      #
+      # ensure-tools rather than another copy of the loop: one `ensure`
+      # implementation per lane is how this class of gap keeps being
+      # reintroduced. Fully qualified for the same reason as the update job's
+      # copy -- this job has no checkout at all, so a `./` path has nothing
+      # to resolve against.
       - name: Provision missing CLI tools
-        run: |
-          set -euo pipefail
-          ensure() {
-            command -v "$1" >/dev/null 2>&1 && return
-            # --print-out-paths prints one line per output (jq: bin + man);
-            # add /bin per path, not to the joined string.
-            while IFS= read -r p; do
-              echo "${p}/bin" >> "$GITHUB_PATH"
-            done < <(nix build "nixpkgs#$1" --no-link --print-out-paths)
-          }
-          ensure gh
-          ensure jq
-          ensure curl
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq curl sed=gnused grep=gnugrep
       - name: Escalate a stuck flake bump
         run: |
           set -euo pipefail
