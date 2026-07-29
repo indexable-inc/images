@@ -29,6 +29,17 @@ guessing which file holds the answer. Use `git clone --depth=1
 https://github.com/<owner>/<repo> /tmp/<repo>` for a fast read-only checkout
 and delete the directory when the question is answered.
 
+Answer from the most authoritative artifact the question has, never from a
+description of it. For code that artifact is the source, so read it rather than
+searching the web for what it probably does. Two direct routes: the `/tmp`
+clone above, or the already-realised source in the nix store (the vendored
+crate source derivation, `nix derivation show`, or the `$src` a build
+unpacked). Clone with `--filter=blob:none` rather than `--depth=1` when history
+matters, because `git log -S '<string>' -- <file>` plus `git tag --contains
+<commit>` answers "is the fix released yet" exactly, which search engines
+routinely get wrong. Reserve web search for what has no source to read: vendor
+docs, release notes, advisories, an error string's provenance.
+
 Before settling on an API shape, helper structure, or library pattern, spawn a
 subagent to check what the current idiom is. Pair `mcp__exa__web_search_exa`
 with `/tmp` clones of the maintained upstreams so the subagent can read real
