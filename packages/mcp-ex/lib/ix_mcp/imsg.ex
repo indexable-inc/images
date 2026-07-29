@@ -27,27 +27,177 @@ defmodule IxMcp.Imsg do
 
   @osascript "/usr/bin/osascript"
 
+  # RTF control words for the formats Messages exposes in its Format menu.
+  # Each maps to a __kIMText*AttributeName the receiving client honours.
+  @formats [italic: "\\i", bold: "\\b", underline: "\\ul", strike: "\\strike"]
+
   @doc """
   Send `text` over iMessage to the handle `to`. Returns as soon as
   Messages.app accepts the message; delivery is asynchronous, so when it
   matters check the message's `error` flag via `recent/1` a moment later.
+
+  Formatting options -- `italic:`, `bold:`, `underline:`, `strike:` --
+  apply to the whole message and set the same rich-text attributes
+  (`__kIMTextItalicAttributeName` and friends) that Messages' own Format
+  menu does, so they render as real formatting rather than as the
+  unicode-lookalike codepoints that survive a plain send.
+
+  A formatted send costs far more than a plain one. AppleScript's `send`
+  takes a string and drops every attribute, and the only other route to
+  those attributes is IMCore, a private framework only a signed helper
+  could link. So formatting drives the UI instead: it brings Messages to
+  the front, puts an RTF flavor on the clipboard, pastes, presses return,
+  and puts the clipboard back. That steals focus for a second or two and
+  can misfire if the user is typing into another window, so pass a format
+  flag only where the formatting itself is the point.
   """
-  @spec send(String.t(), String.t()) :: :ok | {:error, String.t()}
-  def send(to, text) do
-    script = """
+  @spec send(String.t(), String.t(), keyword()) :: :ok | {:error, String.t()}
+  def send(to, text, opts \\ []) do
+    with :ok <- osascript_present(),
+         :ok <- deliver(to, text, opts) do
+      notify(to, text, opts)
+    end
+  end
+
+  defp deliver(to, text, opts) do
+    case Enum.filter(@formats, fn {opt, _} -> opts[opt] end) do
+      [] -> osascript(plain_script(to, text))
+      formats -> send_formatted(to, text, Enum.map(formats, &elem(&1, 1)))
+    end
+  end
+
+  # Messages posts no banner for a message this machine sent, so an agent
+  # texting as the user is invisible until the user opens the thread. This
+  # is the only signal that it happened; pass `notify: false` where a burst
+  # of sends would make it noise. A banner that fails never fails the send,
+  # because by then the message is already gone.
+  defp notify(to, text, opts) do
+    if Keyword.get(opts, :notify, true) do
+      osascript(
+        "display notification #{applescript_str(text)} " <>
+          "with title #{applescript_str("Agent sent an iMessage")} " <>
+          "subtitle #{applescript_str(to)} sound name \"Glass\""
+      )
+    end
+
+    :ok
+  end
+
+  defp plain_script(to, text) do
+    """
     tell application "Messages"
       set svc to 1st account whose service type = iMessage
       send #{applescript_str(text)} to participant #{applescript_str(to)} of svc
     end tell
     """
+  end
 
-    if File.exists?(@osascript) do
-      case System.cmd(@osascript, ["-e", script], stderr_to_stdout: true) do
-        {_, 0} -> :ok
-        {out, code} -> {:error, "osascript exit #{code}: #{String.trim(out)}"}
-      end
-    else
-      {:error, "#{@osascript} not found: sending needs the macOS host"}
+  defp send_formatted(to, text, controls) do
+    path = Path.join(System.tmp_dir!(), "ix-imsg-#{System.unique_integer([:positive])}.rtf")
+
+    try do
+      File.write!(path, rtf(text, controls))
+
+      with :ok <- osascript(paste_script(to, path)), do: confirm_sent(to, text)
+    after
+      File.rm(path)
+    end
+  end
+
+  # `open location` selects the conversation, so this addresses handles
+  # only; a group chat's guid is not a URL Messages will open.
+  defp paste_script(to, rtf_path) do
+    """
+    set saved to the clipboard as record
+    set the clipboard to (read (POSIX file #{applescript_str(rtf_path)}) as «class RTF »)
+    tell application "Messages" to activate
+    open location #{applescript_str("imessage://" <> to)}
+    tell application "System Events" to tell process "Messages"
+      repeat 50 times
+        if exists window 1 then exit repeat
+        delay 0.1
+      end repeat
+      delay 0.6
+      keystroke "v" using command down
+      delay 0.4
+      key code 36
+      delay 0.4
+    end tell
+    set the clipboard to saved
+    """
+  end
+
+  # A UI-driven send lands wherever the keystrokes land, and osascript
+  # reports success either way, so read the message back out of chat.db
+  # rather than trusting the exit code. Messages writes the row a beat
+  # after the return key; 10 polls at 300ms covered every observed lag
+  # here, and a miss reports failure instead of silently dropping a
+  # message the caller believes it sent.
+  defp confirm_sent(to, text, tries \\ 10) do
+    case recent(with: to, limit: 1) do
+      {:ok, [%{sender: "me", text: ^text} | _]} ->
+        :ok
+
+      {:ok, _} when tries > 1 ->
+        Process.sleep(300)
+        confirm_sent(to, text, tries - 1)
+
+      {:ok, _} ->
+        {:error, "Messages took the paste but no matching message reached chat.db"}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # \\fs28 is 14pt, matching the compose field, so a paste does not arrive
+  # in a different size from what the user types.
+  defp rtf(text, controls) do
+    on = Enum.join(controls, " ")
+    off = Enum.map_join(controls, " ", &(&1 <> "0"))
+
+    "{\\rtf1\\ansi\\ansicpg1252\n{\\fonttbl\\f0\\fnil Helvetica;}\n" <>
+      "\\f0\\fs28 #{on} #{rtf_escape(text)}#{off}}"
+  end
+
+  # RTF is 7-bit and reserves braces and backslash, so anything else has
+  # to leave as a \\uN escape or it arrives as mojibake. N is signed
+  # 16-bit and the trailing `?` is the mandatory fallback glyph, so an
+  # astral codepoint (emoji) goes out as its surrogate pair.
+  defp rtf_escape(text) do
+    text
+    |> String.to_charlist()
+    |> Enum.map_join(fn
+      ?\\ -> "\\\\"
+      ?{ -> "\\{"
+      ?} -> "\\}"
+      ?\n -> "\\line "
+      c when c < 128 -> <<c>>
+      c when c < 0x10000 -> "\\u#{signed16(c)}?"
+      c -> surrogates(c)
+    end)
+  end
+
+  defp surrogates(c) do
+    offset = c - 0x10000
+    hi = 0xD800 + Bitwise.bsr(offset, 10)
+    lo = 0xDC00 + Bitwise.band(offset, 0x3FF)
+    "\\u#{signed16(hi)}?\\u#{signed16(lo)}?"
+  end
+
+  defp signed16(c) when c > 0x7FFF, do: c - 0x10000
+  defp signed16(c), do: c
+
+  defp osascript_present do
+    if File.exists?(@osascript),
+      do: :ok,
+      else: {:error, "#{@osascript} not found: sending needs the macOS host"}
+  end
+
+  defp osascript(script) do
+    case System.cmd(@osascript, ["-e", script], stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {out, code} -> {:error, "osascript exit #{code}: #{String.trim(out)}"}
     end
   end
 

@@ -107,7 +107,10 @@ defmodule IxMcp.MCP.Tools do
                                             Gmail.search("from:x newer_than:7d",
                                             limit: 5), Gmail.show(id),
                                             Gmail.status() for the auth state
-      Imsg.send(handle, text)               send an iMessage via Messages.app;
+      Imsg.send(handle, text)               send an iMessage via Messages.app,
+                                            and post a local banner saying so;
+                                            italic:/bold:/underline:/strike: set
+                                            real formatting by driving the UI;
                                             Imsg.chats(), .recent(with: handle),
                                             .search(q) read the local chat.db
                                             (own sends have NULL text; helpers
