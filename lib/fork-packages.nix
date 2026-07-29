@@ -686,6 +686,16 @@
           upstream = "hold";
           reason = "Reworked to catch (BaseError&) per the #15963 review (xokdvium: `catch (...)` swallows too much); a human (Andrew) resubmits, referencing #15963/#15962/#13438. Fixes NixOS/nix#15962.";
         };
+        # A macOS-only log-loss bug with a kernel mechanism behind it, and the
+        # most self-contained of the darwin patches. Upstream has known about
+        # the discard since c536e00c (2023) and works around it in two places
+        # -- a functional test disabled on macOS in #15323, a Linux-only FIXME
+        # in the still-open #16195 -- but nobody has connected it to "a builder
+        # that exits fast under -j N produces a completely empty log".
+        "fix(libstore): don't let Darwin discard a fast-exiting builder's log" = {
+          upstream = "hold";
+          reason = "XNU flushes a pseudoterminal's output queue ~0.6s after the last slave fd closes (ptsclose sets t_timeout = 60 ticks, ttyclose then calls ttyflush), and nix's worker only polls once it has started every runnable child, so on macOS a builder that writes and exits during a parallel build loses its whole log: empty logTail, empty nix log, and a bare 'builder failed with exit code 1' (ENG-11172, hit independently by two agents in one afternoon). Fixed by holding a slave fd for the build's lifetime and taking the end of the build from a liveness pipe instead of the master. Upstream-shaped and standalone, and it closes the hang that made c536e00c reject this same fix, but a human submits it per this fork's aiPrsAllowed = false -- and it wants a maintainer conversation with #16195, which is reworking the same code for Linux.";
+        };
         # 0002: the cleanest single-file candidate -- a regression restoration.
         # #8240 made nix's default-path probing EPERM/EACCES-tolerant on the
         # macOS sandbox (treat permission-denied like absent); the later

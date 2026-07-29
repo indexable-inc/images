@@ -366,6 +366,14 @@ let
   # CI lane (ix#8445), where concurrent jobs publish into the shared durable
   # store the others build against.
   overlayLowerGainsOutput = focusedFunctionalTest {name = "lower-gains-output";};
+  # `don't let Darwin discard a fast-exiting builder's log` regression
+  # coverage: a builder that writes to stderr and exits at once, while other
+  # jobs are starting, must still have its output in the failure message and in
+  # `nix log`. On macOS it did not -- XNU flushes a pseudoterminal's output
+  # queue about 0.6s after the last slave fd closes, and nix only polls once it
+  # has finished starting every runnable child (ENG-11172). This runs on linux
+  # too, where it asserts the invariant the darwin fix restores.
+  buildLogFastExit = focusedFunctionalTest {name = "build-log-fast-exit";};
 in
   package.overrideAttrs (old: {
     passthru =
@@ -379,7 +387,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildStatus daemonSignal fetchGitHeadCache overlayLowerGainsOutput smoke sparseLocks;
+            inherit autoGcInterrupt buildLogFastExit buildStatus daemonSignal fetchGitHeadCache overlayLowerGainsOutput smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {

@@ -180,20 +180,18 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge eee1b71d (50 patches on 2c6d06e9387c): the 48-patch series
-      # that 3e68babb pinned, plus the two halves of the local-overlay
-      # validity fix (ENG-10582). A CI job builds in an ephemeral overlay over
-      # a /nix/store the host's own daemon keeps writing, and the kernel does
-      # not promise to show a lower-store addition through an already-mounted
-      # overlay: a lookup that missed first leaves a negative dentry nothing
-      # revalidates. `don't abort when an output path becomes valid mid-build`
-      # stops `registerOutputs` aborting when the race is real, and `a
-      # local-overlay store must not call a path it cannot read valid` stops
-      # the store copying up a registration for an object it cannot reach,
-      # which is what turned that mount quirk into nine "missing" paths in one
-      # build. Neither is safe without the other: the first alone keeps a
-      # registered path the mount cannot show.
-      url = "github:indexable-inc/nix/8db4d38059196456fb94f00f04259053c8afa026";
+      # Megamerge 8e83dba8 (54 patches on 2c6d06e9387c): the 53-patch series
+      # that 5ab172cd carries, plus `don't let Darwin discard a fast-exiting
+      # builder's log` (ENG-11172). On macOS a builder that writes its
+      # diagnostic and exits at once during a parallel build produced no log at
+      # all -- XNU flushes a pseudoterminal's output queue about 0.6s after the
+      # last slave fd closes, and nix's worker only polls once it has finished
+      # starting every runnable child, so the bytes were gone before anything
+      # read them. Two agents hit it in one afternoon and both worked around it
+      # downstream. Nix now holds a slave fd for the build's lifetime and takes
+      # the end of the build from a liveness pipe the builder inherits, so the
+      # pty is never torn down with unread output in it.
+      url = "github:indexable-inc/nix/8e83dba82bfb4c0f1286502d0ddf3451fbc9a902";
       flake = false;
     };
 
