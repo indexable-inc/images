@@ -1,0 +1,21 @@
+---
+id: prompt-acronyms-derivation-and-subagent-verification
+postedAt: 2026-07-28T09:00:00-07:00
+title: "House prompt: define acronyms, derive instead of copy, verify in a second agent"
+tags: [agent, prompt]
+links:
+  - label: rules
+    href: https://github.com/indexable-inc/index/blob/main/packages/agent-prompt/rules.nix
+  - label: index#1616
+    href: https://github.com/indexable-inc/index/issues/1616
+  - label: index#4338
+    href: https://github.com/indexable-inc/index/issues/4338
+---
+
+Three rules land in the house prompt, so every agent wrapper picks them up on its next lock bump.
+
+`defineAcronyms` expands an acronym, initialism, or coined shorthand at first use, then uses the short form: "pressure stall information (PSI)", never a bare `PSI`. Forms a general programmer reads without expanding, such as `CPU` or `JSON`, stay bare. Agent prose kept introducing project-local initialisms with no expansion, which a reader outside the originating thread cannot look up. `readableQuantities` previously carried the coined-shorthand half of this rule; that sentence moved, so definition-at-first-use is now stated once.
+
+`firstPrinciples` reasons from the mechanism rather than from precedent: derive what must be true from how the system works, then check the established practice against that. A convention, an analogy, or what the surrounding code already does counts as a hypothesis to test, not an argument for keeping it. `redesignAtTheRoot` already covered judging a system's shape once you are designing it. This covers the step before, where an answer is inherited from the nearest example instead of derived, which is how a wrong convention survives every review that only asks whether a change matches its neighbors.
+
+`subagentVerification` moves checking out of the context that did the work: after finishing a change, spawn a fresh subagent to check it against the requirement and report what it found. A context that just produced the work shares its blind spots. The rule also says that where the right decomposition is unclear, run the fan-out and the inline attempt and compare instead of reasoning about which would have won. The three existing delegation rules all described sending work outward and said nothing about sending verification outward.
