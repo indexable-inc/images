@@ -165,6 +165,43 @@
     };
   }
   {
+    noOpChecks = {
+      topics = ["verification"];
+      text = ''
+        A check must fail differently from a check that did not run. Before
+        trusting a green, name what the no-op path looks like and confirm it
+        is not this one: a skipped test that returns Ok, a grep whose subject
+        changed shape, a rollup field that reads pending as passing, a
+        verifier absent from the host it was meant to check. Where a check
+        can be skipped, make the skip an outcome something counts, never
+        silence. Where it reads another tool, read that tool's state and not
+        its rendering. Report the share of subjects the check reached and the
+        share that then passed; either number alone is how this goes wrong.
+      '';
+      reason = ''
+        2026-07-29: one sweep found eleven checks across two repos, all
+        landed in a single day, that passed or failed for a reason unrelated
+        to what they verify. Every one was caught by a person who already
+        knew the answer, none by a gate. The worst was a correctness bug and
+        not only a blind spot: nox fingerprints a dirty tree by hashing `git
+        diff --binary HEAD`, and this repo sets `diff.external difft`, so
+        that prints `Binary file modified (old: 2 KiB, new: 2 KiB)`, which is
+        byte-identical for two different binaries of the same size. The eval
+        and NAR caches then served the wrong tree's digest under a module
+        header promising never a wrong hit.
+
+        Deliberately its own rule. validate covers a wrapper reporting zero
+        for a check that did run, and classOverInstance covers preferring a
+        gate to a patch; neither covers a check that never ran, or a rendered
+        summary read in place of the state behind it. The coverage clause
+        generalises past continuous integration: the house rules already
+        carry that shape for ClickHouse joins, where an unmatched ASOF row
+        fills with zeros rather than nulls, and reporting one number instead
+        of two produced three confidently wrong measurements.
+      '';
+    };
+  }
+  {
     rootCause = {
       topics = ["verification"];
       text = ''
@@ -773,39 +810,43 @@
       topics = ["writing" "comms" "tooling"];
       text = ''
         Respond as generative UI, not chat text: for everything, by
-        default, one mkapp app per session is the response surface.
-        Scaffold with `mkapp`, serve with `Serve.app` in a kernel cell;
-        the page opens in the terminal split and hot-reloads on every
-        green promote, so never tell the user to refresh. Build the page
-        while working, not after: put what you are doing right now and
-        why in the store's status field, and give every in-progress step
-        its own section marked loading, so the page always shows the work
-        in flight as skeletons; when a step's result lands, replace its
-        skeleton in place. Skeleton anything started but unfinished,
-        including steps only planned; set done with a final status when
-        finished. UI principles: render the page's full structure
-        immediately and fill it progressively, never a blank page or a
-        big-bang reveal; verdict and results before mechanism, top to
-        bottom; layout stays stable while filling (replace in place,
-        append at the end, no reflow jumps); a failed step renders as a
-        failed section carrying its error output, not a silent gap;
-        motion only signals liveness (skeleton pulse), never decoration;
-        one accent color on the theme tokens, auto light and dark
-        following the system. Edit only the app's
-        `staging/` tree; the gate typechecks it and promotes green code
-        into the live page. Durable state belongs in the store so
-        promotes keep it; an already-open page keeps its state across
-        promotes, so live updates go as imperative statements after the
-        store's rehydrate, never as initialState edits. The user reads
+        default, one dashboard document per session is the response
+        surface. Open it from a kernel cell with
+        `Dashboard.open("<id>")`, which serves the document and returns
+        its browser URL; `Dashboard` is in the workspace prelude, so a
+        cell needs no other setup. Publish each section as a pane:
+        `Dashboard.html(doc, pane, title, markup)` for prose and layout,
+        `Dashboard.data(doc, pane, title, renderer, term)` for
+        structured results. Publishing a pane id again replaces that
+        pane in an already-open page, so never tell the user to refresh.
+        Build the page while working, not after: put what you are doing
+        right now and why in a status pane, and give every in-progress
+        step its own pane marked loading, so the page always shows the
+        work in flight as skeletons; when a step's result lands, replace
+        its skeleton in place. Skeleton anything started but unfinished,
+        including steps only planned; set a final status when finished.
+        UI principles: publish the page's full structure immediately and
+        fill it progressively, never a blank page or a big-bang reveal;
+        verdict and results before mechanism, top to bottom; layout
+        stays stable while filling, so replace a pane where it sits
+        rather than reordering; a failed step renders as a failed pane
+        carrying its error output, not a silent gap; motion only signals
+        liveness (skeleton pulse), never decoration; one accent color on
+        the theme tokens, auto light and dark following the system. The
+        page is a live document rather than a reload, so a publish does
+        not reset it and what a human typed into it survives. The user reads
         only the page and nothing else, so write no chat text at all: no
         summary, no pointer, no status line, no closing remark. The page is
         the entire response. Everything goes on it, including results
         arriving from background work, corrections to earlier claims, the
         evidence behind a verdict, and the question you want answered next.
-        Anything that feels like it needs saying in chat is a section the
-        page is missing, so add the section. Saying a thing in both places
-        is the standing failure of this rule. Layer the
-        page: the surface is a short causal story in plain words (we
+        The document is editable, so ask that question in a pane, call
+        `Dashboard.view(doc)` to be woken when the user answers, and read
+        the answer back with `Dashboard.value(doc)`. Anything that feels
+        like it needs saying in chat is a pane the page is missing, so add
+        the pane. Saying a thing in both places is the standing failure of
+        this rule. Layer the page: the surface is a short causal story in
+        plain words (we
         thought X, but Y, so Z) with named actors, ordered what broke /
         damage / fix / lesson for incidents; a reader who knows none of
         the jargon can follow it. Mechanism and evidence sit one hover
@@ -817,8 +858,8 @@
         numbered chain carries a loop better than prose. Name the
         diagnostics that could not have worked and why, including the ones
         you proposed, and separate what the evidence proves from what it
-        only cleared. Expand dense notes, never paste them. When mkapp or the kernel is
-        unavailable, fall back to one live-rewritten HTML file opened
+        only cleared. Expand dense notes, never paste them. When the kernel
+        is unavailable, fall back to one live-rewritten HTML file opened
         with `html-open` (plain `open` only if that too is missing), and
         say so.
       '';
@@ -828,9 +869,7 @@
         built as live generative UI, replacing the 2026-07-19
         single-HTML-file default (kept as the fallback). Folds in the
         former generatedAppUi rule (index#4015) so the response surface
-        and the mkapp/Serve.app machinery are stated once. Imperative
-        store updates: initialState edits never reach an open page, the
-        HMR handoff wins (seen live 2026-07-22). Skeleton-per-step and
+        and the machinery behind it are stated once. Skeleton-per-step and
         the UI principles requested 2026-07-22 after the live demo:
         status text alone hid what was in flight. Layering from
         index#3872; html-open fallback from 2026-07-21. Teach-before-fail,
@@ -843,6 +882,21 @@
         which the asker had proposed. The evidence split was the same
         page: a reboot cleared the stall and proved nothing about its
         cause, since all five hosts ran that kernel and one wedged.
+
+        2026-07-29: mkapp was deleted, so the surface is the dashboard
+        document. `Dashboard.open/1` serves a document and hands back a
+        browser URL, and `Dashboard` is already in the kernel's workspace
+        prelude, so a response needs no scaffold, no dev server, and no
+        promote gate. That deleted three paragraphs this rule only needed
+        because of mkapp: editing `staging/`, keeping durable state in the
+        store across promotes, and writing live updates as imperative
+        statements after rehydrate. A pane republished under the same id
+        is what a promote used to be. The document is editable by the
+        reader, which mkapp pages were not, so the question you want
+        answered next can be answered in place. `IxMcp.Serve` only ever
+        served mkapp scaffolds and is sequenced to follow, once dashboard
+        can carry a response on its own; the rule points at dashboard now
+        either way, so nothing here waits on that.
       '';
     };
   }
