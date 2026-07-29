@@ -48,7 +48,6 @@ class SwitchSpec(BaseModel):
 
     target: str = Field(min_length=1)
     buildOn: typing.Literal["auto", "local", "remote"] = "auto"
-    buildVm: str | None = None
     sourceInstallable: str = Field(min_length=1)
     overrideInputs: dict[str, str] = Field(default_factory=empty_str_dict)
 
@@ -809,8 +808,6 @@ async def switch_node_from_source(
         "--workdir",
         str(workdir),
     ]
-    if node.switch.buildVm is not None:
-        command.extend(["--build-vm", node.switch.buildVm])
     for name, path in sorted(node.switch.overrideInputs.items()):
         command.extend(["--override-input", f"{name}={path}"])
     await run_source_switch(command, source_root, node.name, dry_run=dry_run)
@@ -823,20 +820,16 @@ async def switch_nodes_from_source(
     *,
     dry_run: bool,
 ) -> None:
-    # The native multi-VM switch: `ix apply .#a .#b .#c --build-vm <builder>` builds
-    # every closure on one warm builder and activates each on its own VM. The CLI
-    # rejects `--name` and derives each VM name from the installable's simple attr,
-    # and shares one `--build-vm`/`--workdir`/`--override-input` set across the
-    # batch, so `batch_groups` only ever passes nodes that agree on those.
+    # The native multi-VM switch: `ix apply .#a .#b .#c` activates each closure on
+    # its own VM in one invocation. The CLI rejects `--name` and derives each VM
+    # name from the installable's simple attr, and shares one
+    # `--workdir`/`--override-input` set across the batch, so `batch_groups` only
+    # ever passes nodes that agree on those.
     workdir = relative_source_workdir(source_root, source_workdir)
-    build_vm = nodes[0].switch.buildVm
-    assert build_vm is not None, "batched switch requires a shared build VM"
     command = [
         "ix",
         "apply",
         *[node.switch.sourceInstallable for node in nodes],
-        "--build-vm",
-        build_vm,
         "--workdir",
         str(workdir),
     ]
@@ -846,32 +839,24 @@ async def switch_nodes_from_source(
 
 
 def is_batchable_switch(node: FleetNode) -> bool:
-    # The native multi-VM `ix apply` builds on one shared `--build-vm` and names each
-    # VM from the installable's simple attr, so a node joins a batch only when it
-    # builds remotely, names a build VM, and its installable is exactly
-    # `.#<node-name>`. Anything else (local build, no build VM, a custom or dotted
-    # installable) falls back to the single-target `ix apply --name` path.
+    # The native multi-VM `ix apply` names each VM from the installable's simple
+    # attr, so a node joins a batch only when it builds remotely and its
+    # installable is exactly `.#<node-name>`. Anything else (a local build, a
+    # custom or dotted installable) falls back to the single-target
+    # `ix apply --name` path, which can carry an explicit name.
     switch = node.switch
-    return (
-        switch.buildOn == "remote"
-        and switch.buildVm is not None
-        and switch.sourceInstallable == f".#{node.name}"
-    )
+    return switch.buildOn == "remote" and switch.sourceInstallable == f".#{node.name}"
 
 
 def batch_groups(nodes: list[FleetNode]) -> list[list[FleetNode]]:
-    # One native multi-VM `ix apply` per (build VM, region, override-input set). The
-    # CLI shares one `--build-vm` and `--override-input` set across the batch, and
-    # the server's multi-switch requires every target to share the builder's
-    # region (CAS chunks are region-scoped). Grouping on region keeps a
-    # cross-region fleet from failing a whole batch instead of just the
-    # wrong-region nodes.
-    groups: dict[tuple[str, str, tuple[tuple[str, str], ...]], list[FleetNode]] = {}
-    order: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
+    # One native multi-VM `ix apply` per (region, override-input set). The CLI
+    # shares one `--override-input` set across the batch, and CAS chunks are
+    # region-scoped, so grouping on region keeps a cross-region fleet from
+    # failing a whole batch instead of just the wrong-region nodes.
+    groups: dict[tuple[str, tuple[tuple[str, str], ...]], list[FleetNode]] = {}
+    order: list[tuple[str, tuple[tuple[str, str], ...]]] = []
     for node in nodes:
-        assert node.switch.buildVm is not None
         key = (
-            node.switch.buildVm,
             node.region,
             tuple(sorted(node.switch.overrideInputs.items())),
         )

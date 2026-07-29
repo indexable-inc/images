@@ -398,7 +398,6 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           switch = {
             target = switchTarget;
             buildOn = switchBuildOn;
-            buildVm = deploy.switch.buildVm or null;
             # Remote switches default to the bare `.#<node>` so the native multi-VM
             # `ix apply` can derive each VM name from the attr; local switches keep the
             # `.#<node>-system` package alias (see `defaultSourceInstallable`).
@@ -576,7 +575,7 @@ rendered fleet plan, image attrset, and wrapped CLI app.
       )
       nodeConfigs;
     # Each node's NixOS system under its bare external name, so `ix apply .#<node>`
-    # (and the native multi-VM `ix apply .#a .#b --build-vm <builder>`) resolves
+    # (and the native multi-VM `ix apply .#a .#b`) resolves
     # `nixosConfigurations.<node>.config.system.build.toplevel`. `nodeConfigs`
     # is already the evaluated `config` (`evalImageConfig` returns `.config`),
     # so the `{ config }` wrapper reuses that closure with no second eval; this
