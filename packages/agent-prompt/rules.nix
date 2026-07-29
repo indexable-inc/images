@@ -194,11 +194,19 @@
       text = ''
         `nix store builds --json` lists every in-flight daemon build
         machine-wide (patched nix; confirm with `nix store builds --help`).
+        A build that already finished printed an invocation id on exit, and
+        `nix invocation show <id>` reports its evaluation cost and
+        per-derivation durations with the machine each one ran on. Read that
+        rather than running the build again to watch it.
       '';
       reason = ''
         Agents guessed at daemon state after observability shipped (nix
         2.34.7+ix). Also the only runtime-tagged rule; the provider-prompts
-        tests assert the tag axis through it.
+        tests assert the tag axis through it. The invocation clause landed
+        with indexable-inc/nix#6: sessions re-ran a finished build to see what
+        it did, which pays for the build twice and still misses whatever
+        scrolled past. Held until that PR ships, since the command does not
+        exist before then.
       '';
     };
   }
