@@ -23,7 +23,11 @@ task, file a narrow issue.
   orchestration outside Nix.
 - Default to no `devShells.default`; add per-package shells or build inputs where
   the need belongs.
-- Keep the tracked pre-commit hook as a small entry point to the lint app.
+- Do not put the lint app in a commit hook. It is too slow to live on every
+  commit -- ix had `exec nix run .#lint` there and removed it. A commit hook
+  earns its place only by being narrow and fast (ix's scans astlog over the
+  staged `.nix` files), and it must print what it did NOT check, or a green
+  hook gets read as a green lint.
 - Use `stdenv.mkDerivation (finalAttrs: { ... })` over `let version = ...; in
   mkDerivation { inherit version; ... }`. `finalAttrs:` is the canonical
   self-reference (we ban `rec`), and overrides propagate cleanly.
