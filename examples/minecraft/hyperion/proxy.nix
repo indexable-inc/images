@@ -154,10 +154,19 @@ in {
       hyperion-proxy.unit = "hyperion-proxy.service";
 
       # `systemctl is-active` cannot see the failure that matters here.
-      # hyperion-proxy binds its listener at startup and dials the game server
-      # once per connection, so a backend it cannot reach at all leaves the
-      # unit `active (running)` indefinitely. It read `active` for twelve hours
-      # while cross-host east-west was down and nothing could have played.
+      # hyperion-proxy binds its listener at startup and holds one long-lived
+      # connection to the game server, multiplexing every player over it --
+      # `ss -tn` inside a proxy shows exactly one ESTAB to the game port with
+      # no players connected. The unit's state says nothing about that link. It
+      # read `active (running)` for twelve hours while cross-host east-west was
+      # down and nothing could have played.
+      #
+      # It is worse than a stale reading. When the backend read loop fails the
+      # proxy signals every player task and drops every player socket, and a
+      # re-dialled server would wait forever for an opening handshake that a
+      # resumed connection never sends. So `active` means neither "a player can
+      # join" nor "the players already here are still connected", and nothing
+      # in the unit distinguishes those from healthy.
       #
       # This asks the question a player asks. The proxy does not answer a
       # status request itself, it forwards it -- the reply carries the game

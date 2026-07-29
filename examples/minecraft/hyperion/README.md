@@ -198,12 +198,18 @@ is the difference that matters.
 
 **That difference is now a health check rather than a warning.** The fleet used
 to declare only `ix.healthChecks.hyperion-proxy.unit`, and that check could not
-fail in the case that mattered: hyperion-proxy binds its listener at startup and
-dials the game server per connection, so it stayed `active (running)` for twelve
-hours while nothing could have played. `proxy.nix` now declares a second check
-that sends the same handshake to the proxy's own listener. Both were run
-side by side inside `hyperion-proxy-0`, with the game server's port dropped by a
-temporary nftables rule:
+fail in the case that mattered. hyperion-proxy binds its listener at startup and
+holds one long-lived connection to the game server, multiplexing players over
+it; `ss -tn` inside a proxy shows a single ESTAB to the game port with nobody
+playing. The unit's state says nothing about that link, so it stayed
+`active (running)` for twelve hours while nothing could have played -- and when
+the link does break the proxy drops every player socket and cannot usefully
+re-establish, so `active` means neither "a player can join" nor "the players
+already here are still connected".
+
+`proxy.nix` now declares a second check that sends the same handshake to the
+proxy's own listener. Both were run side by side inside `hyperion-proxy-0`, with
+the game server's port dropped by a temporary nftables rule:
 
     backend blocked:   unit check PASS  <- blind
                        handshake  FAIL  <- fires
