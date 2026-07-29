@@ -557,11 +557,11 @@
         "tests": "tests_2"
       },
       "locked": {
-        "lastModified": 1785331983,
-        "narHash": "sha256-dmpsnMhuYxao3zxfyiIH4PEh6gDVaA2cOUkdoichoMo=",
+        "lastModified": 1785365520,
+        "narHash": "sha256-/bdtzU/Tz+WuUXeJwKgrFTvuXt96q6dvdDFKHWPEZhg=",
         "owner": "indexable-inc",
         "repo": "index",
-        "rev": "57962328c47190afea75b45b9940b5c1409f71c4",
+        "rev": "bf34eb4d088ae669cfdc0e4a2f4d0bb210780f92",
         "type": "github"
       },
       "original": {
