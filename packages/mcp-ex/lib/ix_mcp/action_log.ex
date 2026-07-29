@@ -130,6 +130,21 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE session_messages (id INTEGER PRIMARY KEY, from_session INTEGER NOT NULL REFERENCES sessions(id), to_session INTEGER REFERENCES sessions(id), body TEXT NOT NULL, created_at TEXT NOT NULL)
   """
 
+  # ENG-11209: fleet notification state, in two tables because the two things
+  # have different lifetimes. A mute is an operator decision and must outlive
+  # every reconnect -- muting something that un-mutes when the client
+  # reconnects is not a mute. A seen fingerprint is dedup bookkeeping: it is
+  # what makes a condition that stays true announce once instead of once per
+  # poll, so it must be durable for the same reason the outbox is (#3839) --
+  # kept in memory, a kernel restart re-announces every standing fault.
+  @create_fleet_mutes """
+  CREATE TABLE fleet_mutes (predicate TEXT PRIMARY KEY, muted_at TEXT NOT NULL, reason TEXT)
+  """
+
+  @create_fleet_alerts_seen """
+  CREATE TABLE fleet_alerts_seen (fingerprint TEXT PRIMARY KEY, predicate TEXT NOT NULL, summary TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)
+  """
+
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
   # user_version` header field instead of being re-derived by column
   # sniffing on every open. Sniffing can only classify shapes this binary
@@ -143,8 +158,8 @@ defmodule IxMcp.ActionLog do
   # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger,
   # 6 = the #3880 issue-claim arbiter, 7 = the #3881 session heartbeat and
   # message bus, 8 = the #3883 request bus (issue_claims folded in and
-  # dropped).
-  @user_version 8
+  # dropped), 9 = the ENG-11209 fleet notification state.
+  @user_version 9
 
   # How long a statement waits for a sibling instance's write lock before
   # step!/fetch/execute! give up and crash with a diagnosis (#3890). A
@@ -286,6 +301,12 @@ defmodule IxMcp.ActionLog do
     "DROP TABLE issue_claims"
   ]
 
+  # A v8 database predates fleet notifications (ENG-11209): both tables are
+  # created empty, which is exactly right -- an operator who has muted nothing
+  # has no mutes, and an alert nobody has seen yet should announce on the first
+  # poll after the upgrade.
+  @migrate_v8_to_v9 [@create_fleet_mutes, @create_fleet_alerts_seen]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
@@ -297,7 +318,8 @@ defmodule IxMcp.ActionLog do
     {4, @migrate_v4_to_v5},
     {5, @migrate_v5_to_v6},
     {6, @migrate_v6_to_v7},
-    {7, @migrate_v7_to_v8}
+    {7, @migrate_v7_to_v8},
+    {8, @migrate_v8_to_v9}
   ]
 
   @insert """
@@ -812,6 +834,58 @@ defmodule IxMcp.ActionLog do
     call(server, {:ack_outbox, ids})
   end
 
+  @doc """
+  Mute fleet predicate `id` durably (ENG-11209). Survives reconnects and
+  kernel restarts, because it lives in the same SQLite file as everything
+  else: a mute that evaporates when the client reconnects is not a mute.
+  Idempotent -- re-muting keeps the original `muted_at`.
+  """
+  @spec mute_fleet_predicate(String.t(), String.t() | nil, GenServer.server()) :: :ok
+  def mute_fleet_predicate(id, reason \\ nil, server \\ __MODULE__) when is_binary(id) do
+    call(server, {:mute_fleet_predicate, id, reason, now()})
+  end
+
+  @doc "Unmute fleet predicate `id`. Unmuting something never muted is `:ok`."
+  @spec unmute_fleet_predicate(String.t(), GenServer.server()) :: :ok
+  def unmute_fleet_predicate(id, server \\ __MODULE__) when is_binary(id) do
+    call(server, {:unmute_fleet_predicate, id})
+  end
+
+  @doc "Every muted predicate id, oldest mute first."
+  @spec fleet_mutes(GenServer.server()) :: [map()]
+  def fleet_mutes(server \\ __MODULE__), do: call(server, :fleet_mutes)
+
+  @doc """
+  Record that `fingerprint` was observed, and say whether it is new.
+
+  `true` means nobody has been told about this condition instance yet, so it
+  should be announced; `false` means it is already known and must stay silent.
+  One guarded INSERT decides it, so two instances polling the same database
+  concurrently cannot both announce the same fault.
+  """
+  @spec fleet_alert_new?(String.t(), String.t(), String.t(), GenServer.server()) :: boolean()
+  def fleet_alert_new?(fingerprint, predicate, summary, server \\ __MODULE__) do
+    call(server, {:fleet_alert_seen, fingerprint, predicate, summary, now()})
+  end
+
+  @doc """
+  Every alert instance this kernel has announced and not forgotten, newest
+  first. This is the standing-state read: a condition that fired once and is
+  still true appears here rather than being re-announced.
+  """
+  @spec fleet_alerts_seen(GenServer.server()) :: [map()]
+  def fleet_alerts_seen(server \\ __MODULE__), do: call(server, :fleet_alerts_seen)
+
+  @doc """
+  Forget seen fingerprints, so a still-standing condition announces again.
+  `:all` clears everything; a predicate id clears just that predicate.
+  Returns the number of rows dropped.
+  """
+  @spec forget_fleet_alerts(:all | String.t(), GenServer.server()) :: integer()
+  def forget_fleet_alerts(scope \\ :all, server \\ __MODULE__) do
+    call(server, {:forget_fleet_alerts, scope})
+  end
+
   # Every public function funnels through here (#3874). When the server dies
   # mid-request -- historically a SQLITE_BUSY badmatch under a sibling's
   # write lock -- the exit propagated into whichever process was calling:
@@ -1276,6 +1350,97 @@ defmodule IxMcp.ActionLog do
     {:reply, id, state}
   end
 
+  def handle_call({:mute_fleet_predicate, id, reason, at}, _from, %{db: db} = state) do
+    run(
+      db,
+      "INSERT INTO fleet_mutes (predicate, muted_at, reason) VALUES (?, ?, ?) ON CONFLICT(predicate) DO NOTHING",
+      [id, at, reason]
+    )
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:unmute_fleet_predicate, id}, _from, %{db: db} = state) do
+    run(db, "DELETE FROM fleet_mutes WHERE predicate = ?", [id])
+    {:reply, :ok, state}
+  end
+
+  def handle_call(:fleet_mutes, _from, %{db: db} = state) do
+    entries =
+      for [predicate, muted_at, reason] <-
+            fetch(db, "SELECT predicate, muted_at, reason FROM fleet_mutes ORDER BY muted_at", []) do
+        %{id: predicate, muted_at: muted_at, reason: reason}
+      end
+
+    {:reply, entries, state}
+  end
+
+  # The INSERT is the decision, not a preceding SELECT: two kernels sharing
+  # this file poll independently, and a check-then-insert would let both
+  # announce the same fault.
+  #
+  # It must be DO NOTHING, and the refresh must be a separate UPDATE. With
+  # `ON CONFLICT DO UPDATE` in one statement, `changes` is 1 for the update
+  # branch as well as the insert, so every poll reads as new and a standing
+  # fault re-announces forever -- which is the exact spam this dedup exists to
+  # prevent. The break-test in fleet_alerts_test.exs caught it doing precisely
+  # that; keep that test if you touch this.
+  def handle_call(
+        {:fleet_alert_seen, fingerprint, predicate, summary, at},
+        _from,
+        %{db: db} = state
+      ) do
+    run(
+      db,
+      "INSERT INTO fleet_alerts_seen (fingerprint, predicate, summary, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(fingerprint) DO NOTHING",
+      [fingerprint, predicate, summary, at, at]
+    )
+
+    {:ok, inserted} = Sqlite3.changes(db.conn)
+
+    # Refresh regardless of who won, so "still true" stays distinguishable
+    # from "gone" when reading fleet_alerts_seen.
+    run(db, "UPDATE fleet_alerts_seen SET last_seen_at = ? WHERE fingerprint = ?", [
+      at,
+      fingerprint
+    ])
+
+    {:reply, inserted == 1, state}
+  end
+
+  def handle_call(:fleet_alerts_seen, _from, %{db: db} = state) do
+    entries =
+      for [fingerprint, predicate, summary, first_seen_at, last_seen_at] <-
+            fetch(
+              db,
+              "SELECT fingerprint, predicate, summary, first_seen_at, last_seen_at FROM fleet_alerts_seen ORDER BY last_seen_at DESC",
+              []
+            ) do
+        %{
+          fingerprint: fingerprint,
+          predicate: predicate,
+          summary: summary,
+          first_seen_at: first_seen_at,
+          last_seen_at: last_seen_at
+        }
+      end
+
+    {:reply, entries, state}
+  end
+
+  def handle_call({:forget_fleet_alerts, :all}, _from, %{db: db} = state) do
+    run(db, "DELETE FROM fleet_alerts_seen", [])
+    {:ok, changes} = Sqlite3.changes(db.conn)
+    {:reply, changes, state}
+  end
+
+  def handle_call({:forget_fleet_alerts, predicate}, _from, %{db: db} = state)
+      when is_binary(predicate) do
+    run(db, "DELETE FROM fleet_alerts_seen WHERE predicate = ?", [predicate])
+    {:ok, changes} = Sqlite3.changes(db.conn)
+    {:reply, changes, state}
+  end
+
   def handle_call({:heartbeat_session, session_id, at}, _from, %{db: db} = state) do
     run(db, "UPDATE sessions SET last_seen_at = ? WHERE id = ?", [at, session_id])
     {:reply, :ok, state}
@@ -1402,16 +1567,28 @@ defmodule IxMcp.ActionLog do
   end
 
   # Ordered shape probes, oldest first: the first missing piece names the
-  # version the file stopped at.
+  # version the file stopped at. Column probes here, table probes in
+  # sniff_table_version/1 -- split because the two ask different questions of
+  # different catalogs, and together they exceed the complexity budget.
   defp sniff_version(db, columns) do
     cond do
       "session_id" not in columns -> 1
       "status" not in columns -> 2
       "line" not in columns -> 3
+      true -> sniff_table_version(db)
+    end
+  end
+
+  # Newest table first. v8 dropped issue_claims (#3883), so its absence cannot
+  # distinguish v5 from v8 -- only the presence of a table introduced later
+  # can, and the same reasoning makes fleet_mutes (ENG-11209) the test for v9.
+  # Reading these in the wrong order silently mis-dates the file and runs a
+  # migration ladder from the wrong rung.
+  defp sniff_table_version(db) do
+    cond do
+      table_exists?(db, "fleet_mutes") -> @user_version
+      table_exists?(db, "requests") -> 8
       not table_exists?(db, "jobs") -> 4
-      # v8 dropped issue_claims (#3883), so its presence must be judged
-      # after the requests table names the file current.
-      table_exists?(db, "requests") -> @user_version
       not table_exists?(db, "issue_claims") -> 5
       not table_exists?(db, "session_messages") -> 6
       true -> 7
@@ -1436,6 +1613,8 @@ defmodule IxMcp.ActionLog do
         @create_requests,
         @create_request_events,
         @create_session_messages,
+        @create_fleet_mutes,
+        @create_fleet_alerts_seen,
         stamp(),
         "COMMIT"
       ]
@@ -1471,6 +1650,19 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply(:list_requests), do: []
   defp disabled_reply({:request_events_after, _id}), do: []
   defp disabled_reply(:last_request_event_id), do: 0
+  # A mute that was not stored must not report success. Answering :ok here
+  # would tell an operator their unsubscribe took effect while the next poll
+  # announces the same thing again -- the precise experience that teaches
+  # people muting does not work. :disabled is the same answer the request bus
+  # gives for the same reason.
+  defp disabled_reply({:mute_fleet_predicate, _id, _reason, _at}), do: :disabled
+  defp disabled_reply({:unmute_fleet_predicate, _id}), do: :disabled
+  defp disabled_reply(:fleet_mutes), do: []
+  # No ledger means no dedup record, so every poll would re-announce. Say
+  # "not new" instead: a degraded log must not turn one fault into a stream.
+  defp disabled_reply({:fleet_alert_seen, _fp, _pred, _summary, _at}), do: false
+  defp disabled_reply(:fleet_alerts_seen), do: []
+  defp disabled_reply({:forget_fleet_alerts, _scope}), do: 0
   defp disabled_reply({:heartbeat_session, _session_id, _at}), do: :ok
   defp disabled_reply(:session_directory), do: []
   defp disabled_reply({:send_session_message, _from, _to, _body, _at}), do: :disabled

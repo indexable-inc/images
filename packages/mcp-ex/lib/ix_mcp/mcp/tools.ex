@@ -30,6 +30,21 @@ defmodule IxMcp.MCP.Tools do
                                             session's finishes here (own jobs
                                             already announce; session ids:
                                             Sessions.list())
+      Fleet.check()                         poll the fleet for alert conditions now;
+                                            .errors non-empty means part of it
+                                            could NOT be read, which is not the
+                                            same as healthy
+      Fleet.mute("oom_burst")               UNSUBSCRIBE: silence one fleet alert
+                                            durably (survives reconnect) when it
+                                            is spamming you; Fleet.unmute/1 undoes
+                                            it, Fleet.alerts() shows what is muted
+                                            and what is standing, and the MCP
+                                            logging/setLevel request raises the
+                                            level floor for all of them at once.
+                                            Ids: kernel_storage, oom_burst,
+                                            observability_blind
+      Fleet.topology()                      which hosts the BEAM is on (also in
+                                            this server's connect instructions)
       Read.file(path)                       a file; Read.file(path, first, last) slices
                                             a 1-based inclusive line range
       Edit.replace(path, old, new)          exact-string find/replace with native

@@ -50,6 +50,11 @@ defmodule IxMcp.Fleet do
   behavior.
   """
 
+  alias IxMcp.ActionLog
+  alias IxMcp.Fleet.Alerts
+  alias IxMcp.Fleet.Topology
+  alias IxMcp.Fleet.Watch
+
   @nodes_env "IX_BEAM_NODES"
   @cookie_env "IX_BEAM_COOKIE"
   @cookie_file_env "IX_BEAM_COOKIE_FILE"
@@ -76,6 +81,83 @@ defmodule IxMcp.Fleet do
     # astlog-ignore: no-unsafe-to-atom
     |> Enum.map(&String.to_atom/1)
   end
+
+  @doc """
+  Which hosts the BEAM is actually on, probed now: reachable, unreachable, or
+  unknown-because-distribution-is-down. This is the same summary the server
+  puts in its `initialize` instructions.
+  """
+  @spec topology() :: Topology.t()
+  def topology, do: Topology.summary()
+
+  @doc """
+  Poll the fleet for alert conditions right now and say what happened.
+
+  Returns `%{announced: hits, suppressed: n, errors: reasons}`. A non-empty
+  `errors` means part of the fleet could not be read -- which is NOT the same
+  as a healthy fleet, and is why it is a separate key rather than an empty
+  `announced`.
+  """
+  @spec check() :: %{announced: [map()], suppressed: non_neg_integer(), errors: [String.t()]}
+  def check, do: Watch.poll_now()
+
+  @doc """
+  Silence one alert predicate durably. Survives reconnects and restarts.
+  Valid ids come from `Alerts.ids/0`; an unknown id is refused
+  rather than accepted into a mute list that then does nothing.
+  """
+  @spec mute(String.t(), String.t() | nil) :: :ok | {:error, String.t()}
+  def mute(predicate, reason \\ nil) when is_binary(predicate) do
+    if predicate in Alerts.ids() do
+      case ActionLog.mute_fleet_predicate(predicate, reason) do
+        :disabled ->
+          {:error,
+           "the action log is degraded, so the mute was not stored and " <>
+             "#{predicate} will keep announcing"}
+
+        _stored ->
+          :ok
+      end
+    else
+      known = Enum.join(Alerts.ids(), ", ")
+      {:error, "unknown predicate #{inspect(predicate)}; known: #{known}"}
+    end
+  end
+
+  @doc """
+  Un-silence one alert predicate. `{:error, _}` when the log is degraded and
+  the change could not be stored.
+  """
+  @spec unmute(String.t()) :: :ok | {:error, String.t()}
+  def unmute(predicate) when is_binary(predicate) do
+    case ActionLog.unmute_fleet_predicate(predicate) do
+      :disabled -> {:error, "the action log is degraded, so the unmute was not stored"}
+      _ok -> :ok
+    end
+  end
+
+  @doc """
+  What is currently muted, and what alerts are standing. A condition that
+  fired once and is still true lives here rather than being re-announced, so
+  this is where to look when the channel has gone quiet and you want to know
+  whether that means "fine" or "already told you".
+  """
+  @spec alerts() :: %{muted: [map()], standing: [map()], level: String.t()}
+  def alerts do
+    %{
+      muted: ActionLog.fleet_mutes(),
+      standing: ActionLog.fleet_alerts_seen(),
+      level: Watch.level()
+    }
+  end
+
+  @doc """
+  Forget standing alerts so they announce again: `:all`, or one predicate id.
+  Use after fixing something, to confirm the fix by silence rather than by
+  assumption.
+  """
+  @spec forget(:all | String.t()) :: integer()
+  def forget(scope \\ :all), do: ActionLog.forget_fleet_alerts(scope)
 
   @doc """
   Ensure distributed Erlang is running on this node, starting it (and setting

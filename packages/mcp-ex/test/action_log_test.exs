@@ -320,7 +320,7 @@ defmodule IxMcp.ActionLogTest do
     assert [%{status: "done", stack: nil, line: nil} | _] = ActionLog.recent(10, log)
 
     # The 2 -> ... -> 8 steps stamped the file on their way through (index#3539).
-    assert user_version(path) == 8
+    assert user_version(path) == 9
   end
 
   test "a v1 database migrates losslessly to the normalized schema, once" do
@@ -404,7 +404,7 @@ defmodule IxMcp.ActionLogTest do
     stop_supervised!(:migrate)
 
     # The ladder ran 1 -> 2 -> ... -> 8 and left the stamp behind (index#3539).
-    assert user_version(path) == 8
+    assert user_version(path) == 9
 
     # The migrated file is the v2 shape on disk: normalized columns, no v1
     # leftovers, and a reopen (no-op detection) does not duplicate rows.
@@ -442,6 +442,8 @@ defmodule IxMcp.ActionLogTest do
     assert tables ==
              [
                ["actions"],
+               ["fleet_alerts_seen"],
+               ["fleet_mutes"],
                ["job_output"],
                ["jobs"],
                ["outbox"],
@@ -473,7 +475,7 @@ defmodule IxMcp.ActionLogTest do
   test "a fresh database is created stamped with the current schema version" do
     path = tmp_db()
     start_supervised!({ActionLog, path: path, name: :action_log_fresh_stamp})
-    assert user_version(path) == 8
+    assert user_version(path) == 9
   end
 
   test "an unstamped file already at the current schema is stamped, not rewritten" do
@@ -498,7 +500,7 @@ defmodule IxMcp.ActionLogTest do
 
     reopened = start_supervised!({ActionLog, path: path, name: :action_log_stamp_b})
     assert [%{intent: "keep"}] = ActionLog.recent(10, reopened)
-    assert user_version(path) == 8
+    assert user_version(path) == 9
   end
 
   test "an unstamped pre-line file (the #3536 shape) sniffs as v3 and gains the line column" do
@@ -523,7 +525,7 @@ defmodule IxMcp.ActionLogTest do
     log = start_supervised!({ActionLog, path: path, name: :action_log_pre_line})
 
     assert [%{intent: "pre-line row", status: "done", line: nil}] = ActionLog.recent(10, log)
-    assert user_version(path) == 8
+    assert user_version(path) == 9
   end
 
   test "the guarded update arbitrates issue claims on the request bus (#3880, #3883)" do
@@ -690,6 +692,49 @@ defmodule IxMcp.ActionLogTest do
     assert [%{event: :posted}, %{event: :claimed}] = ActionLog.request_events_after(0, log)
   end
 
+  test "a v8 database gains the fleet notification tables, empty (ENG-11209)" do
+    path = tmp_db()
+
+    # The full v8 shape a pre-ENG-11209 binary leaves on disk. All nine tables,
+    # not a convenient subset: `init/1` prepares statements against `actions`
+    # on open, so a partial fixture fails to start the log and the test proves
+    # nothing about the migration.
+    {:ok, conn} = Sqlite3.open(path)
+
+    for statement <- [
+          "CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, last_seen_at TEXT)",
+          "CREATE TABLE topics (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES sessions(id), name TEXT NOT NULL, started_at TEXT NOT NULL)",
+          "CREATE TABLE actions (id INTEGER PRIMARY KEY, at TEXT NOT NULL, session_id INTEGER NOT NULL REFERENCES sessions(id), topic_id INTEGER REFERENCES topics(id), tool TEXT NOT NULL, intent TEXT, arguments TEXT NOT NULL, is_error INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'done', stack TEXT, stack_at TEXT, line INTEGER)",
+          "CREATE TABLE jobs (id TEXT PRIMARY KEY, session_id INTEGER REFERENCES sessions(id), action_id INTEGER REFERENCES actions(id), intent TEXT, session_name TEXT, topic_name TEXT, code TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running', watch INTEGER NOT NULL DEFAULT 0, result TEXT, output_bytes INTEGER NOT NULL DEFAULT 0, output_dropped INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, finished_at TEXT, elapsed_ms INTEGER)",
+          "CREATE TABLE job_output (job_id TEXT NOT NULL REFERENCES jobs(id), seq INTEGER NOT NULL, chunk TEXT NOT NULL, PRIMARY KEY (job_id, seq))",
+          "CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)",
+          "CREATE TABLE requests (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, ref TEXT UNIQUE, title TEXT NOT NULL, body TEXT, posted_by INTEGER REFERENCES sessions(id), status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER REFERENCES sessions(id), posted_at TEXT NOT NULL, claimed_at TEXT, done_at TEXT)",
+          "CREATE TABLE request_events (id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL REFERENCES requests(id), event TEXT NOT NULL, session_id INTEGER REFERENCES sessions(id), at TEXT NOT NULL)",
+          "CREATE TABLE session_messages (id INTEGER PRIMARY KEY, from_session INTEGER NOT NULL REFERENCES sessions(id), to_session INTEGER REFERENCES sessions(id), body TEXT NOT NULL, created_at TEXT NOT NULL)",
+          "PRAGMA user_version = 8"
+        ] do
+      :ok = Sqlite3.execute(conn, statement)
+    end
+
+    :ok = Sqlite3.close(conn)
+
+    log = start_supervised!({ActionLog, path: path, name: :action_log_v8_to_v9})
+
+    # An operator who has muted nothing has no mutes, and an alert nobody has
+    # seen yet must announce on the first poll after the upgrade rather than
+    # being deduped away by a phantom row.
+    assert ActionLog.fleet_mutes(log) == []
+    assert ActionLog.fleet_alerts_seen(log) == []
+
+    # And the tables are live, not merely present.
+    assert :ok = ActionLog.mute_fleet_predicate("oom_burst", "post-migration", log)
+    assert [%{id: "oom_burst", reason: "post-migration"}] = ActionLog.fleet_mutes(log)
+    assert ActionLog.fleet_alert_new?("fp-1", "oom_burst", "first sighting", log)
+    refute ActionLog.fleet_alert_new?("fp-1", "oom_burst", "first sighting", log)
+
+    assert user_version(path) == 9
+  end
+
   test "a v7 database folds its issue claims into requests and drops the table (#3883)" do
     path = tmp_db()
 
@@ -740,7 +785,7 @@ defmodule IxMcp.ActionLogTest do
     assert ActionLog.request_events_after(0, log) == []
 
     # The old table is gone and the stamp moved.
-    assert user_version(path) == 8
+    assert user_version(path) == 9
 
     {:ok, conn} = Sqlite3.open(path)
 
@@ -814,7 +859,7 @@ defmodule IxMcp.ActionLogTest do
 
     # The refusal names both versions, so the operator knows which side moves.
     assert output =~ "user_version 9000"
-    assert output =~ "supported 8"
+    assert output =~ "supported 9"
     assert output =~ "index#3539"
 
     # The server stays useful: writes are absorbed, reads answer empty.
