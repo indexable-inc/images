@@ -119,19 +119,21 @@
     worktree = {
       topics = ["workflow"];
       text = ''
-        Never work in a primary checkout: the first action in any repo is a
-        dedicated `git worktree` branch at `/tmp/worktree/<org>/<repo>/<name>`
-        (org and repo from the checkout's origin URL), and root and branch
-        get verified before committing. A shared checkout is for reading:
-        staging a file there, or switching its branch, changes what every
-        other session sees. Right after `git worktree add`, run
-        `git submodule update --init --recursive`: a new worktree leaves
-        submodules uninitialized even when the build needs them. An
-        isolation worktree belongs to the session's repo, not necessarily
-        your task's: verify its origin, and when the task targets another
-        repo, add your own worktree of the target checkout. Unmerged
-        branches are unfinished for reasons you may not see; check for
-        open PRs touching a file before nontrivial edits.
+        Never work in a primary checkout: every change, however small or
+        urgent, is made on a dedicated `git worktree` branch at
+        `/tmp/worktree/<org>/<repo>/<name>` (org and repo from the
+        checkout's origin URL), created before the first edit, and root
+        and branch get verified before committing. A shared checkout is
+        for reading: staging a file there, or switching its branch,
+        changes what every other session sees. Right after
+        `git worktree add`, run `git submodule update --init --recursive`:
+        a new worktree leaves submodules uninitialized even when the build
+        needs them. An isolation worktree belongs to the session's repo,
+        not necessarily your task's: verify its origin, and when the task
+        targets another repo, add your own worktree of the target
+        checkout. Unmerged branches are unfinished for reasons you may
+        not see; check for open PRs touching a file before nontrivial
+        edits.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
@@ -144,7 +146,11 @@
         "never work" after the shared ix checkout was found on a deleted
         branch 604 commits behind main, holding 534 files staged by
         nobody, 51 of which matched neither that branch nor main
-        (index#4216).
+        (index#4216). Restated again from per-repo-entry to per-change on
+        2026-07-29 at the operator's request: "the first action in any
+        repo" reads as a rule about entering a repo, so an agent already
+        mid-session asked for a one-line fix does not see itself covered.
+        No size or urgency exemption exists.
       '';
     };
   }
@@ -418,12 +424,24 @@
         Key upstreams are vendored forks (`lib/fork-packages.nix`). A bug in
         vendored code is ours: patch at the vendor point, never work around
         downstream. The fix reaches consumers only after their lock bump.
+        That list records what has been patched, not what may be. A defect
+        in a compiler, an evaluator, a C library or a kernel is fixed at the
+        layer that owns it, and vendoring something new is an ordinary edit
+        rather than an escalation; its procedure is in that file's header.
+        A workaround downstream leaves the defect in place for every other
+        consumer and hides the evidence that it exists, so where one is
+        right today, name the real fix in the same breath and file it.
       '';
       reason = ''
         Diagnosis ended at "upstream's problem" inside our own forks
         (index#3559, #3566). Authoring mechanics live in fork-patch memories
         and the `jjMegamergeForks` rule (index#3594); the `rebase-patches`
         driver that used to own them went with the megamerge migration.
+        An agent worked around nix dropping a fast-failing derivation's log
+        under a parallel build by moving its check to eval time and filing,
+        though nix is vendored here: the fork list read as a boundary on
+        what may be patched rather than a record of what has been
+        (ENG-11198, 2026-07-29).
       '';
     };
   }
