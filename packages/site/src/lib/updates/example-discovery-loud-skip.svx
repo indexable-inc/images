@@ -1,0 +1,96 @@
+---
+id: example-discovery-loud-skip
+postedAt: "2026-07-28"
+title: an example the aggregator cannot call now says which argument it choked on
+tags:
+  - nix
+  - examples
+---
+
+`exampleFleetsFor` in `lib/discovery.nix` walks `examples/**/default.ix` and
+turns each one into the `<example>-{up,health,status,logs,replace,switch,diff}`
+fan-out under `legacyPackages`. An example whose `default.ix` takes an argument
+the aggregator has no way to supply -- a sibling flake, a service repo -- was
+dropped and nothing was said.
+
+Skipping is the right call, and the comment already in the code explains why:
+the alternative is one example depending on a service repo breaking the eval of
+the whole tree. Silence is the part that was wrong. An example that stops being
+discovered looks exactly like an example that was never added, so a `default.ix`
+can be committed, reviewed, and merged while the aggregator never once touches
+it. #4334 shipped two like that, invisible from their first commit, and its own
+eval assertions passed because they call `ix.importIx` directly rather than
+going through the aggregator.
+
+Each skip now prints the example's relative path and the argument names that
+caused it:
+
+    trace: exampleFleetsFor: skipping examples/warnprobe/deliberate: default.ix
+      requires `someServiceRepo`, which this aggregator cannot supply
+
+The second skip path gets the same treatment. A `default.ix` that takes no
+`index` argument at all cannot be called with `{ index = ...; }` either -- Nix
+rejects the unexpected argument -- and that case was folded into the same silent
+`null`:
+
+    trace: exampleFleetsFor: skipping examples/multi-vm/switch-multi: default.ix
+      takes no `index` argument, so there is no way to call it
+
+## `lib.warn` is the obvious spelling and the wrong one
+
+The issue suggested `lib.warn`, which is what anyone would reach for. It does
+not work here. This repo and ix both set `abort-on-warn`, so the first skip ends
+the eval:
+
+    evaluation warning: exampleFleetsFor: skipping examples/minecraft/hyperion:
+      default.ix requires `hyperion`, which this aggregator cannot supply
+    error: aborting to reveal stack trace of warning, as abort-on-warn is set
+
+That is precisely the tree-wide failure the skip exists to prevent,
+reintroduced by the thing meant to report it. `builtins.trace` is the loudest
+mechanism left that still lets the eval finish, so the `no-deprecated-trace`
+lint is suppressed in place with the reason written next to it.
+
+## watched failing before being trusted
+
+A temporary `examples/warnprobe/deliberate/default.ix` taking
+`({ index, someServiceRepo })` was added, evaluated, and removed. It produced
+the trace quoted above, and `nix eval .#legacyPackages.aarch64-darwin` still
+exited 0.
+
+One thing that cost a few minutes and is worth writing down: the probe printed
+nothing until it was `git add`ed. The flake's source is its git tree, so an
+untracked `default.ix` is invisible to discovery entirely -- which is its own
+quiet way for a new example to do nothing.
+
+## two examples on main are skipped, and both are supposed to be
+
+Pointing the trace at unmodified `main` before anything else found two, and
+neither is a bug. Every example directory carries its own `flake.nix`, which is
+where the arguments the repo cannot supply come from:
+
+| example | argument | supplied by | in the aggregate? |
+| --- | --- | --- | --- |
+| `examples/minecraft/hyperion` | `hyperion` | its own flake, `github:hyperion-mc/hyperion` | no |
+| `examples/multi-vm/switch-multi` | `nixpkgs`, and no `index` | its own flake | no, and the single-VM filter would drop it anyway |
+
+So the mechanism is working as designed: hyperion depends on a service repo,
+and that is the exact case the skip was written for.
+
+What the trace does expose is a coverage gap nobody had stated. hyperion returns
+`mkFleet`, the same shape `examples/k8s/k3s` returns, so it is the one example
+in the tree that gets no `health-check-*` from this repo -- and it was edited
+this morning. That is #4347, which asks for a decision rather than a change:
+take a `hyperion` input, or write down that service-repo examples are covered
+only by their own flake.
+
+## not done
+
+The other silent drop is untouched. An example whose converted value is not the
+single-VM `nodes` + `planValue` shape is still dropped without a word, and that
+one is deliberate: most examples in the tree are multi-VM, so tracing it would
+print a dozen lines every eval and train everyone to ignore all of them. If that
+class ever needs visibility it wants a different surface than stderr.
+
+No test asserts the trace fires. The guard is the deliberate break above, run by
+hand.

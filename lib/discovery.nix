@@ -189,10 +189,29 @@
             builtins.filter
             (name: name != "index" && !args.${name})
             (builtins.attrNames args);
+          # Say so, though. A silent skip makes an example that stopped being
+          # discovered look exactly like one that was never added: #4334
+          # shipped two that were invisible to this aggregator from their
+          # first commit, and nothing anywhere said a word (index#4343).
+          #
+          # `lib.warn` is the obvious spelling and the wrong one: this repo
+          # and ix both set `abort-on-warn`, so it would turn every skip into
+          # the tree-wide eval failure the note above exists to prevent. A
+          # trace is the loudest thing left that still lets the eval finish.
+          skip = reason:
+          # astlog-ignore: no-deprecated-trace
+            builtins.trace
+            "exampleFleetsFor: skipping examples/${entry.metadata.relativePath}: ${reason}"
+            null;
           value =
-            if args ? index && unsuppliable == []
-            then load {index = indexShim;}
-            else null;
+            if !(args ? index)
+            then skip "default.ix takes no `index` argument, so there is no way to call it"
+            else if unsuppliable != []
+            then
+              skip "default.ix requires ${
+                lib.concatMapStringsSep ", " (name: "`${name}`") unsuppliable
+              }, which this aggregator cannot supply"
+            else load {index = indexShim;};
         in
           if value != null && value ? nodes && value ? planValue
           then value
