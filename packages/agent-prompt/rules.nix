@@ -478,13 +478,44 @@
         A bare `jj workspace add` workspace has no `.git`, so flake eval
         falls back to the unfiltered path fetcher until the vendored jj
         input scheme (nix#15651) lands in the nix fork.
+        The bookmark is rewritten in place, and its description counts
+        patches rather than naming a revision, so two different megamerge
+        commits read the same. A branch on the older one then shows a
+        conflict on GitHub with no content change, so read a conflicted
+        fork PR as a moved base: rebase, then run the tests again, because
+        the tree under them changed. Put each change in the patch commit
+        that owns it, never in a commit on top, which leaves the
+        individual patches broken and fights every later rebase.
+        `jj absorb` places it and `jj squash --into <rev> <paths>` moves
+        what it placed wrong; check what either chose. Commits live in the
+        shared repo, not the workspace, so another agent's rewrite lands
+        in yours. A `jj workspace add` directory that vanished is
+        recreated rather than redone, and `jj workspace forget <name>`
+        clears the dead entry. One that survived refuses `jj log` as a
+        stale working copy until `jj workspace update-stale`. That rewrite
+        also reparents your branch onto the new series, so push only once
+        the base is on the remote bookmark, or the PR reads as your change
+        plus the whole rewrite. A PR against the bookmark inherits the
+        megamerge's state, so a red check can predate the branch, and a
+        sibling PR against the other base separates the two.
       '';
       reason = ''
         The 2026-07-22 megamerge migration replaced in-repo patch series
         (dag.json + rebase-patches) with fork-repo commit DAGs. The pin-ref
         rule exists because GitHub GCs commits reachable from no ref, which
         would strand every previously locked megamerge; the conflicted
-        commit ban is jj's storage format, not etiquette.
+        commit ban is jj's storage format, not etiquette. The operational
+        half is first-hand: `ix-patched` moved from `8e83dba82` to
+        `0f356d7cf` with both descriptions reading `ix megamerge: 54
+        patches on 2c6d06e9387c`, so a branch on the old one read
+        conflicted with no content change on either side, and a lint fix
+        for existing code was stacked on the series before it was absorbed
+        into the patch that owned it. The stale and push-ordering clauses
+        came the same day from a second workspace on that repo: a sibling
+        agent rewrote the series, the primary checkout's `jj log` failed
+        with `The working copy is stale (not updated since operation
+        5675ac585436)`, and the in-flight branch came back reparented onto
+        the rewrite with its change ids intact.
       '';
     };
   }
