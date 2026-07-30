@@ -2,7 +2,10 @@
 //!
 //! Renders the typed tree from [`crate::nix`] with precedence-aware
 //! parenthesization, so output is always grammatically unambiguous and
-//! byte-for-byte deterministic.
+//! byte-for-byte deterministic. Both halves are enforced rather than asserted:
+//! `well_formed_programs_convert_and_emitted_nix_reparses` reparses every
+//! generated module under rnix, and `convert_is_deterministic` converts each
+//! twice.
 
 use std::fmt::Write as _;
 
