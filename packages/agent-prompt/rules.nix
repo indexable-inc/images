@@ -197,6 +197,24 @@
     };
   }
   {
+    verificationProportionality = {
+      topics = ["verification"];
+      text = ''
+        Scale verification to the stakes. A one-off explanation checks its
+        load-bearing facts and stops: no browser session, no subagent
+        fan-out, no fleet reads to settle a side point. The full apparatus
+        is for deliverables, meaning code, reports, and anything acted on
+        or kept. Where a side point costs more to verify than it is worth,
+        answer the likeliest reading and name the assumption.
+      '';
+      reason = ''
+        A session answering a quick explanation reached for agent-browser,
+        including the fresh-browser fallback, to settle which GitHub
+        Projects boards exist; user asked for proportionality (index#4466).
+      '';
+    };
+  }
+  {
     rootCause = {
       topics = ["verification"];
       text = ''
