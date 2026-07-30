@@ -12,19 +12,31 @@ nix run .#nix-dev-build -- --checkout ~/src/nix
 From inside the checkout the flag is unnecessary; the checkout is found by
 walking up from the working directory.
 
-Measured on an 18 core aarch64-darwin Mac against a worktree of the fork, at a
-load average starting near 10:
+Measured on an 18 core aarch64-darwin Mac against a worktree of the fork. Every
+figure below is one phase timed alone, with the dev shell entry outside the span;
+add 0.4 to 0.9s per invocation for that entry.
 
-| step | wall |
+| step | wall | load |
+| --- | --- | --- |
+| `meson setup` into an empty build directory | 11.9s | 10 |
+| the first build, all 332 targets | 51.3s | 10 rising to 95 |
+| rebuild with nothing changed | 0.1s | 13 |
+
+The one-file rebuild, which is the number that matters, depends on which
+translation unit you touched far more than on machine load. At load 7 to 8:
+
+| touched | ninja |
 | --- | --- |
-| `meson setup` into an empty build directory | 11.9s |
-| the first build, all 332 targets | 51.3s |
-| rebuild after touching `src/libexpr/eval.cc` | 8.6s |
-| rebuild with nothing changed | 0.1s |
+| `src/libexpr/eval.cc` | 7.9s, 7.2s, 7.1s over three runs |
+| `src/libexpr/primops.cc` | 8.9s |
+| `src/libexpr/nixexpr.cc` | 2.1s |
 
-The one-file number is the one that matters. Add 1.4s to each for entering the
-dev shell. A second run of the same steps on a busier machine, load 13 to 24,
-took 12s, 93s, 18s and 1s, so treat these as the shape rather than constants.
+So quote a range, 2 to 9s for a body edit in libexpr, and name the file if you
+quote one number. A body-only edit recompiles that unit, relinks
+`libnixexpr.2.34.7.dylib` and regenerates its symbol file, 3 of 10 edges, and
+does not relink `src/nix/nix` at all; the change arrives through dynamic
+linking. An independent run by another session reported 18s for an unnamed file
+at load 13 to 24, which is consistent with a larger unit, a busier box, or both.
 
 ## The dev shell is where the dependencies come from
 
@@ -33,8 +45,34 @@ compiler, meson, ninja and the libraries nix links against come from the
 checkout's own flake. Nothing here carries a dependency list. Warm, that costs
 0.41s.
 
-`--shell` picks another `devShells` attribute: `native-ccacheStdenv` keeps
-compiler output across reconfigures, `native-clangStdenv` swaps the compiler.
+`--shell` picks another `devShells` attribute. `native-clangStdenv` swaps the
+compiler. The compiler is baked into `build.ninja` at configure time, so
+switching `--shell` against an existing build directory does not switch
+compilers; give each shell its own `--build-dir`.
+
+`native-ccacheStdenv` is the shell the fork manual recommends to "drastically
+improve rebuild time", and on this tree it very nearly does nothing. Measured
+rather than assumed, because the obvious check is the wrong one: `ccache` is not
+on PATH in either shell, so its absence proves nothing. The compiler is the
+tell, and the shell does route through it, `clang++` resolving to
+`ccache-links-wrapper-4.12.1` against `clang-wrapper-21.1.7` in the default
+shell.
+
+Then ccache declines almost all of it. A full 332 target build through that
+shell left these stats:
+
+```
+Cacheable calls:                     17 / 330 ( 5.15%)
+  Misses:                            17 /  17 (100.0%)
+Uncacheable calls:                  313 / 330 (94.85%)
+  Could not use precompiled header: 284 / 313 (90.73%)
+```
+
+The tree compiles with a precompiled header, and ccache refuses to cache a
+compilation that uses one unless `sloppiness` includes `pch_defines,time_macros`.
+So 5% of compilations are cacheable before any of them can hit. Setting that
+sloppiness, or building without the precompiled header, is what would make the
+manual's advice true; neither is this tool's business, and neither is done here.
 
 Note for anything scripting this loop by hand rather than through this tool:
 `configurePhase` and `buildPhase` are stdenv shell functions, and they are not

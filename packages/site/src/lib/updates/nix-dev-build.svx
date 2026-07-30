@@ -10,7 +10,9 @@ links:
 
 Four sessions in one night iterated on the nix evaluator's C++ through a whole-package `nix build`, which recompiles the modular C++ closure in a sandbox for every one-line edit. The tree is a meson project and the fork's own manual documents the ninja loop, so that work was avoidable the whole time.
 
-`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced. Measured on an 18 core aarch64-darwin Mac: 11.9s to configure, 51.3s for the first build of all 332 targets, 8.6s after touching `src/libexpr/eval.cc`, 0.1s for a no-op. Add 1.4s per run for entering the dev shell.
+`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced. Measured on an 18 core aarch64-darwin Mac, each phase timed alone with the dev shell entry outside the span: 11.9s to configure, 51.3s for the first build of all 332 targets, 0.1s for a no-op, and 0.4 to 0.9s per invocation to enter the shell.
+
+The one-file rebuild is the number that matters, and it is a range rather than a number because the translation unit dominates. At load 7 to 8: 7.1 to 7.9s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. So 2 to 9s for a body edit in libexpr, and anyone quoting one number should name the file. A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
 
 The dependencies are not vendored here. Every run re-execs itself under `nix develop <checkout>#default`, so the compiler, meson, ninja and the libraries nix links against come from the checkout's own flake, and entering it costs 0.41s warm. The flake reference is a bare path rather than `path:<checkout>`, which matters more than it looks: a `path:` reference copies the whole directory into the store on every invocation, and in a checkout that has been built once that directory contains a 2.0G `build/`. A bare path resolves to `git+file://`, so `.gitignore` applies and the store copy is 17M.
 
@@ -39,4 +41,12 @@ There is no fallback to `nix build`. A ninja failure means the tree does not com
 
 `packages/nix-ninja-build` remains the other incremental lane and is not replaced. It materializes the packaged source into a scratch directory and turns each compilation unit into its own content-addressed derivation, on x86_64-linux only. This one builds the checkout you are editing, with local ninja, and is the only lane that works on aarch64-darwin.
 
-Stated plainly: the tool has only been run on aarch64-darwin. The Linux side is covered by the packaged build and the repo's checks, not by execution. `--shell native-ccacheStdenv` exists for the ccache stdenv the fork manual recommends but is untested, and whether the default shell provides ccache at all was never established. A prompt rule pointing future sessions at this tool is proposed separately and is waiting on a human read, since it changes what every session follows.
+## The ccache advice in the fork manual does not hold on this tree
+
+The manual says to use `ccacheStdenv` to "drastically improve rebuild time", and `--shell native-ccacheStdenv` reaches it. On this tree it very nearly does nothing, and the obvious check for why is the wrong one: `ccache` is not on PATH in either shell, so its absence proves nothing either way. The compiler is the tell, and it does route through ccache, `clang++` resolving to `ccache-links-wrapper-4.12.1` against `clang-wrapper-21.1.7` in the default shell.
+
+ccache then declines almost every call. A full 332 target build through that shell recorded 17 cacheable calls out of 330, 5.15%, all misses on a cold cache, with 284 of the 313 uncacheable ones reported as `Could not use precompiled header`. The tree compiles with a precompiled header, and ccache will not cache such a compilation unless `sloppiness` includes `pch_defines,time_macros`. Setting that, or dropping the precompiled header, is what would make the advice true. Neither is done here.
+
+That also means the 34.3s first build measured through the ccache shell is not a caching win. The cache was cold with zero hits; the difference from 51.3s is machine load, 7 against 10 rising to 95.
+
+Stated plainly: the tool has only been run on aarch64-darwin. The Linux side is covered by the packaged build and the repo's checks, not by execution. A prompt rule pointing future sessions at this tool is proposed separately and is waiting on a human read, since it changes what every session follows.
