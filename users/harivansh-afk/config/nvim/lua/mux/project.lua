@@ -175,9 +175,10 @@ local function host_colors(entries)
 end
 
 local STATUS_RANK = { live = 1, dir = 2 }
+local LIVE_MARKER = "▍"
 
 -- Build and show the project picker from `mux list`: live sessions (green
--- dot) first, then openable dirs, each with the ~-shortened path. Federated
+-- marker) first, then openable dirs, each with the ~-shortened path. Federated
 -- rows carry a [host] tag in that host's stable color. Selecting connects
 -- to that project.
 ---@param items { cwd: string, socket: string, status: string, host: string? }[]
@@ -233,13 +234,13 @@ local function show_picker(items, opts)
   local function strip_ansi(s) return (s:gsub("\27%[[%d;]*m", "")) end
   local fzf = load_fzf()
   local hl = require("fzf-lua.utils").ansi_from_hl
-  -- live rows get a colored dot; dirs a blank gutter (picker coloring only)
+  -- live rows get a colored marker; dirs a blank gutter (picker coloring only)
   local tag_hl = { live = "DiagnosticOk" }
 
   local host_hl = federated and host_colors(entries) or {}
   local color_lines, meta = {}, {}
   for _, e in ipairs(entries) do
-    local tag = e.status == "live" and "● " or "  "
+    local tag = e.status == "live" and LIVE_MARKER .. " " or "  "
     local host_tag = federated and ("%-" .. (hw + 2) .. "s"):format(("[%s]"):format(e.host)) or ""
     local rest, line
     if federated then

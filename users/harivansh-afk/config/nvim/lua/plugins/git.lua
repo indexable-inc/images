@@ -1,6 +1,9 @@
 vim.pack.add({
   "https://github.com/lewis6991/gitsigns.nvim",
-  "https://github.com/barrettruth/forge.nvim",
+  -- barrettruth deleted his forge.nvim; the public fork is the source now.
+  -- Upstream gone means GitHub answers the anonymous clone with an auth
+  -- prompt, which kills vim.pack on any box doing a fresh install.
+  "https://github.com/harivansh-afk/forge.nvim",
   "https://github.com/barrettruth/diffs.nvim",
 }, { load = function() end })
 
@@ -37,18 +40,22 @@ return {
     end,
   },
   {
-    "barrettruth/forge.nvim",
+    "harivansh-afk/forge.nvim",
     cmd = "Forge",
     before = function()
       vim.g.forge = {
         sources = {
-          forgejo = { hosts = { "git.harivan.sh" } },
+          -- Key must name a module under lua/forge/. Forgejo/Gitea are served
+          -- by codeberg.lua (tea CLI); `forgejo` is only a host substring, and
+          -- using it as the key makes detection silently return nil.
+          codeberg = { hosts = { "git.harivan.sh" } },
         },
       }
     end,
     after = function() pcall(vim.cmd.packadd, "fzf-lua") end,
     keys = {
-      { "<c-t>", [[<cmd>lua require('forge').open()<cr>]], desc = "forge" },
+      -- forge has no M.open(); the entry point is the pickers module.
+      { "<c-t>", [[<cmd>lua require('forge.pickers').git()<cr>]], desc = "forge" },
     },
   },
   {

@@ -220,8 +220,8 @@ function M.setup()
   line.start_watchers()
 
   if not session.load_session() then
-    vim.cmd.edit(vim.fn.getcwd())
-    core.tag(vim.api.nvim_get_current_tabpage(), "edit")
+    view.materialize "zsh"
+    core.tag(vim.api.nvim_get_current_tabpage(), "zsh")
   end
   line.apply_visibility()
   line.refresh()

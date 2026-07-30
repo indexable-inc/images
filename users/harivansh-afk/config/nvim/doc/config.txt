@@ -56,6 +56,7 @@ Options: >
         rust_analyzer.lua
         ts_ls.lua
       plugins/
+        ci.lua                  ci.nvim GitHub Actions viewer
         editor.lua              Autopairs, surround, ufo, preview
         fzf.lua                 Fzf-lua fuzzy finder
         git.lua                 Fugitive, gitsigns, diffs.nvim
@@ -97,6 +98,7 @@ Plugins are declared with vim.pack and loaded through lz.n.
     tpope/vim-fugitive              Git commands
     lewis6991/gitsigns.nvim         Git gutter signs
     barrettruth/diffs.nvim          Diff highlighting
+    barrettruth/ci.nvim             GitHub Actions CI logs
 
     windwp/nvim-autopairs           Auto-close brackets
     kylechui/nvim-surround          Surround operations
@@ -141,6 +143,21 @@ GIT ~
     <leader>ghp         Preview hunk
     <leader>gB          Toggle line blame
     ]g / [g             Next/prev hunk
+
+CI ~
+    <leader>ci          Checks for this branch's PR (:CI)
+
+    :CI <rev>           Checks for any revision (master, v1.0, HEAD~3)
+    :CI <github-url>    Any github.com run/job/PR/workflow URL
+    :CI .               The <cWORD> under the cursor
+
+    Inside a ci:// buffer:
+    <CR>                Open the check under the cursor
+    -                   From a job log back to its run
+    R                   Reload (same as :e)
+    gS                  Toggle the timestamp column
+    gX                  Open on github.com
+    g?                  Mappings help
 
 FZF ~
     <C-f>               Find files (git-aware)
