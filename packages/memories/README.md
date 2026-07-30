@@ -49,6 +49,13 @@ There is no `always:` and no session-start injection: a memory reaches a model
 because something searched for it. A key outside the set above is a lint error,
 which is what stops `always:` coming back by habit.
 
+`remember` requires `--by` and `--how` for `genre: memory` and writes that first
+`validated` entry itself, so one command produces a file that passes `lint`. You
+write a memory at the moment you learn something, which is exactly the moment you
+still have the command that proved it; requiring a second command would put the
+honest path at two steps and the lazy one at one. A `living` or `historical` page
+is exempt from `memory-unchecked`, so it needs neither.
+
 ## Use it
 
 ```sh
@@ -63,7 +70,7 @@ memories remember nix-rebuild-cascade \
   --tldr "An env var holding a store path makes every dependent rebuild" \
   --topic nix --handle nix-dag --prior 0.8 \
   --based-on packages/nix-dag/src/rank.rs \
-  --scope shared < body.md
+  --by claude-opus-5 --how "nix-dag .#hil-compute-2" < body.md
 
 memories validate nix-rebuild-cascade --by claude-opus-5 --how "nix-dag .#hil-compute-2"
 memories refute nix-rebuild-cascade --by claude-opus-5 --how "..." --instead new-slug
@@ -75,10 +82,19 @@ Exit codes: 0 fine, 1 a lint error or a slug that does not resolve, 2 a usage
 error.
 
 Every `search --json` carries the `roots` it read, and `memories roots` prints
-the same set on its own. An empty result from a root set that quietly resolved to
-one unexpected directory is indistinguishable from an empty result from the right
-directories, and that is how a search tool stops working without anyone noticing.
-A listed root may not exist on disk yet; it is still where the search looked.
+the same rows on its own:
+
+```json
+"roots": [{"path": "/repo/.memories", "exists": true, "memories": 137},
+          {"path": "/Users/x/.memories", "exists": false, "memories": 0}]
+```
+
+An empty result from a root set that quietly resolved to one unexpected directory
+is indistinguishable from an empty result from the right directories, and that is
+how a search tool stops working without anyone noticing. A row rather than a path
+because the question is not "which directories" but "did this search cover
+anything": zero hits against `memories: 0` everywhere is a coverage problem, zero
+hits against a root holding 137 is a genuine miss.
 
 ## Where it looks
 
@@ -130,6 +146,11 @@ redaction table (`packages/source/meta/src/sanitize.rs`) over every line, so a
 credential pattern added there is caught here too. `validated.how` holds a
 command line, which is exactly the shape that has leaked before, and unlike a
 transcript a memory is committed on purpose.
+
+It scans raw text while reading, before the frontmatter is parsed, so a
+credential inside frontmatter that does not parse is still reported. An unquoted
+`how:` holding `Authorization: lin_api_...` is exactly that case, and the first
+thing anyone does with a parse error is fix the YAML and commit.
 
 A file that does not parse is a diagnostic with a line number, never a skip.
 `--fix` only does the unambiguous part (sort `topic`/`handle`, refresh

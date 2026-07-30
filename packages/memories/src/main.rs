@@ -97,6 +97,12 @@ enum Command {
         related: Vec<String>,
         #[arg(long = "based-on")]
         based_on: Vec<String>,
+        /// Who proved it. Required for `--genre memory`.
+        #[arg(long)]
+        by: Option<String>,
+        /// The command that proved it, re-runnable. Required for `--genre memory`.
+        #[arg(long)]
+        how: Option<String>,
         /// `shared` (the default) or `user:<name>` for a memory that is one
         /// person's. Nothing is ever injected unasked, whatever the scope.
         #[arg(long, default_value = "shared")]
@@ -162,6 +168,8 @@ fn run(cli: &Cli) -> Result<ExitCode> {
             prior,
             related,
             based_on,
+            by,
+            how,
             scope,
         } => run_remember(
             cli,
@@ -174,6 +182,8 @@ fn run(cli: &Cli) -> Result<ExitCode> {
                 prior: *prior,
                 related,
                 based_on,
+                by: by.as_deref(),
+                how: how.as_deref(),
                 scope,
             },
         ),
@@ -203,6 +213,8 @@ struct RememberArgs<'a> {
     prior: f64,
     related: &'a [String],
     based_on: &'a [String],
+    by: Option<&'a str>,
+    how: Option<&'a str>,
     scope: &'a str,
 }
 
@@ -427,6 +439,32 @@ fn run_remember(cli: &Cli, args: &RememberArgs<'_>) -> Result<ExitCode> {
         }
     };
 
+    // A `genre: memory` file with no validation is genuinely incomplete, which is
+    // why `memory-unchecked` fires on one. You write a memory at the moment you
+    // learn something, and that is exactly the moment you still have the command
+    // that proved it, so the proof is recorded at birth rather than in a second
+    // command: otherwise the honest path costs two steps and the lazy one costs
+    // one. A reference page is exempt from the rule, so it is exempt here too.
+    let first_validation = match (args.by, args.how) {
+        (Some(by), Some(how)) => Some(write::validation(by, how, true, Utc::now())),
+        (None, None) if args.genre == Genre::Memory => {
+            eprintln!(
+                "memories: --by and --how are required for --genre memory. A memory without a \
+                 re-runnable proof is a date: `--how` is what lets anyone, later, check whether \
+                 it still holds. A `living` or `historical` page needs neither."
+            );
+            return Ok(ExitCode::from(USAGE_EXIT_CODE));
+        }
+        (None, None) => None,
+        (by, _) => {
+            // Half a validation is not a validation: an entry with no `how` cannot
+            // be re-checked, and one with no `by` has nobody to ask.
+            let missing = if by.is_none() { "--by" } else { "--how" };
+            eprintln!("memories: {missing} is missing; a validation entry needs both");
+            return Ok(ExitCode::from(USAGE_EXIT_CODE));
+        }
+    };
+
     let mut body = String::new();
     std::io::stdin()
         .read_to_string(&mut body)
@@ -450,6 +488,7 @@ fn run_remember(cli: &Cli, args: &RememberArgs<'_>) -> Result<ExitCode> {
             related: args.related,
             based_on: args.based_on,
             scope,
+            first_validation: first_validation.as_ref(),
             body: &body,
         },
     )?;

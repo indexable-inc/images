@@ -481,6 +481,10 @@ fn remember_then_show_returns_what_was_written_and_passes_lint() {
             "0.8",
             "--based-on",
             "src/rank.rs",
+            "--by",
+            "claude-opus-5",
+            "--how",
+            "nix-dag .#hil-compute-2 | head -3",
         ],
         "The body, on stdin.\n",
     );
@@ -499,30 +503,108 @@ fn remember_then_show_returns_what_was_written_and_passes_lint() {
     assert_eq!(shown["body"], "The body, on stdin.\n");
     assert_eq!(shown["stale"], false, "the hash was recorded on write");
 
-    // A just-written memory has no validation, which is `memory-unchecked` and
-    // nothing else. Validating it must leave the file clean.
-    let validated = run(&[
-        "--dir",
-        &dir,
-        "validate",
-        "nix-rebuild-cascade",
-        "--by",
-        "claude-opus-5",
-        "--how",
-        "ran the test",
-    ]);
-    assert_eq!(validated.code, 0, "stderr:\n{}", validated.stderr);
+    assert_eq!(
+        shown["validated"].as_array().expect("history").len(),
+        1,
+        "the proof `remember` was given rides in the file: {shown}"
+    );
 
+    // One command, one legal memory. This is the assertion that would have caught
+    // `remember` writing a file its own linter rejects.
     let linted = run(&["--dir", &dir, "--json", "lint"]);
     assert_eq!(
         linted.code, 0,
-        "a file written by remember and validated must lint clean:\n{}",
+        "a file written by remember must lint clean with no second command:\n{}",
         linted.stdout
     );
     let output = linted.json();
     assert_eq!(keys(&output), sorted(&["diagnostics", "errors", "checked"]));
     assert_eq!(output["errors"], 0);
     assert_eq!(output["checked"], 1);
+}
+
+/// A memory without a re-runnable proof is a date. `--how` is the field that
+/// makes unattended re-validation possible at all, so the CLI will not write a
+/// `genre: memory` without one.
+#[test]
+fn remember_requires_a_proof_for_genre_memory_and_says_why() {
+    let repo = Repo::new();
+    let run = run_with_stdin(
+        &[
+            "--dir",
+            &repo.path().display().to_string(),
+            "remember",
+            "no-proof",
+            "--tldr",
+            "A line nobody has checked",
+        ],
+        "Body.\n",
+    );
+    assert_eq!(run.code, 2, "stdout:\n{}", run.stdout);
+    assert!(
+        run.stderr.contains("--by and --how are required")
+            && run.stderr.contains("re-runnable proof"),
+        "the message says why, not just what: {}",
+        run.stderr
+    );
+    assert!(
+        !repo.memory_path("no-proof").exists(),
+        "and nothing is written"
+    );
+}
+
+/// A reference page is exempt from `memory-unchecked`, so forcing a proof command
+/// on one would be a lie. The 228-file docs conversion has none.
+#[test]
+fn remember_needs_no_proof_for_a_reference_page() {
+    let repo = Repo::new();
+    let dir = repo.path().display().to_string();
+    let written = run_with_stdin(
+        &[
+            "--dir",
+            &dir,
+            "remember",
+            "cas-overview",
+            "--tldr",
+            "How the CAS is laid out",
+            "--genre",
+            "living",
+        ],
+        "A long reference page.\n",
+    );
+    assert_eq!(written.code, 0, "stderr:\n{}", written.stderr);
+
+    let linted = run(&["--dir", &dir, "--json", "lint"]);
+    assert_eq!(
+        linted.code, 0,
+        "a `living` page with no validation is complete:\n{}",
+        linted.stdout
+    );
+    let shown = run(&["--dir", &dir, "--json", "show", "cas-overview"]).json();
+    assert_eq!(shown["validated"], serde_json::json!([]));
+}
+
+/// Half a validation is not a validation: both halves or neither.
+#[test]
+fn remember_rejects_by_without_how() {
+    let repo = Repo::new();
+    let run = run_with_stdin(
+        &[
+            "--dir",
+            &repo.path().display().to_string(),
+            "remember",
+            "half-proof",
+            "--tldr",
+            "A line",
+            "--genre",
+            "living",
+            "--by",
+            "claude-opus-5",
+        ],
+        "Body.\n",
+    );
+    assert_eq!(run.code, 2, "stdout:\n{}", run.stdout);
+    assert!(run.stderr.contains("--how is missing"), "{}", run.stderr);
 }
 
 #[test]
@@ -836,6 +918,10 @@ fn remember_writes_a_user_scope_and_rejects_anything_else() {
             "Mine alone",
             "--scope",
             "user:andrewgazelka",
+            "--by",
+            "claude-opus-5",
+            "--how",
+            "read it in the source",
         ],
         "Body.\n",
     );
@@ -853,6 +939,10 @@ fn remember_writes_a_user_scope_and_rejects_anything_else() {
             "A line",
             "--scope",
             "everyone",
+            "--by",
+            "t",
+            "--how",
+            "c",
         ],
         "Body.\n",
     );

@@ -57,13 +57,16 @@ roots can each return the same slug, distinguished by `root` in the output.
 An optional `topics.txt` beside the memories closes the topic set for that
 directory; absent, any topic is allowed.
 
-Every result reports the root set it read (`root_paths`, `src/report.rs:215`),
-and `memories roots` prints the same set with no query. An empty result from a
-root set that quietly resolved to one unexpected directory is indistinguishable
-from an empty result from the right directories, and that is how a search tool
-stops working with nobody noticing. Both surfaces emit the resolved set rather
-than the subset that happened to exist, because two subtly different "roots"
-arrays would be the same drift one step later.
+Every result reports the root set it read as [`report::RootRow`]s (`root_rows`,
+`src/report.rs:234`), and `memories roots` prints the same rows with no query,
+from the same function, so two spellings of one idea cannot drift. A row rather
+than a path because "which directories" is not the question a caller has: the
+question is "did this search cover anything", and neither half answers it alone.
+The scanned set hides a resolved root that turned out empty, and the resolved set
+hides whether any of them held anything, so each row carries `path`, `exists` and
+a `memories` count. Zero hits against `memories: 0` everywhere is unmistakably a
+coverage problem rather than a genuine miss, which is the whole reason the field
+exists.
 
 ## Parsing refuses to lose a file (`src/model.rs`)
 
@@ -158,6 +161,16 @@ comment preserved (`refresh_hashes`, `src/write.rs:360`). Everything outside the
 lines being changed comes back byte for byte, including CRLF line endings, and a
 memory's history is never rewritten, only appended to.
 
+`remember` requires `--by` and `--how` for `genre: memory` and writes the first
+`validated` entry with the file (`src/main.rs:448`). The rule that makes that
+necessary is `memory-unchecked`, and it is right: a `genre: memory` nobody has
+proved is incomplete. But a memory is written at the moment someone learns
+something, which is exactly the moment they still have the command that proved it,
+so recording the proof at birth is the difference between an honest path of one
+command and one of two. Dogfooding found this: the first five hand-written
+memories all failed `lint` immediately after `remember`. A `living` or
+`historical` page is exempt from the rule and so needs neither flag.
+
 Three refusals worth knowing: `remember` over an existing slug is an error
 rather than an overwrite, because that would drop the `validated` history, the
 one part of a memory nobody can reconstruct; `remember` with a `--based-on` path
@@ -188,14 +201,22 @@ wall of errors that says nothing; that scoping is what removes the need for an
 `evergreen` escape hatch, which is why the format has no such field.
 
 `memory-secret` runs the fleet's own redaction table
-(`source_meta::sanitize::redact_secrets`) line by line (`check_secrets`,
-`src/lint.rs:352`): if redaction changes a line, that line holds a credential.
+(`source_meta::sanitize::redact_secrets`) line by line (`secret::scan`,
+`src/secret.rs:31`): if redaction changes a line, that line holds a credential.
 Reusing the table rather than writing a second one means a pattern added there is
 caught here too, and scanning line by line gives the diagnostic a line number
 while a multi-line PEM block still trips on its `BEGIN` marker. The rule exists
 because a live `lin_api_*` key once reached at least 200 indexed chunks on this
 fleet; `validated.how` holds a command line, which is exactly the shape that
 leaked, and unlike a transcript a memory is committed on purpose.
+
+It runs at load time, on raw text, before parsing (`src/discover.rs:273`), and
+that ordering is the point. An unquoted `how:` holding
+`Authorization: lin_api_...` is not valid YAML, because the bare `: ` reads as a
+nested mapping, so a scan that ran only on parsed memories would report the parse
+error and say nothing about the key. The first thing anyone does with a parse
+error is fix the YAML and commit, which is exactly too late. Both diagnostics now
+land on that line.
 
 The `tldr` ceiling and the body budget reuse `skill-lint`'s values
 (`packages/skill-lint/src/lint.rs:14,19`), which defend the same thing; the

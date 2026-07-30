@@ -31,6 +31,13 @@ pub struct RememberSpec<'a> {
     pub related: &'a [String],
     pub based_on: &'a [String],
     pub scope: Scope,
+    /// The proof that the memory held, written at birth.
+    ///
+    /// Required for `genre: memory` by the CLI, because you write a memory at the
+    /// moment you learn something, which is exactly the moment you still have the
+    /// command that proved it. Making that a second step would put the honest
+    /// path at two commands and the lazy one at one.
+    pub first_validation: Option<&'a Validated>,
     pub body: &'a str,
 }
 
@@ -95,6 +102,17 @@ pub fn remember(root: &Root, spec: &RememberSpec<'_>) -> Result<PathBuf> {
                 lines.push(format!("    blake3: {hash}"));
             }
         }
+    }
+
+    if let Some(entry) = spec.first_validation {
+        lines.push("validated:".to_owned());
+        // The rendered entry carries its own line breaks, so push it as a block
+        // and let the join below leave it alone.
+        lines.push(
+            render_validation(entry, "\n")
+                .trim_end_matches('\n')
+                .to_owned(),
+        );
     }
 
     // `scope` is only written when it is not the default: an absent key and
@@ -327,13 +345,7 @@ fn split_file(contents: &str) -> Option<FrontmatterFile> {
 /// whole point: the history is the evidence.
 fn insert_validation(file: &mut FrontmatterFile, entry: &Validated) {
     let newline = file.newline;
-    let rendered = format!(
-        "  - at: {at}{newline}    by: {by}{newline}    how: {how}{newline}    ok: {ok}{newline}",
-        at = model::yaml_scalar(&entry.at),
-        by = model::yaml_scalar(&entry.by),
-        how = model::yaml_scalar(&entry.how),
-        ok = entry.ok,
-    );
+    let rendered = render_validation(entry, newline);
 
     let lines = split_lines(&file.yaml);
     if let Some(block) = key_block(&lines, "validated") {
@@ -353,6 +365,18 @@ fn insert_validation(file: &mut FrontmatterFile, entry: &Validated) {
         file.yaml.push_str(newline);
         file.yaml.push_str(&rendered);
     }
+}
+
+/// One `validated:` sequence entry, indented the way the format writes it. One
+/// function so a birth entry and an appended one cannot drift apart.
+fn render_validation(entry: &Validated, newline: &str) -> String {
+    format!(
+        "  - at: {at}{newline}    by: {by}{newline}    how: {how}{newline}    ok: {ok}{newline}",
+        at = model::yaml_scalar(&entry.at),
+        by = model::yaml_scalar(&entry.by),
+        how = model::yaml_scalar(&entry.how),
+        ok = entry.ok,
+    )
 }
 
 /// Recompute every `based_on` hash and write the current value, adding the key
@@ -643,6 +667,7 @@ mod tests {
             related: &[],
             based_on: &[],
             scope: Scope::Shared,
+            first_validation: None,
             body: "Why, the evidence, the exact command.\n",
         }
     }
@@ -691,13 +716,48 @@ mod tests {
         );
         assert_eq!(memory.body, "Why, the evidence, the exact command.\n");
 
-        // A fresh memory has no validation yet, so `memory-unchecked` is the
-        // one diagnostic a just-written file is allowed to carry.
+        // Without a birth validation this is a `genre: memory` nobody has proved,
+        // which is what `memory-unchecked` is for. The CLI requires `--by`/`--how`
+        // so that state is not reachable through it; the library still allows it,
+        // because a `living` page legitimately has no proof.
         let diagnostics = lint::lint(&repo.load(), fixed_now()).expect("linting");
         assert_eq!(
             diagnostics.iter().map(|d| d.rule).collect::<Vec<_>>(),
             ["memory-unchecked"],
             "got {diagnostics:?}"
+        );
+    }
+
+    /// The gap dogfooding found: a `remember` that needs a second command to make
+    /// its own file legal puts the honest path at two steps and the lazy one at
+    /// one. The proof is written at birth, so `remember` then `lint` is clean.
+    #[test]
+    fn remember_writes_its_first_validation_and_lints_clean_in_one_step() {
+        let repo = Repo::new();
+        let entry = validation(
+            "claude-opus-5",
+            "nix-dag .#hil-compute-2; top sole-count node was IX_ASSETS_DIR",
+            true,
+            fixed_now(),
+        );
+        let mut written = spec("nix-rebuild-cascade", "An env var makes every host rebuild");
+        written.first_validation = Some(&entry);
+        remember(&repo.roots()[0], &written).expect("writing a new memory");
+
+        let memory = only_memory(&repo);
+        assert_eq!(memory.validated.len(), 1, "the proof rides along");
+        assert_eq!(memory.ok_count(), 1, "a memory you just learned held");
+        assert_eq!(memory.validated[0].by, "claude-opus-5");
+        assert_eq!(
+            memory.validated[0].how,
+            "nix-dag .#hil-compute-2; top sole-count node was IX_ASSETS_DIR",
+            "the command survives its `;` and `#` unquoted-YAML hazards"
+        );
+
+        let diagnostics = lint::lint(&repo.load(), fixed_now()).expect("linting");
+        assert!(
+            diagnostics.is_empty(),
+            "one command must produce a legal memory: {diagnostics:?}"
         );
     }
 

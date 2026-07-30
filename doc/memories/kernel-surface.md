@@ -148,6 +148,22 @@ counts per leaf directory rather than per root, which is what makes the
 nested layout viable, and `memory-stem-collision` is what keeps stems unique
 per root so `show/2` can stay a lookup.
 
+`memory-secret` matters more here than the rule list suggests, because
+`remember/3`'s whole point is pasting the exact command into `validated[].how`
+and commands carry tokens. Measured against the CLI (2026-07-29): it fires on
+AWS keys, GitHub tokens, `sk-` keys and a `lin_api_` token inside a `how:`
+line -- but only when the frontmatter parses. The same token written the way
+an agent would actually write it, unquoted:
+
+```yaml
+    how: curl -H "Authorization: lin_api_abc123DEADBEEFcafe0987654321" ...
+```
+
+is invalid YAML (the bare `: ` opens a nested mapping), and that file reports
+`memory-frontmatter` alone -- no `memory-secret`. So the input most likely to
+carry a credential is the one where the credential is not flagged. Quote the
+`how:` value when it contains a colon, which also makes the memory lint-clean.
+
 ## Setup
 
 `MEMORIES_BIN`, then `memories` on `PATH`, then a loud error naming the knob
