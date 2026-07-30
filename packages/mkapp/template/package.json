@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json",
-    "check:staging": "svelte-check --tsconfig ./tsconfig.staging.json && tsc -p tsconfig.node.json",
+    "test": "node --test src/lib/*.test.ts",
+    "test:staging": "node --test staging/lib/*.test.ts",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.node.json && npm run test",
+    "check:staging": "svelte-check --tsconfig ./tsconfig.staging.json && tsc -p tsconfig.node.json && npm run test:staging",
     "promote": "rsync -a --delete staging/ src/"
   },
   "devDependencies": {

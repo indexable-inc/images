@@ -1,22 +1,26 @@
 <script lang="ts">
   import { Skeleton } from '$lib/components/ui/skeleton';
-  import { app } from '$lib/store.svelte';
+  import type { AppState } from '$lib/store.svelte';
 
-  const loading = $derived(app.sections.filter((section) => section.loading));
+  // Takes the state as a prop rather than importing the store, so the same strip
+  // renders a reconstructed past state when the reader scrubs the history.
+  let { state }: { state: AppState } = $props();
+
+  const loading = $derived(state.sections.filter((section) => section.loading));
 </script>
 
 <div
   class="flex items-center gap-2.5 rounded-lg border bg-card px-3.5 py-2.5 font-mono text-xs"
   role="status"
 >
-  {#if app.done}
+  {#if state.done}
     <span class="size-[7px] flex-none rounded-full border border-chart-2"></span>
   {:else}
     <span
       class="size-[7px] flex-none animate-pulse rounded-full bg-primary motion-reduce:animate-none"
     ></span>
   {/if}
-  <span class="text-foreground">{app.status}</span>
+  <span class="text-foreground">{state.status}</span>
   {#if loading.length > 0}
     <span class="ml-auto text-muted-foreground">{loading.length} loading</span>
   {/if}
