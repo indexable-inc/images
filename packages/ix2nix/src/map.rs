@@ -622,11 +622,19 @@ impl Mapper<'_> {
                     // justification belongs on that line, not in a backstop
                     // three functions away.
                     let binder = self.checked_name(bound.span, &field.name)?;
-                    // An optional field's Nix default (conventionally `null`)
-                    // binds when the caller omits it; `T | null` is the type
-                    // the bound name actually has. The recorded field keeps
-                    // the declared type, since a params record spells an
-                    // omitted optional field by leaving it out, not by null.
+                    // An optional field's Nix default binds when the caller
+                    // omits it, so `T | null` is the type the bound name has.
+                    // `reject_unpaired_optional` below is what makes the
+                    // default's existence a fact rather than an assumption.
+                    //
+                    // The remaining hedge is deliberate and open, not
+                    // unexamined: `nullable` is right only when the default is
+                    // `null`, and a default of `8080` makes it too permissive.
+                    // #4462.
+                    //
+                    // The recorded field keeps the declared type, since a
+                    // params record spells an omitted optional field by
+                    // leaving it out, not by null.
                     let checked = if field.optional {
                         Ty::Nullable(Box::new(field.ty.clone()))
                     } else {
