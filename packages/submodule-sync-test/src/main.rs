@@ -11,12 +11,18 @@
 //! is committed shell and generated-shell call sites; executing the workflow's
 //! own body is the thing being tested and cannot be ported away from here.
 //!
-//! Three behaviours are pinned, one function each at the bottom of this file:
+//! Four behaviours are pinned, one function each at the bottom of this file:
 //!
 //! 1. Stale pins advance every gitlink and every `flake.lock` node to the
-//!    matching remote main together. Any partial move is a broken tree.
+//!    matching remote main together, and the commit message names every input
+//!    whose locked revision moved, with both revisions. Any partial move is a
+//!    broken tree; a message that names only the submodule is how an evaluator
+//!    pin advanced onto the fleet unannounced (ENG-11408).
 //! 2. A current pin is a true no-op, creating no commit.
-//! 3. A push that loses a race against an unrelated `ix/main` commit retries
+//! 3. A bump that moves a gitlink while the lock already records the new
+//!    revision says in words that no input moved. An empty list would be
+//!    indistinguishable from a reporter that silently produces nothing.
+//! 4. A push that loses a race against an unrelated `ix/main` commit retries
 //!    onto the new tip and preserves the other commit rather than clobbering
 //!    it, without disturbing the sources it had no reason to move.
 
@@ -249,6 +255,10 @@ struct Fixture {
     tmp: PathBuf,
     /// Bare repository standing in for `ix`, whose gitlinks and lock must move.
     ix_git: PathBuf,
+    /// The jq program the step renders its commit message with, read from the
+    /// repository rather than reimplemented here: a copy would pass while
+    /// production printed something else.
+    report_jq: PathBuf,
     /// Prepended to the worker's PATH: a no-op `nix`, and for the race case a
     /// `git` shim in front of the real one.
     fake_bin: PathBuf,
@@ -260,13 +270,14 @@ struct Fixture {
 
 impl Fixture {
     /// Lay out the repositories and extract the step under test.
-    fn new(tmp: PathBuf, workflow: &Path) -> Result<Self> {
+    fn new(tmp: PathBuf, workflow: &Path, report_jq: PathBuf) -> Result<Self> {
         let subs = SUBMODULES
             .into_iter()
             .map(|name| Submodule::publish(&tmp, name))
             .collect::<Result<Vec<_>>>()?;
         let fx = Self {
             ix_git: tmp.join("ix.git"),
+            report_jq,
             fake_bin: tmp.join("fake-bin"),
             worker_sh: tmp.join("worker.sh"),
             subs,
@@ -355,9 +366,14 @@ impl Fixture {
         cmd.arg(&self.worker_sh)
             .current_dir(self.tmp.join("worker"))
             .env("DIRECT_PUSH", "true")
+            .env("FLAKE_LOCK_REPORT_JQ", &self.report_jq)
             .env("GH_TOKEN", "test")
             .env("GITHUB_REPOSITORY", "test/ix")
             .env("GIT_CONFIG_GLOBAL", self.tmp.join("gitconfig"))
+            // The step falls back to /tmp for its scratch files. Point it at
+            // the fixture instead, both so a run leaves nothing behind and so
+            // two of these running at once cannot read each other's base lock.
+            .env("RUNNER_TEMP", &self.tmp)
             .env("SUBMODULE_PATHS", submodule_paths)
             .env("TRIGGER_USER", "")
             .env("UPDATE_REMOTE_URL", &self.ix_git)
@@ -423,6 +439,91 @@ impl Fixture {
         Ok(())
     }
 
+    /// The full message of `ix/main`'s tip commit.
+    fn head_message(&self) -> Result<String> {
+        git(&[
+            "--git-dir",
+            utf8(&self.ix_git)?,
+            "log",
+            "-1",
+            "--format=%B",
+            "main",
+        ])
+    }
+
+    /// Fail unless the message lists exactly the given moves, in order, one
+    /// line each.
+    ///
+    /// Exactly is the point twice over. An input that moved and is missing is
+    /// the ENG-11408 failure itself: the bump commit that advanced ix's
+    /// evaluator pin named only the submodule. An input that did not move and
+    /// is listed anyway is the mirror failure, and it is the one a text diff of
+    /// the lock produces, because a reformat or a node renumbering rewrites
+    /// lines that pin nothing new.
+    fn assert_message_lists(&self, moves: &[(&str, &str, &str)]) -> Result<()> {
+        let message = self.head_message()?;
+        let listed: Vec<&str> = message
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .collect();
+        let expected: Vec<String> = moves
+            .iter()
+            .map(|(input, old, new)| format!("- {input}: {old} -> {new}"))
+            .collect();
+        if listed != expected {
+            bail!(
+                "commit message does not name the moved inputs\nlisted:   {listed:#?}\nexpected: {expected:#?}\nfull message:\n{message}"
+            );
+        }
+        Ok(())
+    }
+
+    /// Fail unless the message says, in words, that nothing moved.
+    ///
+    /// The assertion that matters is not the absence of lines: a reporter that
+    /// prints nothing at all satisfies that. It is the sentence.
+    fn assert_message_says_nothing_moved(&self) -> Result<()> {
+        let message = self.head_message()?;
+        if message.lines().any(|line| line.starts_with("- ")) {
+            bail!("nothing moved, yet the message lists a move:\n{message}");
+        }
+        if !message.contains("No locked input revision changed") {
+            bail!("message neither lists a move nor says none happened:\n{message}");
+        }
+        Ok(())
+    }
+
+    /// Rewrite `ix/main`'s lock so one source's node already records `rev`,
+    /// leaving that source's gitlink where it is.
+    ///
+    /// This is the only way to reach a bump that moves a gitlink and relocks
+    /// nothing, which is the state whose message has to speak up rather than
+    /// print an empty list.
+    fn preload_lock_rev(&self, name: &str, rev: &str) -> Result<()> {
+        let editor = self.tmp.join("lock-editor");
+        let editor_s = utf8(&editor)?;
+        git(&["clone", "--quiet", utf8(&self.ix_git)?, editor_s])?;
+        git(&["-C", editor_s, "config", "user.name", "lock-editor"])?;
+        git(&["-C", editor_s, "config", "user.email", "lock@example.com"])?;
+        git(&["-C", editor_s, "config", "commit.gpgsign", "false"])?;
+        let lock_path = editor.join("flake.lock");
+        let mut lock: serde_json::Value = serde_json::from_str(&fs::read_to_string(&lock_path)?)?;
+        lock["nodes"][name]["locked"]["rev"] = serde_json::json!(rev);
+        fs::write(&lock_path, serde_json::to_string_pretty(&lock)?)?;
+        git(&["-C", editor_s, "commit", "--quiet", "-am", "lock: preload"])?;
+        git(&["-C", editor_s, "push", "--quiet", "origin", "main"])?;
+        Ok(())
+    }
+
+    /// This source's current tip, for a caller that needs the revision itself.
+    fn tip_of(&self, name: &str) -> Result<String> {
+        self.subs
+            .iter()
+            .find(|sub| sub.name == name)
+            .map(|sub| sub.tip.clone())
+            .ok_or_else(|| eyre!("no submodule named {name} in the fixture"))
+    }
+
     /// Move one source's `main` forward, leaving the others where they are.
     fn advance_source(&mut self, name: &str, version: &str) -> Result<()> {
         self.subs
@@ -483,12 +584,23 @@ impl Fixture {
     }
 }
 
-/// Stale pins advance every gitlink and every lock node together.
+/// Stale pins advance every gitlink and every lock node together, and the
+/// commit message names both moves with both revisions.
 fn stale_pins_advance_together(fx: &Fixture) -> Result<()> {
+    let before: Vec<String> = fx.subs.iter().map(|sub| sub.stale.clone()).collect();
     fx.run_worker(&[])?;
     fx.assert_pinned_at_tips(
         "direct update did not move both the gitlink and lock to the source's main",
-    )
+    )?;
+    // Sorted by input name, which is the order the report emits and the order
+    // SUBMODULES already happens to be in.
+    let moves: Vec<(&str, &str, &str)> = fx
+        .subs
+        .iter()
+        .zip(&before)
+        .map(|(sub, old)| (sub.name, old.as_str(), sub.tip.as_str()))
+        .collect();
+    fx.assert_message_lists(&moves)
 }
 
 /// A current pin is a true no-op: no commit lands on `ix/main`.
@@ -505,6 +617,9 @@ fn current_pins_are_a_noop(fx: &Fixture) -> Result<()> {
 /// A push that loses a race against an unrelated `ix/main` commit retries onto
 /// the new tip, keeping the other commit rather than clobbering it, and leaves
 /// the source it had no reason to move exactly where it was.
+///
+/// Runs last, because the `git` shim it installs stays on the fixture's PATH
+/// and dies on an unbound `REAL_GIT` in any later run.
 fn lost_race_retries_onto_new_tip(fx: &mut Fixture) -> Result<()> {
     fx.advance_source("index", "newer")?;
 
@@ -531,6 +646,17 @@ fn lost_race_retries_onto_new_tip(fx: &mut Fixture) -> Result<()> {
     Ok(())
 }
 
+/// A bump that moves a gitlink while the lock already records the new revision
+/// says in words that no input moved.
+fn no_input_move_is_said_out_loud(fx: &mut Fixture) -> Result<()> {
+    fx.advance_source("index", "newest")?;
+    let tip = fx.tip_of("index")?;
+    fx.preload_lock_rev("index", &tip)?;
+    fx.run_worker(&[])?;
+    fx.assert_pinned_at_tips("preloaded-lock run did not move the gitlink onto the source's main")?;
+    fx.assert_message_says_nothing_moved()
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -548,11 +674,21 @@ fn main() -> Result<()> {
         );
     }
 
+    // Read from the repository, never reimplemented here: a second copy of the
+    // report logic would let the test pass while production printed something
+    // else.
+    let report_jq = repo_root.join(".github/actions/flake-lock-report/report.jq");
+    if !report_jq.exists() {
+        bail!("no report program at {}", report_jq.display());
+    }
+
     let tempdir = tempfile::tempdir()?;
-    let mut fx = Fixture::new(tempdir.path().to_path_buf(), &workflow)?;
+    let mut fx = Fixture::new(tempdir.path().to_path_buf(), &workflow, report_jq)?;
 
     stale_pins_advance_together(&fx)?;
     current_pins_are_a_noop(&fx)?;
+    no_input_move_is_said_out_loud(&mut fx)?;
+    // Last: see the note on this one.
     lost_race_retries_onto_new_tip(&mut fx)?;
 
     println!("submodule-sync-test: PASS");

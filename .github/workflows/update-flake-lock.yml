@@ -201,6 +201,13 @@ jobs:
         with:
           tools: gh jq
 
+      # Exports FLAKE_LOCK_REPORT_JQ for both bump paths below, so the commit
+      # message and the PR body name every input whose locked revision moved
+      # rather than only the submodule (ENG-11408). Fully qualified for the same
+      # reason as the actions above.
+      - name: Install the flake lock reporter
+        uses: indexable-inc/index/.github/actions/flake-lock-report@main
+
       - name: Bump submodules
         if: ${{ inputs.submodule-paths != '' }}
         env:
@@ -235,12 +242,37 @@ jobs:
             git remote set-url --push origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           fi
 
+          # One place renders both the commit message and the PR body, so the
+          # two can never disagree about what the bump moved. `base_lock` is
+          # flake.lock as the base branch has it, saved by build_candidate
+          # before it relocks anything.
+          base_lock="${RUNNER_TEMP:-/tmp}/flake-lock-base.json"
+          message="${RUNNER_TEMP:-/tmp}/flake-bump-message.txt"
+          pr_body="${RUNNER_TEMP:-/tmp}/flake-bump-pr-body.md"
+          # $1 subject, $2 inputs the subject already names, $3 destination.
+          write_message() {
+            head_lock="$base_lock"
+            if [ -f flake.lock ]; then
+              head_lock=flake.lock
+            fi
+            jq -rn --slurpfile before "$base_lock" --slurpfile after "$head_lock" \
+              --arg subject "$1" --arg named "$2" -f "$FLAKE_LOCK_REPORT_JQ" > "$3"
+          }
+
           build_candidate() {
             # Rebuild from the current main tip on every attempt. A concurrent
             # human main push is preserved; the bot never rebases or overwrites
             # it and never force-pushes main.
             git fetch origin main
             git checkout -B "$target_branch" origin/main
+            # Save the base lock before anything moves, and re-save it on every
+            # attempt: a retry that rebuilds onto a newer main must report
+            # against that tip, not against the one the first attempt saw.
+            if [ -f flake.lock ]; then
+              cp flake.lock "$base_lock"
+            else
+              echo '{"nodes":{"root":{}},"root":"root"}' > "$base_lock"
+            fi
             git submodule update --init -- "${paths[@]}"
             git submodule update --remote -- "${paths[@]}"
 
@@ -299,11 +331,21 @@ jobs:
                 mv flake.lock.tmp flake.lock
               done
               git add flake.lock
-              if [ -n "$bumped" ]; then
-                git commit --amend --no-edit
-              else
-                git commit -m "flake.lock: relock ${relock[*]} to the ${summary} gitlink"
-              fi
+            fi
+
+            # Name every input whose locked revision this candidate moves, not
+            # only the submodule the subject names. Relocking a gitlink also
+            # advances that flake's own inputs, which is how the evaluator pin
+            # (`index/nix-src` in ix's lock, two levels down) kept moving inside
+            # commits whose message never mentioned it (ENG-11408).
+            if [ -n "$bumped" ]; then
+              write_message "submodules: bump ${summary}" \
+                "${paths[*]} ${relock[*]:-}" "$message"
+              git commit --amend --file "$message"
+            else
+              write_message "flake.lock: relock ${relock[*]} to the ${summary} gitlink" \
+                "${paths[*]} ${relock[*]:-}" "$message"
+              git commit --file "$message"
             fi
 
             # Refuse to push a lock that disagrees with any gitlink pin.
@@ -352,11 +394,20 @@ jobs:
             target_branch=update-flake-lock
             build_candidate
             git push -f origin update-flake-lock
-            if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+            write_message "Automated bump: ${summary}" \
+              "${paths[*]} ${relock[*]:-}" "$pr_body"
+            open_pr="$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')"
+            if [ -z "$open_pr" ]; then
               gh pr create --base main --head update-flake-lock \
                 --title "Update Nix flake inputs" \
-                --body "Automated bump: ${summary}." \
+                --body-file "$pr_body" \
                 ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+            else
+              # The rolling branch is force-pushed on every run, so a body
+              # written when the PR opened describes a bump that is no longer on
+              # the branch. Refresh it, or the list of moved inputs is a report
+              # about the wrong commit.
+              gh pr edit "$open_pr" --body-file "$pr_body"
             fi
             exit 0
           fi
@@ -406,6 +457,28 @@ jobs:
           # app. Same reasoning as the submodule branch above.
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git checkout -B update-flake-lock origin/main
+          # Same reporting helper as the submodule step above, and deliberately
+          # the same six lines: the two are separate steps, so separate shells,
+          # and the reusable workflow cannot source a shared script from the
+          # caller's checkout. The jq program they share is the part with the
+          # logic in it (ENG-11408).
+          base_lock="${RUNNER_TEMP:-/tmp}/flake-lock-base.json"
+          message="${RUNNER_TEMP:-/tmp}/flake-bump-message.txt"
+          pr_body="${RUNNER_TEMP:-/tmp}/flake-bump-pr-body.md"
+          if [ -f flake.lock ]; then
+            cp flake.lock "$base_lock"
+          else
+            echo '{"nodes":{"root":{}},"root":"root"}' > "$base_lock"
+          fi
+          # $1 subject, $2 inputs the subject already names, $3 destination.
+          write_message() {
+            head_lock="$base_lock"
+            if [ -f flake.lock ]; then
+              head_lock=flake.lock
+            fi
+            jq -rn --slurpfile before "$base_lock" --slurpfile after "$head_lock" \
+              --arg subject "$1" --arg named "$2" -f "$FLAKE_LOCK_REPORT_JQ" > "$3"
+          }
           read -ra scoped <<< "$FLAKE_INPUTS"
           # No inputs named means relock everything; naming them keeps a
           # caller off inputs it cannot authenticate for.
@@ -414,13 +487,25 @@ jobs:
             echo "flake.lock is already current; nothing to bump"
             exit 0
           fi
-          git commit -m "flake.lock: update" -- flake.lock
+          # A lock that changed in narHash or lastModified alone reaches here
+          # with nothing to list, and the message says exactly that rather than
+          # printing an empty section.
+          write_message "flake.lock: update" "${scoped[*]:-}" "$message"
+          git commit --file "$message" -- flake.lock
           git push -f origin update-flake-lock
-          if [ -z "$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')" ]; then
+          write_message "Automated bump of the pinned flake inputs" \
+            "${scoped[*]:-}" "$pr_body"
+          open_pr="$(gh pr list --head update-flake-lock --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$open_pr" ]; then
             gh pr create --base main --head update-flake-lock \
               --title "Update Nix flake inputs" \
-              --body "Automated bump of the pinned flake inputs." \
+              --body-file "$pr_body" \
               ${TRIGGER_USER:+--assignee "$TRIGGER_USER" --reviewer "$TRIGGER_USER"}
+          else
+            # Same reason as the submodule path: the branch is force-pushed on
+            # every run, so a body from the run that opened the PR reports on a
+            # commit that is no longer there.
+            gh pr edit "$open_pr" --body-file "$pr_body"
           fi
 
   # A watcher that only fires on the success path (merge) is silent on

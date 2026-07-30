@@ -1,0 +1,21 @@
+name: Flake lock report
+description: >-
+  Export `FLAKE_LOCK_REPORT_JQ`, the path to the jq program that renders a
+  relock message: a subject line plus every flake input whose locked revision
+  moved, with its old and new revision (ENG-11408). Before this, the bump
+  commit named only the submodule it moved, so an evaluator pin that advanced
+  as a side effect of the relock advanced invisibly.
+
+  Shipped as an action rather than as a file the workflow reads from the tree,
+  because a reusable workflow's checkout is the CALLER's repository, which has
+  no copy of index's files.
+
+runs:
+  using: composite
+  steps:
+    - name: Export the report program path
+      shell: bash
+      # $GITHUB_ACTION_PATH is this action's own checkout under the runner's
+      # _actions directory, which survives for the whole job, so later steps
+      # read the program straight out of it and nothing has to be copied.
+      run: echo "FLAKE_LOCK_REPORT_JQ=$GITHUB_ACTION_PATH/report.jq" >> "$GITHUB_ENV"
