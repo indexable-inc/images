@@ -5,14 +5,14 @@ title: VM templates, the systemd unit model
 status: Draft
 authors: Claude Opus 4.6 (AI agent), commissioned by andrewgazelka
 created: '2026-07-29'
-updated: '2026-07-29'
+updated: '2026-07-30'
 trackingIssue: 'ix#9242'
 scores:
   ambition: { value: 6, why: 'one new verb, but it introduces converged state the repo does not declare' }
   impact: { value: 7, why: 'adding the fourth worker stops meaning editing a file and reviewing a diff' }
   effort: { value: 6, why: 'CLI verb, a server-side record, and reconciliation in apply' }
   risk: { value: 6, why: 'apply gains the power to re-render machines nobody declared' }
-  maturity: { value: 3, why: 'designed in full 2026-07-23, nothing implemented; the schema half is in flight' }
+  maturity: { value: 4, why: 'the declarative half ships: templates + instances exports, rendered by index.lib.templates, with a worked example and an eval gate. ix new, the instance record and reconciliation are unbuilt; the schema half is in flight' }
   leverage: { value: 7, why: 'every template author gets --help and editor completion from annotations they already write' }
   taste: { value: 7, why: 'the imperative/declarative split is the whole design, and systemd already solved it' }
 supersedes: null
@@ -73,6 +73,7 @@ starting an *instance* of it is an imperative act the system then remembers.
 | `foo@.service` template | `templates.worker`, a function in `default.ix` |
 | `systemctl start foo@bar` | `ix new worker bar` |
 | `%i` specifier | `instance`, injected into the params object as a real value |
+| `%N` specifier (the unit's own name) | `name`, the node name, injected the same way |
 | drop-in `foo@bar.service.d/*.conf` | override layer on the instance record |
 | `systemctl edit` | `ix config edit worker@3` |
 | `systemctl cat` / `systemd-delta` | `ix config show worker@3`, with per-key provenance |
@@ -101,28 +102,34 @@ export default ({ index }) => {
 
   const web = index.lib.mkVm({
     name: "web",
-    deployment: { l7ProxyPorts: [443] },
-    modules: [import("./web.nix"), group],
+    modules: [
+      import("./web.nix"),
+      group,
+      { ix: { networking: { expose: { https: { port: 443 } } } } },
+    ],
   });
 
   return {
     nixosConfigurations: { ...web.nixosConfigurations },
 
     templates: {
-      // `instance` is systemd's %i, injected by ix. The annotation is what
+      // `instance` is systemd's %i and `name` is the VM's node name, both
+      // injected by ix -- see "Two names for one instance" below for why the
+      // template does not build the name itself. The annotation is what
       // `ix new worker --help` and params.json completion are generated from.
-      worker: ({ instance, port = 8080, shards = 1 }: {
+      worker: ({ instance, name, port = 8080, shards = 1 }: {
         instance: nonEmptyStr;
+        name: nonEmptyStr;
         port: port;
         shards: ints.positive;
       }) =>
         index.lib.mkVm({
-          name: `worker@${instance}`,
-          deployment: { l7ProxyPorts: [port] },
+          name: name,
           modules: [
             import("./worker.nix"),
             group,
             { services: { appWorker: { port, shards } } },
+            { ix: { networking: { expose: { http: { port: port } } } } },
           ],
         }),
     },
@@ -141,6 +148,61 @@ encode templates as data and bolt a substitution language on top. `.ix` needs
 neither: the body computes, branches on params, and composes modules, and the
 eval machinery that already runs `default.ix` runs the function. A config with
 no `templates` key evaluates exactly as it does today.
+
+**Why the listener is a module option and not `deployment.l7ProxyPorts`.**
+Because that key does nothing on the supported path. `lib/image/fleet.nix`
+splits deployment keys by who reads them: `l7ProxyPorts` is a *workflow* key,
+read only by the deprecated `ix-fleet` plan, while `ix apply` reads the
+evaluated system alone. A template parameterising it would compile, apply
+cleanly, and produce a VM with no proxied port and no warning — the ENG-10846
+class. Anything a param must actually reach the machine through belongs in a
+module.
+
+### Two names for one instance
+
+An instance has an **instance name**, `worker@1`, and a **node name**,
+`worker-1`. The first is systemd's spelling: it is what the `instances` block is
+keyed on, what `ix new worker 1` creates, and what the record is keyed on. The
+second is the `nixosConfigurations` key, the guest's `networking.hostName`, and
+the OCI repository the image is pushed to.
+
+**They cannot be the same string.** nixpkgs types `networking.hostName` as a DNS
+label, and `mkVm` sets it from the VM's name, so a VM named `worker@1` fails its
+own option type before anything is built:
+
+```console
+$ nix eval .#lib --apply 'ix: builtins.unsafeDiscardStringContext \
+    (ix.mkVm { name = "worker@1"; modules = []; })
+      .nixosConfigurations."worker@1".config.system.build.toplevel.drvPath'
+error: A definition for option `networking.hostName' is not of type
+       `string matching the pattern ^$|^[[:alnum:]]([[:alnum:]_-]{0,61}[[:alnum:]])?$'.
+       Definition values:
+       - In `/nix/store/…-source/flake.nix': "worker@1"
+
+$ # the same expression with `worker-1`
+"/nix/store/rrzwvw9r…-nixos-system-worker-1-26.11.20260723.e2587ca.drv"
+```
+
+The second reason is independent of nix: in an OCI reference `@` introduces a
+digest, so `registry.ix.dev/worker@1:tag` is not a repository a manifest can be
+pushed to.
+
+**And `-` cannot replace `@` in the instance name.** Template `worker-pool` with
+instance `1`, and template `worker` with instance `pool-1`, would spell one
+string. The instance name has to be parseable back into its two halves, because
+that is how a record, a CLI argument and an orphan warning all name a template;
+the node name does not, because nothing ever parses a hostname. So the separator
+that joins the instance name must be a character that appears in neither half --
+the property `@` has in systemd's unit names, and the reason this design borrows
+that character rather than inventing one.
+
+The template never has to know any of this. `index.lib.templates` derives the
+node name and injects it as the `name` param, so a body is
+`index.lib.mkVm({ name, ... })`, and a template that names its VM anything else
+is refused at the boundary with the reason.
+`index.lib.templates.parseInstanceName` and `instanceNameOf` are the only
+implementations of the two directions, and nothing else in either repo may
+respell either separator.
 
 ### Typed params
 
@@ -228,8 +290,10 @@ arguments.
 ```
 
 **What `ix new` actually does.** Resolve the config the way `ix apply` already
-does, validate params against the generated schema in the CLI, eval
-`templates.<name>` with `{ instance } + defaults + params`, then run the
+does, validate params against the generated schema in the CLI, call
+`index.lib.templates.renderInstance` — which evals `templates.<name>` with
+`{ instance, name } + params`, the template's own defaults filling the rest, and
+refuses params that restate either injected value — then run the
 existing flake-converge create path from `commands/up.rs` with the rendered
 system, inside the create TUI that `tui/apps/new` already renders. The only new
 persistent artifact is the instance record: no new build path, no new image path.
@@ -282,7 +346,7 @@ makes that drift visible rather than hiding it.
 ```
 ix new <tmpl> [instance] [params.json | '{...}'] [--set k=v]... [--transient] [--name N] [--region R]
 ix apply                       # declared VMs + instances block + recorded instances
-ix apply .#worker@3            # converge exactly one instance
+ix apply .#worker-3            # converge exactly one instance (a flake attr, so the node name)
 ix apply --declared-only       # skip recorded instances (CI that must not touch hand-made VMs)
 ix config show|set|edit|adopt <vm>
 ix rm worker@3                 # VM and its record
@@ -297,6 +361,16 @@ Nothing existing is touched. Configs without `templates` evaluate as before;
 `ix apply .#name`, bare `.`, OCI refs, and snapshot UUIDs keep their shapes and
 flag sets. `ix apply <oci-ref>` remains the escape hatch for imperative creates
 outside any config, and its flag pile is what templates exist to replace.
+
+**Every CLI surface deals in instance names while nix deals in node names.**
+`ix new worker 3`, `ix rm worker@3`, `ix rm 'worker@*'`, `ix config show worker@3`
+and `ix ls`'s TEMPLATE column all name `worker@3`; the flake attribute and the VM
+are `worker-3`, so `ix apply .#worker-3` is what converges it. The CLI therefore
+carries exactly one conversion, and it must not reimplement it: call
+`index.lib.templates.parseInstanceName` (or `instanceNameOf` for the reverse) so
+the spelling has one owner across both repos. An `ix ls` that prints the node
+name under a TEMPLATE column, or an `ix rm` that accepts only one of the two
+spellings, is the failure mode to watch for.
 
 **The verb slot is free, but only recently, and the copy has not caught up.**
 `crates/ix/cli/src/run/client_command/new_command.rs` implemented
