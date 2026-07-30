@@ -25,14 +25,18 @@ Both runs are real. The one-file row is the one to be careful with, and it took 
 
 **Which file you touch sets the cost.** At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. A 4x spread with load constant, so a single figure needs its file named or it reads as a promise about somebody else's file. Call it 2 to 9s for a body edit in libexpr. Run B recorded its file; run A did not.
 
-**Load does nothing until the cores run out, then it does a lot.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Timing the same `eval.cc` edit across a load sweep on 18 cores, with `real` over `user` as the contention signal:
+**Load does nothing until the cores run out, then it does a lot.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Timing the same `eval.cc` edit across a load sweep, on a machine reporting `hw.ncpu = 18`, with `real` over `user` as the contention signal:
 
 | load | real | real / user |
 | --- | --- | --- |
 | 13.2 to 18.4, eight runs | 6.36 to 6.80s | 1.04 to 1.05 |
 | about 25, two runs | 13.06s, 15.78s | 1.52, 1.62 |
 
-Flat below the core count and barely waiting; 2.4x slower above it. `user` inflates too, 6.15s to 9.76s, so the same compile burns more cycles rather than only waiting, which is cache and memory bandwidth contention rather than scheduling alone. That is why run A, at load 24, is the slow one: not a bigger file, an oversubscribed box.
+Flat below `hw.ncpu` and barely waiting; 2.4x slower above it. That is why run A, at load 24, is the slow one: not a bigger file, an oversubscribed box. The threshold is worth stating against `hw.ncpu` rather than against 18, since the mechanism is a core count and not a property of one Mac.
+
+`user` inflates above the threshold as well, 6.15s to 9.76s, so the same compile costs more processor time and not only more wall clock. Why it does is not established, and two candidates survive: contention for cache and memory bandwidth, or displacement onto a slower core. Forcing the lowest core tier with `taskpolicy -b` at low load costs 2.5x in `user`, 15.8s and 17.0s against 6.4s and 8.1s, which bounds displacement without isolating it: full displacement would over-explain the observed 1.59x, partial displacement would fit, and so would contention. That flag moves scheduling priority as well as core tier, so it is an upper bound rather than a measurement. Discriminating properly means pinning the compile to the top tier while the box sits above `hw.ncpu`, which is not a thing to do on a machine carrying other people's timings, so it stays open.
+
+For the record on the topology, since the obvious guess is wrong here: `hw.perflevel0` is 6 cores named `Super` and `hw.perflevel1` is 12 named `Performance`. There is no efficiency tier on this part, so a displaced compile moves between two grades of performance core rather than off them.
 
 So report load beside any figure from this loop, and throw away the first run, which carries a 34% cold-page-cache penalty: 9.06s against 6.77s steady.
 

@@ -38,27 +38,48 @@ does not relink `src/nix/nix` at all; the change arrives through dynamic linking
 
 ## The rebuild is serial, so load only matters once the cores run out
 
-Timing `ninja` for the same `eval.cc` edit across a load sweep on 18 cores, with
-`real` over `user` as the contention signal:
+Timing `ninja` for the same `eval.cc` edit across a load sweep, with `real` over
+`user` as the contention signal. This machine reports `hw.ncpu = 18`:
 
 | load | real | real / user |
 | --- | --- | --- |
 | 13.2 to 18.4, eight runs | 6.36 to 6.80s | 1.04 to 1.05 |
 | about 25, two runs | 13.06s, 15.78s | 1.52, 1.62 |
 
-Below the core count the wall clock is flat and the process is barely waiting.
-Above it the same work takes 2.4x longer and the ratio jumps, because the
-rebuild needs exactly one core: forcing `ninja -j1` costs almost nothing, 7.03s
-and 7.34s against 6.36 to 6.80s at the default. So a jobs flag earns nothing on
-a single-file edit and only pays on a cold or wide rebuild.
+Below `hw.ncpu` the wall clock is flat and the process is barely waiting. Above
+it the same work takes 2.4x longer and the ratio jumps, because the rebuild needs
+exactly one core: forcing `ninja -j1` costs almost nothing, 7.03s and 7.34s
+against 6.36 to 6.80s at the default. So a jobs flag earns nothing on a
+single-file edit and only pays on a cold or wide rebuild. The threshold is stated
+against `hw.ncpu` rather than against 18 because the mechanism is a core count,
+not a fact about this Mac.
 
-`user` also inflates under oversubscription, 6.15s to 9.76s, so the same compile
-burns more processor cycles rather than only waiting longer. That is cache and
-memory bandwidth contention, not scheduling alone.
+`user` inflates above the threshold too, 6.15s to 9.76s, so the same compile
+costs more processor time and not only more wall clock. **Why it does is not
+established.** Two candidates, neither tested against the other:
+
+- Contention for cache and memory bandwidth, so the same instructions take more
+  cycles on the same core.
+- Displacement onto a slower core. `hw.perflevel0` is 6 cores named `Super` and
+  `hw.perflevel1` is 12 named `Performance`, with no efficiency tier on this
+  part, so a displaced compile moves between two grades of performance core
+  rather than off them.
+
+The available bound does not separate them. Forcing the lowest tier with
+`taskpolicy -b` at low load costs 2.5x in `user`, 15.8s and 17.0s against 6.4s
+and 8.1s, so full displacement would over-explain the 1.59x actually observed
+while partial displacement would fit it, and so would contention. That flag also
+changes scheduling priority, not only tier, so 2.5x is an upper bound on the tier
+effect and not a measurement of it.
+
+The clean test pins the compile to the top tier and re-runs above the threshold,
+which needs a box deliberately driven past `hw.ncpu`. That is not something to do
+on a shared machine with other people's timings on it, so it is left undone here
+rather than answered badly.
 
 Two consequences for anyone quoting a number from this tool. Report load beside
-it, since the same edit is 6.5s or 16s depending on which side of the core count
-the box is. And discard the first run: another session measured a 34% first-run
+it, since the same edit is 6.5s or 16s depending on which side of `hw.ncpu` the
+box is. And discard the first run: another session measured a 34% first-run
 penalty, 9.06s against 6.77s steady, from cold page cache on the object and the
 dylib.
 
