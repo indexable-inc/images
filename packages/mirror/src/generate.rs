@@ -287,7 +287,14 @@ version = \"0.1.0\"
 
     /// A scratch monorepo under git: workspace root, one member crate, and a
     /// lock naming it, committed so `package_history` has something to read.
-    fn scratch_monorepo() -> (tempfile::TempDir, Workspace) {
+    struct Scratch {
+        /// Owns the on-disk tree for the duration of the test, and roots the
+        /// generator's output directories.
+        dir: tempfile::TempDir,
+        workspace: Workspace,
+    }
+
+    fn scratch_monorepo() -> Scratch {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         fs::write(root.join("Cargo.toml"), ROOT_MANIFEST).expect("root manifest");
@@ -305,7 +312,7 @@ version = \"0.1.0\"
         }
         commit(root, "feat: add the example crate");
         let workspace = Workspace::locate(Some(root)).expect("workspace");
-        (dir, workspace)
+        Scratch { dir, workspace }
     }
 
     fn commit(root: &Path, message: &str) {
@@ -397,17 +404,20 @@ version = \"0.1.0\"
     /// README diff on every mirror on every sync run (ENG-11556).
     #[test]
     fn a_monorepo_commit_elsewhere_leaves_the_tree_byte_identical() {
-        let (dir, workspace) = scratch_monorepo();
-        let before = dir.path().join("before");
-        generate_into(&workspace, &before);
-        let head_before = workspace.head_commit().expect("HEAD");
+        let scratch = scratch_monorepo();
+        let before = scratch.dir.path().join("before");
+        generate_into(&scratch.workspace, &before);
+        let head_before = scratch.workspace.head_commit().expect("HEAD");
 
-        commit(&workspace.root, "docs: a commit that touches no package");
-        let head_after = workspace.head_commit().expect("HEAD");
+        commit(
+            &scratch.workspace.root,
+            "docs: a commit that touches no package",
+        );
+        let head_after = scratch.workspace.head_commit().expect("HEAD");
         assert_ne!(head_before, head_after, "the commit must move HEAD");
 
-        let after = dir.path().join("after");
-        generate_into(&workspace, &after);
+        let after = scratch.dir.path().join("after");
+        generate_into(&scratch.workspace, &after);
 
         let differences = differences(&tree_contents(&before), &tree_contents(&after));
         assert!(differences.is_empty(), "{differences}");
@@ -418,13 +428,16 @@ version = \"0.1.0\"
     /// that dropped the sha entirely.
     #[test]
     fn the_banner_names_the_packages_own_commit() {
-        let (dir, workspace) = scratch_monorepo();
-        let package_commit = workspace.head_commit().expect("HEAD");
-        commit(&workspace.root, "docs: a commit that touches no package");
-        let head = workspace.head_commit().expect("HEAD");
+        let scratch = scratch_monorepo();
+        let package_commit = scratch.workspace.head_commit().expect("HEAD");
+        commit(
+            &scratch.workspace.root,
+            "docs: a commit that touches no package",
+        );
+        let head = scratch.workspace.head_commit().expect("HEAD");
 
-        let out = dir.path().join("out");
-        generate_into(&workspace, &out);
+        let out = scratch.dir.path().join("out");
+        generate_into(&scratch.workspace, &out);
         let readme = fs::read_to_string(out.join("README.md")).expect("README.md");
 
         assert!(readme.contains(&package_commit), "{readme}");
