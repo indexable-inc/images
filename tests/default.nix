@@ -4708,6 +4708,38 @@
         message = "dev base should enforce root's Claude Code bypass via managed-settings.json";
       }
       {
+        # Channels are LOADED by argv and ALLOWED by policy, and the two sit in
+        # different scopes: `--dangerously-load-development-channels` wires the
+        # transport, while `channelsEnabled` in the managed layer decides
+        # whether a loaded channel may push at all. 2.1.220 blocks on
+        # `e!==null&&e.channelsEnabled!==!0`, so the mere presence of a
+        # managed-settings file turns channels off -- and a managed-settings
+        # file is exactly what every consumer of this render installs. Pin the
+        # key true in both places the render lands, so nothing can go back to
+        # shipping a channel that is loaded but muted.
+        assertion = let
+          policy = homeAgentConfig.programs.claude-code.package.passthru.settingsPolicy;
+          managed =
+            builtins.fromJSON
+            developmentBase.config.environment.etc."claude-code/managed-settings.json".text;
+        in
+          policy.channelsEnabled && managed.channelsEnabled;
+        message = "claude-code should enable channels by default through the managed settings render, both in a home configuration and in the dev image";
+      }
+      {
+        # The default is a house default rather than a controlled key, so a host
+        # that must refuse inbound pushes can still say no. Declared through
+        # `defaults` (the extraSettings layer, which outranks the house
+        # posture), it has to reach the render as false; if it could not, the
+        # default would be a lock and not a default.
+        assertion =
+          !(homeAgentHome.extendModules {
+            modules = [{programs.claude-code.defaults.channelsEnabled = false;}];
+          })
+          .config.programs.claude-code.package.passthru.settingsPolicy.channelsEnabled;
+        message = "a host must be able to turn claude-code channels back off through programs.claude-code.defaults";
+      }
+      {
         assertion =
           builtins.elem homeAgentConfig.programs.claude-code.finalPackage homeAgentConfig.home.packages
           && builtins.elem homeAgentConfig.programs.codex.finalPackage homeAgentConfig.home.packages;
@@ -6527,6 +6559,34 @@
     test -e ${uvApplication.uvWheelhouse}/click-8.1.7-py3-none-any.whl
   '';
 
+  # The planner graph must not name a store path. Nix derives an output's
+  # references by scanning its bytes for store hashes, so a single absolute
+  # `src_path` makes this ~500 KB metadata file declare the whole vendor dir
+  # as a runtime reference: hyperion's graph measured 618,148,280 bytes of
+  # closure around a 488 KB file, of which ~258 MB was Windows crates no
+  # target here compiles. `unitGraphJson` templates both roots out and the
+  # render stage fills them back in, so what lands on disk is placeholders.
+  # Reverting either `sed` in `lib/rust/cargo-unit.nix` fails this.
+  cargoUnitGraphClosureScript = ''
+    graph=${cargoUnitWorkspace.unitGraphJson}
+    if grep -qm1 "${builtins.storeDir}/" "$graph"; then
+      echo "cargo-unit-graph.json names a store path, so its closure now carries the vendor dir:" >&2
+      grep -om3 "${builtins.storeDir}/[^\"]*" "$graph" >&2
+      exit 1
+    fi
+    # The placeholders must actually be there: a graph with neither absolute
+    # paths nor placeholders would pass the check above while meaning the
+    # planner emitted nothing to template, which is a different bug.
+    grep -q '@vendorRoot@' "$graph" || {
+      echo "cargo-unit-graph.json has no @vendorRoot@ placeholder; the planner emitted no vendored source path" >&2
+      exit 1
+    }
+    grep -q '@workspaceRoot@' "$graph" || {
+      echo "cargo-unit-graph.json has no @workspaceRoot@ placeholder; the planner emitted no workspace source path" >&2
+      exit 1
+    }
+  '';
+
   cargoUnitRealWorkspaceAssertions = [
     {
       assertion = builtins.hasAttr "serde_derive" cargoUnitRealWorkspaces.serde.buildWorkspace.libraries;
@@ -6551,6 +6611,7 @@
   ];
 
   cargoUnitRealWorkspaceScript = ''
+    ${cargoUnitGraphClosureScript}
     test -d ${cargoUnitRealWorkspaces.serde.buildRoots}
     test -d ${cargoUnitRealWorkspaces.thiserror.buildRoots}
     test -d ${cargoUnitRealWorkspaces.indexmap.buildRoots}

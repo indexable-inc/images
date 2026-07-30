@@ -62,6 +62,7 @@ members = [
   "packages/astlog/cli",
   "packages/astlog/core",
   "packages/astlog/py",
+  "packages/cli-entry",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
@@ -110,6 +111,7 @@ members = [
   "packages/ix-windows",
   "packages/mail-smtp",
   "packages/mcp/server-info",
+  "packages/memories",
   "packages/minecraft/bot",
   "packages/minecraft/nbt",
   "packages/minecraft/protocol",
@@ -265,6 +267,10 @@ ast-merge-matcher = { path = "packages/ast-merge/matcher" }
 astlog-core = { path = "packages/astlog/core" }
 axum = "0.8"
 base64 = "0.22"
+# Content hash for `.memories` `based_on:` entries (packages/memories). Already
+# in the lock as a transitive of the tantivy graph, so naming it here pins the
+# one version rather than adding a second.
+blake3 = "1"
 bytes = "1"
 cbc = "0.1"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
@@ -283,6 +289,7 @@ clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
 clone-scanner = { path = "packages/clone-detect/scanner" }
+cli-entry = { path = "packages/cli-entry" }
 clone-test-support = { path = "packages/clone-detect/test-support" }
 complexity-metric = { path = "packages/complexity/metric" }
 error-chain = { path = "packages/error-chain" }

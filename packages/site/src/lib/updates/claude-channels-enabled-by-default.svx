@@ -1,0 +1,39 @@
+---
+id: claude-channels-enabled-by-default
+postedAt: "2026-07-28T21:30:00-07:00"
+title: "channels were loaded but muted; the managed layer now says yes"
+links:
+  - label: "the settings policy layer"
+    href: "https://github.com/indexable-inc/index/pull/4312"
+tags:
+  - agents
+---
+
+Our Claude Code wrapper has baked `--dangerously-load-development-channels
+server:index` for a while, so the kernel's `notify(...)` and its
+interactive-resource actions had a live transport into a running session. They
+were not arriving. Loading a channel and being allowed to push over it are two
+different decisions, and only the first one was made.
+
+The second is a managed-settings key, `channelsEnabled`, and its default is the
+trap. Read the gate in 2.1.220 and it blocks on `policySettings !== null &&
+policySettings.channelsEnabled !== true`; the key's own schema text says
+"Console: default on unless managed settings exist." Managed settings are
+exactly what we ship -- that is where the whole render lives since #4312 -- so
+installing a policy file at all turned channels off. The session said so, in a
+toast nobody was reading: "Channels are not enabled for your org." Every inbound
+push was dropped silently.
+
+`channelsEnabled = true` now rides the wrapper's house posture defaults, which
+means one place decides it and every consumer derives. A workstation gets it
+because it hands the darwin managed-settings module the whole render. The dev
+images hand-write a much smaller policy of their own, and rather than restate
+the value there they now `inherit` it from the same render, so an image and a
+laptop cannot disagree about whether channels are on.
+
+It is a default, not a lock. It sits in the house layer rather than the
+controlled keys, so a host that must refuse inbound pushes sets
+`programs.claude-code.defaults.channelsEnabled = false` and the render comes out
+false. Both directions are pinned by eval tests: the dev image's
+`/etc/claude-code/managed-settings.json` must carry the key true, and the
+override must reach the render as false.

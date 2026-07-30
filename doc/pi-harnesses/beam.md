@@ -45,7 +45,9 @@ turnCap, timeoutSec})` (`runner/fanout.js:47-106`) runs all approaches with
    and `PI_TURN_CAP` in env (`fanout.js:73-83`). Two budgets bound a branch: a
    soft turn cap (the `turn-cap` extension, since Pi has no `--max-turns` flag)
    and a hard wall-clock cap (`timeout`).
-3. Capture `git diff --no-color` (the patch) and `git diff --numstat` to count
+3. Capture `git diff --no-ext-diff --no-color` (the patch; without the flag a
+   fleet-wide `diff.external = difft` renders something that will not apply) and
+   `git diff --numstat`, which git computes itself, to count
    changed lines (`countDiffLines`, `fanout.js:29-41`), then run the `score`
    command in the worktree (`fanout.js:85-88`).
 4. Always remove the worktree (`git worktree remove --force`) and temp dir in a

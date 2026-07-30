@@ -121,11 +121,5 @@ fn run(cli: Cli) -> Result<ExitCode> {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
-        Ok(code) => code,
-        Err(error) => {
-            eprintln!("index-delta: {error:#}");
-            ExitCode::FAILURE
-        }
-    }
+    cli_entry::run("index-delta", run)
 }

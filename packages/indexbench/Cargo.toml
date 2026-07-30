@@ -26,6 +26,7 @@ path = "src/bin/alloc-demo.rs"
 [dependencies]
 chrono = { workspace = true, features = ["clock"] }
 clap = { workspace = true, features = ["derive"] }
+cli-entry.workspace = true
 git-probe.workspace = true
 # `wait4(2)` returns the *child's own* `rusage`, so peak RSS is attributed
 # per-run; `nix` 0.30 has no `wait4` (only `waitpid`, whose

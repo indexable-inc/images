@@ -1,0 +1,42 @@
+---
+id: memories-repo-local
+postedAt: 2026-07-29T20:20:00-07:00
+title: "Agent memory moves into the repo: `.memories/` files, ranked BM25 recall, nothing injected unasked"
+tags: [agent, memory, search, nix]
+links:
+  - label: memories
+    href: https://github.com/indexable-inc/index/tree/main/packages/memories
+  - label: IxMcp.Memories
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/memories.ex
+  - label: index#4436
+    href: https://github.com/indexable-inc/index/pull/4436
+  - label: ix#9233
+    href: https://github.com/indexable-inc/ix/pull/9233
+---
+
+Every repo can now carry a `.memories/` directory: one fact per markdown file, YAML frontmatter, found by reading the directory. `Memories.search("query")` in the kernel returns them ranked, alongside the directories it actually read.
+
+```elixir
+Memories.search("why did every host rebuild")     # ranked, no separate rank step
+|> Enum.take(3)
+|> Memories.expand(depth: 1)                      # pull in `related:` neighbours
+
+Memories.remember("nix-rebuild-cascade", "one-line tldr",
+  body: md, by: "claude-opus-4-6", how: "the command that proves it")
+```
+
+The prompt rule this replaces had been pointing at a subsystem that was switched off. It told every session to maintain a `MEMORY.md` index inside a directory `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` had disabled, so the instruction named a path the harness no longer loads while the real protocol arrived separately through a digest.
+
+Three things are derived rather than stored, because every hand-maintained index in this setup was wrong when checked and each was correct when written: `MEMORY.md` listed a file that does not exist, `ix/docs/index.md` routed changes through a worker deleted seventeen days earlier, and the prompt rule above. The two systems that never broke, `lib/skills.nix` and `agent-context`, are the two that derive from the filesystem.
+
+So weight comes from the validation log rather than a number somebody typed. Only `validated: [{at, by, how, ok}]` is written after birth, and `how` is the load-bearing field: a claim nobody can re-run is a date with a sentence attached. A failed re-check is recorded as `ok: false` rather than dropped, so the next reader learns the thing stopped being true instead of paying the cost again. Staleness comes from `based_on: [{path, blake3}]` compared at read time, which is `basis_changed` from the weave prelude applied to files: Nix derivation-input semantics, so no crawler and no TTL. And the reverse of `related:` is computed on read, so it cannot drift.
+
+There is no index on disk. `file_search::EphemeralSearch` builds one in RAM per query, 52ms over 228 documents, which deletes the class of bug where a stale index answers a question about a changed file. This release extends `file-search` with a multi-field ephemeral index so `tldr` and `handle` can be boosted honestly instead of by repeating text, which would inflate document length and discount every other term.
+
+**Nothing is injected at session start.** That is measured rather than preferred. A 2026-06-12 study on this fleet (14 agents, live A/B) found deliberate prior-search paying four to eight times over: 53k injected tokens against 220-400k tokens of avoided rediscovery across ten recurring task types. Ambient injection into ordinary prompts was net-negative in the same study, with three of five casual prompts pulling 0.3-9k tokens of noise, breaking even only when score-gated at 0.70 with a token cap. So memories reach a model exactly one way, by being searched for.
+
+`memory-secret` is the one lint rule with an incident behind it. A live `lin_api_*` key once reached over two hundred indexed chunks here, and `validated.how` holds a command line, which is exactly that shape, except a memory is committed on purpose. It reuses the redaction table at `packages/source/meta/src/sanitize.rs` rather than a second copy. The 150-file directory budget, by contrast, is **not** evidenced, and `CONTRACT.md` says so: the only study on this fleet is silent on corpus size. It stays as a forcing function for consolidation, not as a measurement.
+
+The companion change converts 228 `ix/docs` pages into the same format, so one search covers reference pages and situational notes alike, and removes the playbook docs renderer. `docs/` keeps only raw artifacts: vendor datasheets and profiling figures.
+
+One result worth reporting because it is the weak half. A query made of exact tokens is decisive: `ipmitool sol activate host hang` returns its page at 34.76 against 12.40 for the runner-up. A prose query over the converted docs is not: three near-ties, two of them false matches where "collection" stems to "collect". Hand-written `tldr` fields do much better than converted ones, which suggests a corpus property rather than a ranking defect, and it names the condition under which an embeddings lane would earn its keep.

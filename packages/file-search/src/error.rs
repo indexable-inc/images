@@ -78,6 +78,21 @@ pub enum Error {
     QueryParse {
         source: tantivy::query::QueryParserError,
     },
+
+    #[snafu(display("A multi-field ephemeral index needs at least one field"))]
+    NoFields,
+
+    #[snafu(display("Field {name} is declared twice in the multi-field schema"))]
+    DuplicateField { name: &'static str },
+
+    #[snafu(display(
+        "Document {id} carries {found} field values but the schema declares {expected}"
+    ))]
+    DocumentFieldCount {
+        id: usize,
+        found: usize,
+        expected: usize,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

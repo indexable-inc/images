@@ -173,14 +173,7 @@ struct ViewerArgs {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli) {
-        Ok(code) => code,
-        Err(err) => {
-            eprintln!("indexbench: {err}");
-            ExitCode::FAILURE
-        }
-    }
+    cli_entry::run("indexbench", run)
 }
 
 /// Dispatch a parsed CLI, returning the process exit code. A regression in any

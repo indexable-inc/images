@@ -103,15 +103,41 @@
     memory = {
       topics = ["tooling"];
       text = ''
-        Write a memory at the moment of learning: one fact per file with its
-        concrete handle; frontmatter `name`, `description`, `metadata.type`
-        (user, feedback, project, reference). Update in place, editing only
-        that file's `MEMORY.md` line (`- file.md: <hook>`). Recalled memories
-        go stale; verify before use.
+        Memories are files: `.memories/` at the root of every repo you touch,
+        plus your own `~/.memories`. Nothing arrives unasked, so read them
+        with `Memories.search("query").hits` in the index kernel, which
+        returns them ranked, alongside the directories it read. Save what you
+        learned, what you got wrong, and what you decided against, at the
+        moment it happens: a corrected mistake and a rejected design are the
+        things nobody can rederive from the diff.
+        Every save names the command that proves it in `validated[].how`,
+        because a claim nobody can re-run is only a date. Recalled facts go
+        stale, so re-run that command before trusting one and record the
+        result with `Memories.validate`, including when it fails. Correct a
+        memory by writing the new one with `supersedes:`, never by editing
+        it.
       '';
       reason = ''
-        End-of-session saves were forgotten; regenerating the whole index
-        once destroyed its curation.
+        Replaced the frontmatter and `MEMORY.md` text, which described the
+        native markdown auto-memory retired by index#3849 and disabled on
+        this workstation through CLAUDE_CODE_DISABLE_AUTO_MEMORY, so the rule
+        named a directory the harness no longer loads (ENG-11390). What it
+        points at instead is the `.memories` system in index#4433: repo-local
+        files, one ranked `memories` search, and validation receipts that
+        carry the command. Repo-local storage and saving everything learned,
+        got wrong, or reconsidered were both asked for by the user on
+        2026-07-29; end-of-session saves being forgotten, and one regenerated
+        index destroying its curation, are why the rule exists at all.
+
+        "Nothing arrives unasked" is load-bearing, not filler: the weave
+        SessionStart digest was deleted rather than reimplemented over
+        `.memories`, and the format has no `always:` field, so an agent that
+        does not search has no memories. That is the measured call --
+        docs/_archive/design/context-research.html (2026-06-12, 14 agents,
+        live A/B) put deliberate prior-search 4 to 8 times ahead while
+        ambient injection into ordinary prompts was net-negative, 3 of 5
+        casual prompts pulling 0.3 to 9k tokens of noise. The user's answer
+        on reading it was "yea no ambient injection".
       '';
     };
   }
@@ -448,7 +474,7 @@
       reason = ''
         Diagnosis ended at "upstream's problem" inside our own forks
         (index#3559, #3566). Authoring mechanics live in fork-patch memories
-        and the `jjMegamergeForks` rule (index#3594); the `rebase-patches`
+        and the `flatForkBranches` rule (index#3594); the `rebase-patches`
         driver that used to own them went with the megamerge migration.
         An agent worked around nix dropping a fast-failing derivation's log
         under a parallel build by moving its check to eval time and filing,
@@ -459,63 +485,54 @@
     };
   }
   {
-    jjMegamergeForks = {
+    flatForkBranches = {
       topics = ["architecture" "workflow"];
       text = ''
-        Fork repos are jj-maintained megamerges: every patch is a commit
-        whose parents are its true dependencies, the `ix-patched` bookmark
-        sits on the megamerge commit (tree = the full series applied
-        linearly, parents = the heads of the patch dependency graph), and
-        the flake input pins that commit, so consumers never need jj. jj
-        rebases rewrite history, so any rev flake.lock has ever pinned must
-        stay reachable: every bookmark push carries a permanent
-        `refs/pins/<date>-<sha12>` ref in the same operation that bumps the
-        lock. Never push a conflicted jj commit; git readers (GitHub,
-        fetchers) cannot parse jj's conflict encoding. Locally jj is the
-        sanctioned frontend as a colocated clone
-        (`jj git init --colocate`); the remote stays plain git;
-        recover with `jj op log` / `jj op restore`, not reflog spelunking.
-        A bare `jj workspace add` workspace has no `.git`, so flake eval
-        falls back to the unfiltered path fetcher until the vendored jj
-        input scheme (nix#15651) lands in the nix fork.
-        The bookmark is rewritten in place, and its description counts
-        patches rather than naming a revision, so two different megamerge
-        commits read the same. A branch on the older one then shows a
-        conflict on GitHub with no content change, so read a conflicted
-        fork PR as a moved base: rebase, then run the tests again, because
-        the tree under them changed. Put each change in the patch commit
-        that owns it, never in a commit on top, which leaves the
-        individual patches broken and fights every later rebase.
-        `jj absorb` places it and `jj squash --into <rev> <paths>` moves
-        what it placed wrong; check what either chose. Commits live in the
-        shared repo, not the workspace, so another agent's rewrite lands
-        in yours. A `jj workspace add` directory that vanished is
-        recreated rather than redone, and `jj workspace forget <name>`
-        clears the dead entry. One that survived refuses `jj log` as a
-        stale working copy until `jj workspace update-stale`. That rewrite
-        also reparents your branch onto the new series, so push only once
-        the base is on the remote bookmark, or the PR reads as your change
-        plus the whole rewrite. A PR against the bookmark inherits the
-        megamerge's state, so a red check can predate the branch, and a
-        sibling PR against the other base separates the two.
+        Fork repos keep one flat branch: `ix-patched` is a linear series of
+        ordinary git commits on the upstream base, one commit per patch, and
+        the flake input pins its tip. Use plain git. Do not reintroduce a jj
+        megamerge, a patch dependency graph, or an in-repo patch series.
+        Put each change in a commit of its own on top; there is no series to
+        absorb into and nothing to rewrite. Rebase onto the base when it
+        moves, which is the one operation the old patch graph existed to
+        optimise.
+        A force-push still needs a permanent `refs/pins/<date>-<sha12>` ref
+        for every rev a flake.lock has ever pinned, in the same operation, or
+        GitHub garbage-collects it and every consumer that pinned it breaks.
+        Read a conflicted fork PR as a moved base rather than a real
+        conflict: rebase, then run the tests again, because the tree under
+        them changed. A PR against the branch inherits the branch's state,
+        so a red check can predate the branch; a sibling PR against another
+        base separates the two.
+        The branch is pushed directly, so make sure CI triggers on push to
+        it and not only on pull requests, or nothing gates the thing every
+        consumer builds from.
       '';
       reason = ''
-        The 2026-07-22 megamerge migration replaced in-repo patch series
-        (dag.json + rebase-patches) with fork-repo commit DAGs. The pin-ref
-        rule exists because GitHub GCs commits reachable from no ref, which
-        would strand every previously locked megamerge; the conflicted
-        commit ban is jj's storage format, not etiquette. The operational
-        half is first-hand: `ix-patched` moved from `8e83dba82` to
-        `0f356d7cf` with both descriptions reading `ix megamerge: 54
-        patches on 2c6d06e9387c`, so a branch on the old one read
-        conflicted with no content change on either side, and a lint fix
-        for existing code was stacked on the series before it was absorbed
-        into the patch that owned it. The stale and push-ordering clauses
-        came the same day from a second workspace on that repo: a sibling
-        agent rewrote the series, the primary checkout's `jj log` failed
-        with `The working copy is stale (not updated since operation
-        5675ac585436)`, and the in-flight branch came back reparented onto
-        the rewrite with its change ids intact.
+        Measured on 2026-07-29, on the nix fork: 109 megamerge commits in 8
+        days, all on one upstream base, `2c6d06e9387c` dated 2026-05-04. The
+        structure exists to make an upstream rebase cheap by localising
+        conflicts per patch, and that operation had been performed zero
+        times while the series was rewritten about fourteen times a day. It
+        also assumes the patches are separable because they are candidates
+        for upstreaming; most of ours are fork-specific or AI-authored and
+        are never going upstream, so the separability buys nothing.
+        What it cost, all first-hand the same day. Nothing gated
+        `ix-patched`, because `ci.yml` triggered on push to `master`, a
+        branch the fork does not have, and jj pushed the bookmark directly
+        so it was never a PR head; two defects live in the pinned rev sat
+        undiscovered behind that, one losing build logs on Linux and one
+        hanging builds on macOS. A re-flattened PR went DIRTY the moment the
+        bookmark moved. One clone held three different current states at
+        once, so a measurement ran against the wrong tree until another
+        agent caught it. A patch got re-fixed because the checkout was seven
+        patches behind and ordinary git tooling could not say so.
+        The migration itself was verified rather than trusted: 54 patches
+        replayed onto the base, three that jj had represented as merge
+        commits reconciled in one commit because their content cannot be
+        replayed as independent cherry-picks, and the result confirmed by
+        comparing tree object ids, not by reading a diff. The tree was
+        byte-identical to the megamerge it replaced.
       '';
     };
   }

@@ -1,0 +1,16 @@
+# Skills in the published catalog whose content does NOT come from this
+# directory. `lib/skills.nix` resolves each one out of a packaged upstream
+# instead, so no checkout of this repo can supply it.
+#
+# One bare name per line. Blank lines and `#` comments are ignored.
+#
+# Two readers, and an assert in lib/skills.nix keeps them agreeing:
+#   lib/skills.nix                       asserts this list is exactly the keys
+#                                        of `vendoredSources`
+#   .claude/hooks/agent-instructions.sh  keeps exactly these entries from the
+#                                        Claude wrapper's prebuilt store copy
+#                                        and takes every other skill from the
+#                                        checkout, so a materialized skill can
+#                                        never be older than the tree sitting
+#                                        beside it (ENG-11189)
+agent-browser

@@ -180,6 +180,32 @@ defmodule IxMcp.MCP.Tools do
                                             records a re-check receipt;
                                             Memory.retract(id) kills a wrong
                                             fact, newer facts win over stale ones
+      Memories.search("why did every host rebuild")
+                                            repo-local memory: a %Memories.Results{} of
+                                            ranked `hits` plus the `roots` it resolved, one
+                                            %Root{path, exists, memories} row each, over every
+                                            `.memories/` directory (this repo, its parents,
+                                            ~/.memories). Empty `hits` is an answer, not an
+                                            error -- there is a score floor -- and the row
+                                            counts say which: `memories: 0` everywhere means
+                                            the search covered nothing, healthy counts mean a
+                                            real miss. Ranked already, ties broken by slug: no
+                                            rank step, and re-sorting loses the tie-break that
+                                            makes limit: reproducible. dirs: ["/a/.memories"]
+                                            replaces the default roots (a list, never a bare
+                                            string), Memories.roots() resolves them with no
+                                            query
+      Memories.remember("slug", "tldr", body: md, by: "claude-opus-5", how: "the command")
+                                            save what you learned, got wrong, or decided
+                                            against. by:/how: are required for the default
+                                            genre: :memory and become its first `validated`
+                                            receipt, so one call writes a lint-clean file; a
+                                            genre: :living page needs neither. based_on:
+                                            ["path"] is what makes staleness detectable,
+                                            supersedes: replaces a wrong memory instead of
+                                            editing it, scope: "user:<name>" keeps one
+                                            private. Memories.validate(slug, by:, how:)
+                                            records a later re-check and clears staleness
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
                                             spawn a real agent CLI as an async depth-1
                                             subagent (Fable 5 card sec 8.15.3, #3700);

@@ -65,10 +65,13 @@ CLAUDE.local.md
 # a sibling agent's stale tree and reds this checkout (#4147).
 /.claude/worktrees/
 
-# Skills are built into the `skills` flake package (one dir per skills/<name>).
-# The Claude wrapper exports that prebuilt store path to the SessionStart hook,
-# which copies it here for Claude Code and Codex. Preview with
-# `nix build .#skills --print-out-paths | xargs ls`.
+# Skills are materialized here at session start for Claude Code and Codex, by
+# .claude/hooks/agent-instructions.sh. It copies the working tree's
+# packages/agent/skills, so this directory always matches the checkout rather
+# than the wrapper's prebuilt store path, which only tracks the last system
+# rebuild (ENG-11189). That store path still supplies the skills no checkout
+# carries, listed in packages/agent/skills/vendored-skills.txt. Preview the
+# published catalog with `nix build .#skills --print-out-paths | xargs ls`.
 /.claude/skills
 /.agents/
 
