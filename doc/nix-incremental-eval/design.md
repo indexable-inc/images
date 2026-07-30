@@ -385,6 +385,93 @@ Salsa's `ZalsaLocal` active query stack and the same shape as the existing
 `EvalState` call-depth tracking. Cost is bounded by the number of input reads,
 not by the number of thunks, and input reads are orders of magnitude rarer.
 
+### What phase 1 measured about that list, and the one requirement it adds
+
+**Effect: the list above is right about which things are read and wrong about
+what recording one costs you. An input has to carry a name that survives an
+edit and the answer it observed, and even with all of that, invalidation still
+does not reach fifteen of the sixteen derivations a commit moves.**
+
+Phase 1 built the instrumentation and traced one ix host,
+`nixosConfigurations.hil-compute-1.config.system.build.toplevel.drvPath`, at
+90,689 to 91,758 tracked entries over about 24s of attributable evaluation cpu.
+Four corrections, each measured.
+
+**Naming an input by its path invalidates almost everything, and lazy trees
+does not help.** For anything a flake source answers for, the absolute path is
+`/nix/store/<whole-tree-hash>-source/...`, so one edited character renames every
+input under the tree. On the largest tracked entry, 11,535 of 22,933 inputs
+differed after a one-character edit, and **not one of their observed answers had
+changed**: 9,703 stats, 1,830 directory listings, and file contents whose hashes
+matched. Named by the path within the answering tree instead, 0 of 11,537
+differed. The claim in the first bullet above, that lazy trees is what makes a
+read set per-file rather than `{tree}`, did not survive measurement: 835 entries
+hold the whole tree in their read set with lazy trees on, off, and on a clean
+committed tree, and their share of attributed cpu was 32.0%, 34.4% and 34.9%
+respectively. Lazy trees changes this number by nothing. Phase 2's "requires
+lazy trees on, without exception" is therefore not the lever it looks like; the
+lever is the naming.
+
+**Nix offers no edit-stable name for a tree.** `displayPrefix`,
+`getFingerprint` and the mount root all carry the version, which is why keying
+on the fingerprint looks like the sound choice and is the same defect by another
+route: for a clean git tree that fingerprint *is* the revision, so it reports
+39.7% of the evaluation invalidated for a commit that changed zero bytes. Sound,
+and useless. An identity used for cross-run comparison has to be constructed by
+removing version-bearing fields explicitly, never by taking whatever
+`to_string()` returns. This is worth stating as a rule rather than trusting to
+care: the defect was diagnosed, and then reintroduced one hour later in the new
+code written by the person who had just diagnosed it, because `Input::to_string()`
+is the obvious handle exactly as `SourcePath::to_string()` was.
+
+**An input must record its answer, not merely that it was read.** A `stat` or a
+`readDir` that records only its path cannot be decided by comparing two traces
+at all, and a subtree serialisation (`dumpPath`, which is how a derivation
+taking the whole repository as its source reads it) that records only a path
+reads a changed tree as unchanged. That is unsound in the direction that serves
+a stale result, and it is not a corner: it made an early measurement report
+about 0% invalidation where the true figure is 12.5%.
+
+**The list is missing a class: a tree's version.** `self.rev`, `shortRev`,
+`dirtyRev`, `dirtyShortRev`, `lastModified`, `lastModifiedDate`, `revCount` and
+`narHash` describe which revision was used rather than anything inside it, so no
+file read stands in for them, and they are ordinary attributes read by an
+ordinary select that no accessor hook observes. Measured before this was fixed:
+two `git commit --allow-empty` commits over a byte-identical tree gave **91,758
+of 91,758 entries validating, 24.797s of 24.797s, while the drvPath moved**. A
+cache built on those read sets serves the previous commit's derivation for every
+host. They are all built in `emitTreeAttrs` in
+`src/libexpr/primops/fetchTree.cc`, not in libflake: the flake layer locks the
+revision, libexpr is where it becomes a value something can read, and the read
+is what has to be recorded. Each is now a thunk over a primop that records the
+read and returns the value, so an entry that never looks at the revision does not
+acquire it as an input.
+
+So an input is `(tree identity, name within that tree, observed value)`, where
+the observed value is a content hash for file contents, the stat answer for
+metadata, the entry list for a listing, a hash of the serialisation for a
+subtree, and the version itself for a tree attribute. Five classes. Get four of
+them and the cache is either sound or granular, never both.
+
+**The sixth requirement, which is not an input class: dependency edges between
+entries.** With all five classes recorded, a commit is visible in exactly **one**
+of the sixteen derivations it moves. The other fifteen move because their inputs
+moved, and a read set records reads rather than data flow, so nothing propagates
+along the entry graph. The same gap has a second face: **80,285 of 91,758
+entries read no files at all**, so file inputs cannot show them either valid or
+invalid in either direction, and an entry whose value arrived from its caller is
+undecidable no matter how complete the input model is. An input-complete cache
+therefore still cannot answer the question a commit asks. Phase 2 needs an edge
+from each entry to the entries whose values flowed into it, which is Adapton's
+demanded-computation graph rather than anything in the input model, and it is
+unbuilt and unmeasured.
+
+With all of the above, the eval-time-weighted invalidation for a one-character
+string edit to one host's config is **12.5%**, against **40.1%** for the same
+edit with inputs named by absolute path. The 12.5% is two entries: the one that
+read the edited bytes, and the root entry whose whole-tree serialisation
+genuinely changed.
+
 ### The invalidation algorithm
 
 This is "verifying traces" from Build Systems a la Carte (Mokhov, Mitchell and
@@ -866,6 +953,26 @@ for a single-host string edit is under 25% with lazy trees on. Stop, and do the
 cheaper things listed below, if it is over 60%. In between, build phase 2 and
 re-decide on phase 3 with its results in hand.
 
+**Status: three of the four numbers exist, for one host only.** Invalidation is
+**12.5%** with the input model above and 40.1% without it, so the go/no-go is
+proceed. Whole-tree fan-out is 835 entries of 91,758 at 32.0% to 34.9% of
+attributed cpu, unchanged by lazy trees. The fork-snapshot prefix is 1% to 3%.
+**The retained set was not measured**, and it is the one the estimate section
+names as the second most likely underestimate: the boundaries phase 1 tracks are
+a primop call and a file force, and neither hands you the `(Env *, Expr *)` pair
+the design wants pinned, so measuring it needs either thunk-level entries, which
+Decision 2 rules out, or a different boundary set, plus a reachability walk over
+Boehm-managed memory. The only bound available is the ceiling: the evaluation
+allocates 3,649,943,040 bytes of values, envs and bindings and its heap reaches
+8,590,196,736, and whatever is retained is a subset of the former. **The
+twelve-node case was also not measured**, so half of this criterion is unmet.
+
+One hazard this document raised did not reproduce: `nrThunks` was 33,277,707 in
+four consecutive evaluations of the same tree state, three uninstrumented and
+one instrumented, so the 569,328-thunk variance quoted above did not recur on
+aarch64-darwin. That says nothing about where the original figure came from, and
+no ratio here is derived from thunk counts.
+
 **Estimate:** 4 to 6 weeks, one engineer. Basis: instrumentation of comparable
 scope to the existing eval profiler, plus the trace format, plus analysis
 tooling, plus a real edit corpus. No semantic changes, so the correctness bar
@@ -899,8 +1006,12 @@ Build Systems a la Carte, unchanged.
   evaluation be deterministic given its inputs, which `pure-eval` is intended
   to guarantee and which the 569,328-thunk variance between baseline runs
   should be understood before relying on.
-- Requires lazy trees on, without exception. With whole-tree accessors every
-  read set contains the tree and nothing ever validates.
+- ~~Requires lazy trees on, without exception. With whole-tree accessors every
+  read set contains the tree and nothing ever validates.~~ **Measured false.**
+  835 entries hold the whole tree in their read set with lazy trees on and off
+  alike, at 32.0% to 34.9% of attributed cpu in every configuration tried. What
+  decides whether a read set validates is how an input is named, not whether
+  lazy trees is on; see "What phase 1 measured about that list" above.
 
 **Success criterion:** twelve-node `nix eval` after editing one host is under
 40s, against 247s to 259s today, with the produced `drvPath`s bit-identical to
@@ -957,6 +1068,14 @@ build it immediately and reconsider whether phase 3 is needed. Two weeks,
 Linux only, needs Boehm fork handlers. Listed out of order because its
 existence is contingent on a measurement, and because the point of measuring is
 to be allowed to skip the expensive thing.
+
+**Measured: 1% to 3%, so do not build it.** The first read of the ix tree
+lands at 0.958s of a 38.5s evaluation with the tree already in the store, and at
+4.2s of 30.7s when the copy is fresh, the difference being the copy itself
+rather than any evaluation. Nix reads the flake's own `flake.nix` inside the
+first 400ms to resolve inputs, so there is almost no prefix to capture. This is
+the measurement working as intended: it deleted a phase rather than justifying
+one.
 
 ## Cost estimate and its basis
 
