@@ -234,18 +234,69 @@ That buys, from a declaration the template author was going to write anyway:
 - editor completion and validation of `params.json`, from the generated schema —
   **available now**, via `ix2nix --schema` or the `builtins.wasm` `schema` export;
 - boundary-time errors naming the param — *port must be 0 to 65535, got 99999* —
-  raised by the CLI in milliseconds, before nix starts;
+  raised by the CLI in milliseconds, before nix starts, against `Ty` and not
+  against the generated schema (see below: the schema is the lossy one);
 - `ix new worker --help`, rendered from the same `Ty`;
 - an unknown param as a hard error rather than a silently applied default.
 
 The last three are CLI work, and they wait on `ix new` existing rather than on
 anything about types.
 
-A bare untyped function stays legal, with its schema reported as "any attrset"
-and flagged in `--help` as unchecked, so the quick case stays quick. That is what
-the worked example above is: `examples/templates/workers` ships unannotated, and
-its params are still checked, only later — nix refuses an unexpected argument by
-name, and the module system types everything a param reaches.
+**One representation, two audiences, and the schema is the lossy one.** `Ty` and
+the JSON Schema come from the same value, and they are not interchangeable: the
+schema is *deliberately* looser than the type it was generated from, so a CLI
+validating against the schema accepts values nix then refuses. `float` widens to
+`{"type": "number"}` because draft 2020-12 counts `2.0` as an integer, and `path`
+keeps only its absolute-string branch. So `--set` is validated against
+`ix2nix::ty::Ty` from `ix2nix::types`, which is exactly as strict as the
+eval-time check because both are lowered from the same value; the JSON Schema is
+for editors and `params.json` completion, where a published, standard-dialect
+document is what tools consume.
+
+**Which makes `(params: WorkerParams)` the spelling to reach for.** A named alias
+on a single parameter is what an author should write, and the
+destructured-with-defaults form is the fallback rather than the default. Three
+reasons, in increasing order of what they cost:
+
+```js
+type WorkerParams = {
+  instance: nonEmptyStr;
+  name: nonEmptyStr;
+  port?: port;
+  shards?: u32;
+};
+
+worker: (params: WorkerParams) =>
+  index.lib.mkVm({ name: params.name, /* … */ }),
+```
+
+1. It is the only form that reaches the generated schema, so it is the only form
+   `ix new worker --help` or an editor can ever describe. ix2nix refuses an alias
+   on a destructured parameter — *a destructured parameter needs an inline object
+   type; there is no binding for the whole set* — so the two are exclusive.
+2. Its `required` cannot lie. For the destructured form the schema derives
+   `required` from the `?` marker while the Nix pattern decides mandatoriness, so
+   `({ a, b }: { a: int; b?: string })` publishes `required: ["a"]` and then dies
+   at eval with `called without required argument 'b'`. An alias has no pattern to
+   disagree with, so it is correct there by construction.
+3. It costs the ergonomics: no default per key, so each one becomes
+   `params.port or 8080` in the body.
+
+**Annotating the template's own arrow is a requirement on template authors, not a
+style preference.** `ix2nix::types` reports the parameter types written down in
+the source; it does not infer them. A template written as
+`worker: ({ index }) => index.lib.mkVm({ … })` with the params record unannotated
+is not a template with weaker help text, it is a template
+`ix new worker --help` cannot describe at all: no traversal of the module can
+recover a type that was never written. What its author would see is `--help`
+listing no parameters and `--set` accepting any key, because there is nothing to
+check against.
+
+Such a template stays legal and stays checked — nix refuses an unexpected
+argument by name, and the module system types everything a param reaches — so the
+quick case stays quick, and whether the CLI should keep tolerating it is
+Unresolved question 7. `examples/templates/workers` is deliberately in that state,
+so the trade is visible in the tree rather than only described here.
 
 **Two gaps remain, and neither is about introspection.**
 
@@ -258,9 +309,13 @@ Second, and specific to templates: **a template author has to choose between the
 readable params spelling and a schema-reachable one.** The schema document
 describes the argument of `export default`, which for a `default.ix` is
 `{ index }` — not the params of a function nested inside the returned attrset,
-which is exactly where a template's params live. What does reach the document is
-every `type` alias, whether the root refers to it or not. But an alias cannot
-annotate a destructured parameter:
+which is exactly where a template's params live.
+[index#4453](https://github.com/indexable-inc/index/issues/4453) is that gap:
+`ModuleTypes.parameters` is written in one place, the `export default` arm, and
+every other arrow reaches the mapper through `Ok(self.arrow(arrow)?.expr)`, which
+discards `.parameters`. What does reach the document regardless is every `type`
+alias, whether the root refers to it or not. But an alias cannot annotate a
+destructured parameter:
 
 ```console
 $ ix2nix < worker.ix
@@ -361,7 +416,8 @@ arguments.
 ```
 
 **What `ix new` actually does.** Resolve the config the way `ix apply` already
-does, validate params against the generated schema in the CLI, call
+does, validate params in the CLI against `Ty` rather than against the JSON Schema
+(Typed params says why: the schema is the lossy one), call
 `index.lib.templates.renderInstance` — which evals `templates.<name>` with
 `{ instance, name } + params`, the template's own defaults filling the rest, and
 refuses params that restate either injected value — then run the
@@ -370,6 +426,10 @@ system, inside the create TUI that `tui/apps/new` already renders. The only new
 persistent artifact is the instance record: no new build path, no new image path.
 
 ### Reconciliation
+
+**Unbuilt.** Everything in this section is design: it needs the server-side
+instance record, and it ships with the ix half (ix#9242). What exists today is
+the `instances` block, which `ix apply` converges like any named VM.
 
 The question that kills most designs like this: what does the next `ix apply` do
 to a VM someone created with `ix new`?
@@ -388,6 +448,9 @@ to a VM someone created with `ix new`?
   (`ix config adopt worker@7 --template ingester`) explicitly.
 
 ### Drop-in overrides
+
+**Unbuilt.** So is this section, and for the same reason: an override is a row
+next to the instance record, so `ix config` ships with the ix half (ix#9242).
 
 ```console
 $ ix config set worker@3 shards=8      # records an override, converges the VM
@@ -516,6 +579,24 @@ that era in the same change.
    apply only touches its own.
 5. **Orphan re-adoption.** Is `ix config adopt` the right shape, or should a
    renamed template carry a rename hint?
+6. **Reaching a template's params type** needs index#4453, and two spellings put
+   it out of reach of a single-file walk, so this document should say which one it
+   blesses. Indirection through a top-level binding
+   (`const templates = { worker: … }; export default ({ index }) => ({ templates })`)
+   needs an identifier resolved to its `let` binding — possible inside one module,
+   but a resolver rather than a traversal. Splitting the template into its own
+   file (`worker: import("./worker.ix")`) puts the type in a file the converter
+   never sees; the specifier is a literal relative path, so a Rust caller can
+   follow it, but only if it is told to. And `types()` must report an unresolved
+   import *as* an unresolved import, never as a template with no parameters: those
+   two outcomes are indistinguishable to a caller and only one of them is a reason
+   to stop.
+7. **Should the CLI refuse to register a template whose params arrow is
+   unannotated?** Refusing makes `ix new <template> --help` trustworthy, because
+   every registered template can then describe itself. It also makes a quick
+   untyped template impossible, which contradicts "a bare untyped function stays
+   legal" above, and that tension is the decision: an empty help page silently
+   offered is the other way to be wrong.
 
 ## Future possibilities
 
