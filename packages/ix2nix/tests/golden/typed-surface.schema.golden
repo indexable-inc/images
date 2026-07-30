@@ -1,0 +1,192 @@
+{
+  "$defs": {
+    "Endpoint": {
+      "properties": {
+        "host": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "host",
+        "port"
+      ],
+      "type": "object"
+    },
+    "Proto": {
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "anything": {},
+    "byName": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Endpoint"
+      },
+      "type": "object"
+    },
+    "count": {
+      "type": "integer"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "fallback": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Proto"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "grid": {
+      "items": {
+        "items": {
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "type": "array"
+    },
+    "hosts": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "label": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "listen": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "loose": {
+      "additionalProperties": {},
+      "type": "object"
+    },
+    "mode": {
+      "enum": [
+        1,
+        2,
+        3
+      ]
+    },
+    "name": {
+      "type": "string"
+    },
+    "nested": {
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "type": "object"
+    },
+    "package": {
+      "description": "a derivation exists only during evaluation; supply it from Nix, not from JSON",
+      "not": {}
+    },
+    "proto": {
+      "$ref": "#/$defs/Proto"
+    },
+    "ratio": {
+      "type": "number"
+    },
+    "render": {
+      "description": "a function has no JSON form; supply it from Nix, not from JSON",
+      "not": {}
+    },
+    "retries": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "root": {
+      "pattern": "^/",
+      "type": "string"
+    },
+    "signedSmall": {
+      "maximum": 32767,
+      "minimum": -32768,
+      "type": "integer"
+    },
+    "signedTiny": {
+      "maximum": 127,
+      "minimum": -128,
+      "type": "integer"
+    },
+    "signedWide": {
+      "maximum": 2147483647,
+      "minimum": -2147483648,
+      "type": "integer"
+    },
+    "small": {
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tiny": {
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "wide": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "name",
+    "count",
+    "ratio",
+    "enabled",
+    "tiny",
+    "small",
+    "wide",
+    "signedTiny",
+    "signedSmall",
+    "signedWide",
+    "listen",
+    "root",
+    "label",
+    "package",
+    "render",
+    "anything",
+    "loose",
+    "hosts",
+    "grid",
+    "byName",
+    "proto",
+    "fallback",
+    "retries",
+    "mode",
+    "nested"
+  ],
+  "type": "object"
+}

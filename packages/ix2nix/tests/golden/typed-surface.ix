@@ -1,0 +1,33 @@
+// Every type spelling ix2nix accepts, gathered into one params record: the
+// `.golden` sibling pins the emitted checks and the `.schema.json` sibling pins
+// the generated schema, so the two readings of one annotation sit side by side.
+type Proto = "tcp" | "udp";
+type Endpoint = { host: nonEmptyStr; port: port };
+
+export default (params: {
+  name: string;
+  count: int;
+  ratio: float;
+  enabled: bool;
+  tiny: u8;
+  small: u16;
+  wide: u32;
+  signedTiny: i8;
+  signedSmall: i16;
+  signedWide: i32;
+  listen: port;
+  root: path;
+  label: nonEmptyStr;
+  package: drv;
+  render: (host: string) => string;
+  anything: any;
+  loose: object;
+  hosts: string[];
+  grid: int[][];
+  byName: Record<string, Endpoint>;
+  proto: Proto;
+  fallback: Proto | null;
+  retries: int | null;
+  mode: 1 | 2 | 3;
+  nested: { host: string; alias?: string };
+}) => params.name;

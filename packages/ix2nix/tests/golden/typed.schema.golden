@@ -1,0 +1,41 @@
+{
+  "$defs": {
+    "Endpoint": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer"
+        },
+        "proto": {
+          "$ref": "#/$defs/Proto"
+        }
+      },
+      "required": [
+        "host",
+        "port"
+      ],
+      "type": "object"
+    },
+    "Proto": {
+      "enum": [
+        "tcp",
+        "udp"
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "config": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Endpoint"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "config"
+  ],
+  "type": "object"
+}

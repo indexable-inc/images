@@ -1,0 +1,5 @@
+{ __dir, __importIx, __ixTy }:
+let
+  ty'Params = __ixTy.attrs [ (__ixTy.req "name" __ixTy.nonEmptyStr) (__ixTy.opt "port" __ixTy.port) ];
+in
+params: __ixTy.arg "6:17 argument `params`" ty'Params params (extra: __ixTy.arg "6:33 argument `extra`" __ixTy.int extra params)

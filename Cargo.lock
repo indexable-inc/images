@@ -6106,6 +6106,7 @@ dependencies = [
  "oxc_parser",
  "oxc_span",
  "rnix",
+ "serde_json",
 ]
 
 [[package]]
