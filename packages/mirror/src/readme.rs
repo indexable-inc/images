@@ -30,8 +30,12 @@ pub struct Package<'a> {
     pub monorepo: &'a str,
     /// Repo-relative package path, e.g. `packages/progress-style`.
     pub path: &'a str,
-    /// Monorepo commit the tree was generated from (full sha).
-    pub commit: &'a str,
+    /// The last monorepo commit that changed the package (full sha).
+    /// Deliberately not the monorepo HEAD: this banner is part of the
+    /// mirrored tree, so a HEAD-derived sha rewrites every mirror's README on
+    /// every sync run and turns a quiet day into a commit on every target
+    /// (ENG-11556).
+    pub source_commit: &'a str,
     pub crate_name: &'a str,
     /// The pitch: `mirror.description` when the caller resolved the mirror
     /// manifest, else the crate's `[package] description`.
@@ -107,20 +111,22 @@ fn banner(pkg: &Package<'_>) -> String {
     let Package {
         monorepo,
         path,
-        commit,
+        source_commit,
         mirror_repo,
         ..
     } = *pkg;
-    let short = commit.get(..12).unwrap_or(commit);
+    let short = source_commit.get(..12).unwrap_or(source_commit);
     let subject = mirror_repo.map_or_else(
         || "This repository".to_owned(),
         |repo| format!("[`{repo}`](https://github.com/{repo})"),
     );
     format!(
         "> [!NOTE]\n\
-         > {subject} is a read-only mirror, generated from \
-         [`{path}`](https://github.com/{monorepo}/tree/{commit}/{path}) in \
-         [`{monorepo}`](https://github.com/{monorepo}) at commit `{short}`. \
+         > {subject} is a read-only mirror of \
+         [`{path}`](https://github.com/{monorepo}/tree/{source_commit}/{path}) in \
+         [`{monorepo}`](https://github.com/{monorepo}), taken at `{short}`, the last \
+         monorepo commit that changed the package. A sha behind the monorepo's HEAD \
+         means the package has not changed since, not that the mirror is stale. \
          The monorepo is the source of truth: please open issues and pull requests \
          [there](https://github.com/{monorepo}). This mirror is regenerated automatically; \
          anything pushed directly here will be overwritten."
@@ -382,7 +388,7 @@ mod tests {
         Package {
             monorepo: "indexable-inc/index",
             path: "packages/progress-style",
-            commit: "0123456789abcdef0123456789abcdef01234567",
+            source_commit: "0123456789abcdef0123456789abcdef01234567",
             crate_name: "progress-style",
             description: Some("Shared indicatif styling for ix tools, so every CLI matches."),
             mirror_repo: Some("indexable-inc/progress-style"),

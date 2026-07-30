@@ -337,6 +337,10 @@
           # stub via CLOUDFLARE_API_BASE in the integration tests). The test
           # sandbox has no curl otherwise, so the executors fail spawning it.
           efx = [workspacePkgs.curl];
+          # mirror's generator reads the package's commit history with `git
+          # log` and its tests build a scratch monorepo to commit into. The
+          # test sandbox has no git otherwise, so the tests panic spawning it.
+          mirror = [workspacePkgs.git];
           # nix-web-monitor's switch dirty-tree-guard tests build scratch git
           # repos and run `git status` against them. The test sandbox has no
           # git otherwise, so the tests panic spawning it.
