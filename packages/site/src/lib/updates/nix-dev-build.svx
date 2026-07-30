@@ -10,9 +10,20 @@ links:
 
 Four sessions in one night iterated on the nix evaluator's C++ through a whole-package `nix build`, which recompiles the modular C++ closure in a sandbox for every one-line edit. The tree is a meson project and the fork's own manual documents the ninja loop, so that work was avoidable the whole time.
 
-`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced. Measured on an 18 core aarch64-darwin Mac, each phase timed alone with the dev shell entry outside the span: 11.9s to configure, 51.3s for the first build of all 332 targets, 0.1s for a no-op, and 0.4 to 0.9s per invocation to enter the shell.
+`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced.
 
-The one-file rebuild is the number that matters, and it is a range rather than a number because the translation unit dominates. At load 7 to 8: 7.1 to 7.9s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. So 2 to 9s for a body edit in libexpr, and anyone quoting one number should name the file. A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
+Two independent runs on the same 18 core aarch64-darwin Mac, each phase timed alone with the dev shell entry outside the span. Entry is 0.4 to 0.9s per invocation on top.
+
+| step | run A, load 13 to 24 | run B, load 7 to 10 |
+| --- | --- | --- |
+| `meson setup` | 12s | 11.9s |
+| first full build, 332 targets | 93s | 51.3s |
+| rebuild after touching one file | 18s | 7.1 to 8.9s |
+| no-op rebuild | 1s | 0.1s |
+
+Both runs are real and the one-file row is the one to be careful with, because that cost is set by which translation unit you touched, not by the machine. Run B recorded the file and run A did not. At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, and 2.1s on `nixexpr.cc`. A 4x spread with load effectively constant.
+
+So the honest form is a range, 2 to 9s for a body edit in libexpr, and a single figure needs its file named or it will be read as a promise about somebody else's file. A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
 
 The dependencies are not vendored here. Every run re-execs itself under `nix develop <checkout>#default`, so the compiler, meson, ninja and the libraries nix links against come from the checkout's own flake, and entering it costs 0.41s warm. The flake reference is a bare path rather than `path:<checkout>`, which matters more than it looks: a `path:` reference copies the whole directory into the store on every invocation, and in a checkout that has been built once that directory contains a 2.0G `build/`. A bare path resolves to `git+file://`, so `.gitignore` applies and the store copy is 17M.
 
