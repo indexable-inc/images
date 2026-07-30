@@ -13,6 +13,7 @@ workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 error-chain.workspace = true
+git-probe.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

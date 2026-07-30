@@ -3,7 +3,6 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
@@ -44,29 +43,16 @@ impl Checkout {
     /// `None` when the checkout is not a git working tree, which is legitimate:
     /// an unpacked tarball still builds.
     pub fn revision(&self) -> Option<Revision> {
-        let short = git(&self.root, &["rev-parse", "--short", "HEAD"])?;
+        let short = git_probe::output(&self.root, &["rev-parse", "--short", "HEAD"])?;
         // --untracked-files=no keeps this from walking the build directory,
         // which holds tens of thousands of untracked object files.
-        let status = git(&self.root, &["status", "--porcelain", "--untracked-files=no"])?;
+        let status =
+            git_probe::output(&self.root, &["status", "--porcelain", "--untracked-files=no"])?;
         Some(Revision {
             short,
             dirty: !status.is_empty(),
         })
     }
-}
-
-/// Ask `git` for one value, treating any failure as "not a git checkout".
-fn git(root: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn search_upward() -> Result<PathBuf> {
