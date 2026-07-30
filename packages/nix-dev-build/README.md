@@ -22,8 +22,8 @@ add 0.4 to 0.9s per invocation for that entry.
 | the first build, all 332 targets | 51.3s | 10 rising to 95 |
 | rebuild with nothing changed | 0.1s | 13 |
 
-The one-file rebuild, which is the number that matters, depends on which
-translation unit you touched far more than on machine load. At load 7 to 8:
+The one-file rebuild is the number that matters, and it is set by which
+translation unit you touched. At load 7 to 8:
 
 | touched | ninja |
 | --- | --- |
@@ -34,9 +34,33 @@ translation unit you touched far more than on machine load. At load 7 to 8:
 So quote a range, 2 to 9s for a body edit in libexpr, and name the file if you
 quote one number. A body-only edit recompiles that unit, relinks
 `libnixexpr.2.34.7.dylib` and regenerates its symbol file, 3 of 10 edges, and
-does not relink `src/nix/nix` at all; the change arrives through dynamic
-linking. An independent run by another session reported 18s for an unnamed file
-at load 13 to 24, which is consistent with a larger unit, a busier box, or both.
+does not relink `src/nix/nix` at all; the change arrives through dynamic linking.
+
+## The rebuild is serial, so load only matters once the cores run out
+
+Timing `ninja` for the same `eval.cc` edit across a load sweep on 18 cores, with
+`real` over `user` as the contention signal:
+
+| load | real | real / user |
+| --- | --- | --- |
+| 13.2 to 18.4, eight runs | 6.36 to 6.80s | 1.04 to 1.05 |
+| about 25, two runs | 13.06s, 15.78s | 1.52, 1.62 |
+
+Below the core count the wall clock is flat and the process is barely waiting.
+Above it the same work takes 2.4x longer and the ratio jumps, because the
+rebuild needs exactly one core: forcing `ninja -j1` costs almost nothing, 7.03s
+and 7.34s against 6.36 to 6.80s at the default. So a jobs flag earns nothing on
+a single-file edit and only pays on a cold or wide rebuild.
+
+`user` also inflates under oversubscription, 6.15s to 9.76s, so the same compile
+burns more processor cycles rather than only waiting longer. That is cache and
+memory bandwidth contention, not scheduling alone.
+
+Two consequences for anyone quoting a number from this tool. Report load beside
+it, since the same edit is 6.5s or 16s depending on which side of the core count
+the box is. And discard the first run: another session measured a 34% first-run
+penalty, 9.06s against 6.77s steady, from cold page cache on the object and the
+dylib.
 
 ## The dev shell is where the dependencies come from
 

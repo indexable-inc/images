@@ -21,9 +21,22 @@ Two independent runs on the same 18 core aarch64-darwin Mac, each phase timed al
 | rebuild after touching one file | 18s | 7.1 to 8.9s |
 | no-op rebuild | 1s | 0.1s |
 
-Both runs are real and the one-file row is the one to be careful with, because that cost is set by which translation unit you touched, not by the machine. Run B recorded the file and run A did not. At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, and 2.1s on `nixexpr.cc`. A 4x spread with load effectively constant.
+Both runs are real. The one-file row is the one to be careful with, and it took three sessions and a disagreement to pin down, because two different effects were being confused for one.
 
-So the honest form is a range, 2 to 9s for a body edit in libexpr, and a single figure needs its file named or it will be read as a promise about somebody else's file. A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
+**Which file you touch sets the cost.** At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. A 4x spread with load constant, so a single figure needs its file named or it reads as a promise about somebody else's file. Call it 2 to 9s for a body edit in libexpr. Run B recorded its file; run A did not.
+
+**Load does nothing until the cores run out, then it does a lot.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Timing the same `eval.cc` edit across a load sweep on 18 cores, with `real` over `user` as the contention signal:
+
+| load | real | real / user |
+| --- | --- | --- |
+| 13.2 to 18.4, eight runs | 6.36 to 6.80s | 1.04 to 1.05 |
+| about 25, two runs | 13.06s, 15.78s | 1.52, 1.62 |
+
+Flat below the core count and barely waiting; 2.4x slower above it. `user` inflates too, 6.15s to 9.76s, so the same compile burns more cycles rather than only waiting, which is cache and memory bandwidth contention rather than scheduling alone. That is why run A, at load 24, is the slow one: not a bigger file, an oversubscribed box.
+
+So report load beside any figure from this loop, and throw away the first run, which carries a 34% cold-page-cache penalty: 9.06s against 6.77s steady.
+
+A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
 
 The dependencies are not vendored here. Every run re-execs itself under `nix develop <checkout>#default`, so the compiler, meson, ninja and the libraries nix links against come from the checkout's own flake, and entering it costs 0.41s warm. The flake reference is a bare path rather than `path:<checkout>`, which matters more than it looks: a `path:` reference copies the whole directory into the store on every invocation, and in a checkout that has been built once that directory contains a 2.0G `build/`. A bare path resolves to `git+file://`, so `.gitignore` applies and the store copy is 17M.
 
