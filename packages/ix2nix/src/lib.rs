@@ -63,7 +63,11 @@
 //! statements, `function` expressions, zero-argument functions and calls,
 //! numeric indexing (use `builtins.elemAt`), `%`, `**`, bitwise operators.
 
-pub mod checker;
+// Private: nothing here is part of the public API, so a `pub mod` would
+// publish a module whose every item is crate-visible. Items inside are `pub`
+// rather than `pub(crate)` because the private module already bounds them, and
+// `redundant_pub_crate` says so.
+mod checker;
 pub mod error;
 pub mod map;
 pub mod nix;

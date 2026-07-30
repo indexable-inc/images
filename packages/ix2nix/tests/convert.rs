@@ -99,6 +99,37 @@ fn lib_types_refinements_lower_to_runtime_checkers() {
 }
 
 #[test]
+fn destructured_optional_must_pair_with_a_nix_default() {
+    // `{ a, b }` renders `{ a, b }:`, so Nix demands `b` whatever the
+    // annotation says -- and the generated schema, reading only the `?`, would
+    // have told a caller it was optional.
+    let error = diagnostic("export default ({ a, b }: { a: int; b?: string }) => a;\n");
+    assert!(error.message().contains("needs a default in the pattern"), "{error}");
+    // The mirror spelling lies the other way: the default binds and then fails
+    // the field's own check.
+    let error = diagnostic("export default ({ a, b = null }: { a: int; b: string }) => a;\n");
+    assert!(error.message().contains("type must be optional"), "{error}");
+}
+
+#[test]
+fn readonly_property_signatures_are_rejected() {
+    // No Nix meaning, and accepting it silently shifted a destructured field's
+    // reported column from the key to the `readonly` keyword.
+    let error = diagnostic("export default ({ a }: { readonly a: int }) => a;\n");
+    assert!(error.message().contains("`readonly` has no Nix equivalent"), "{error}");
+}
+
+#[test]
+fn float_literals_that_overflow_to_infinity_are_rejected() {
+    // `inf.0` is not Nix syntax, and it serializes into a JSON Schema as
+    // `null`. One check at the parse covers both positions.
+    for source in ["export default 1e999;\n", "export default (x: 1e999 | 2) => x;\n"] {
+        let error = diagnostic(source);
+        assert!(error.message().contains("overflows to infinity"), "{source}: {error}");
+    }
+}
+
+#[test]
 fn optional_pattern_fields_check_as_nullable() {
     // The Nix default binds when the caller omits the field, so the bound
     // name's type is `T | null`, not `T`.

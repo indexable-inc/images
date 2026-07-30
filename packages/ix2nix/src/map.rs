@@ -14,7 +14,7 @@ use crate::nix::{
     Attr, BinaryOp, Binding, Expr, LetBinding, Module, Param, PatternField, StrPart, UnaryOp,
     is_bare_ident,
 };
-use crate::ty::{BUILTIN_TYPES, ModuleTypes, Parameter, Ty, TypeAlias};
+use crate::ty::{BUILTIN_TYPES, Field, ModuleTypes, Parameter, Ty, TypeAlias};
 
 /// The two products of the one mapping pass: the Nix module [`crate::render`]
 /// prints, and the type description [`crate::schema`] reads.
@@ -292,6 +292,16 @@ impl Mapper<'_> {
         let parsed = if let Some(radix) = radix {
             i64::from_str_radix(&digits[2..], radix).ok()
         } else if digits.contains(['.', 'e', 'E']) {
+            // `1e999` parses to infinity, which renders as `inf.0` -- not Nix
+            // syntax -- and serializes into a JSON Schema as `null`, with no
+            // error either way. Rejected here rather than at each output, so
+            // one check covers a value and a literal type alike.
+            if !lit.value.is_finite() {
+                return Err(self.err(
+                    lit.span,
+                    "float literal overflows to infinity; Nix has no infinite float",
+                ));
+            }
             return Ok(Number::Float(lit.value));
         } else {
             digits.parse().ok()
@@ -583,13 +593,13 @@ impl Mapper<'_> {
                     // A pattern binds identifiers, so an unspellable field
                     // name can never be `bound` and never reaches `Expr::Ident`
                     // below.
-                    let bound = object.properties.iter().any(|bound| {
+                    let bound = object.properties.iter().find(|bound| {
                         matches!(
                             &bound.key,
                             ast::PropertyKey::StaticIdentifier(name) if name.name.as_str() == field.name
                         )
                     });
-                    if !bound {
+                    let Some(bound) = bound else {
                         return Err(self.err(
                             member.span(),
                             format!(
@@ -598,7 +608,8 @@ impl Mapper<'_> {
                                 field.name
                             ),
                         ));
-                    }
+                    };
+                    self.reject_unpaired_optional(&field, bound, member.span())?;
                     // An optional field's Nix default (conventionally `null`)
                     // binds when the caller omits it; `T | null` is the type
                     // the bound name actually has. The recorded field keeps
@@ -610,6 +621,10 @@ impl Mapper<'_> {
                         field.ty.clone()
                     };
                     checks.push(ParamCheck {
+                        // `member.span()` starts at the key, because
+                        // `readonly` -- the only modifier a property signature
+                        // can carry -- is rejected in `Mapper::field`. That is
+                        // what keeps the reported column the key's own.
                         loc: self
                             .check_loc(member.span(), &format!("argument field `{}`", field.name)),
                         ty: checked,
@@ -623,6 +638,58 @@ impl Mapper<'_> {
                 other.span(),
                 "this parameter shape cannot carry a type annotation",
             )),
+        }
+    }
+
+    /// Requires a destructured field's `?` marker and its Nix default to agree.
+    ///
+    /// The two are one fact spelled twice, and only the pattern half reaches
+    /// Nix: `({ a, b }: { a: int; b?: string })` renders `{ a, b }:`, so Nix
+    /// demands `b` however the annotation marked it. Left alone, the emitted
+    /// module and the generated JSON Schema disagree about whether a caller may
+    /// omit the field, and a `params.json` that validates then dies at eval
+    /// with `called without required argument 'b'`.
+    ///
+    /// Rejecting is the fix rather than deriving the schema's `required` from
+    /// the pattern, because the mirror spelling lies the same way in the other
+    /// direction: a pattern default under a non-optional annotation lets Nix
+    /// bind the default and then fails the field's own check on it. Deriving
+    /// from either half alone leaves the other decorative, and picking a
+    /// winner is the sort of silent reinterpretation this crate refuses
+    /// everywhere else. With the two required to agree, `required` follows
+    /// from the annotation by construction.
+    ///
+    /// What this gives up: `{ a, b }: { a: int; b?: string }` no longer
+    /// converts. The meaning it was reaching for -- present but possibly null
+    /// -- is `b: string | null`, which says so exactly and always worked.
+    fn reject_unpaired_optional(
+        &self,
+        field: &Field,
+        bound: &ast::BindingProperty<'_>,
+        span: Span,
+    ) -> Result<(), Error> {
+        let defaulted = matches!(&bound.value, ast::BindingPattern::AssignmentPattern(_));
+        match (field.optional, defaulted) {
+            (true, false) => Err(self.err(
+                span,
+                format!(
+                    "`{name}?` needs a default in the pattern (`{{ {name} = null }}`); \
+                     without one Nix requires the field whatever the annotation says. \
+                     For a field that is always passed but may be null, write \
+                     `{name}: T | null`",
+                    name = field.name
+                ),
+            )),
+            (false, true) => Err(self.err(
+                span,
+                format!(
+                    "`{name}` has a default in the pattern, so its type must be \
+                     optional (`{name}?: T`); otherwise the default binds and then \
+                     fails this field's own check",
+                    name = field.name
+                ),
+            )),
+            _ => Ok(()),
         }
     }
 

@@ -1,0 +1,7 @@
+// A destructured root with an optional field. The `?` and the Nix default are
+// one fact, so the converter requires both halves -- which is what lets the
+// `.schema.golden` derive `required` from the annotation alone and still agree
+// with the `{ port ? null }` in the `.golden` next to it. Written without the
+// default, this module used to convert with `port` MANDATORY in Nix and
+// reported optional in the schema.
+export default ({ host, port = null }: { host: nonEmptyStr; port?: port }) => host;

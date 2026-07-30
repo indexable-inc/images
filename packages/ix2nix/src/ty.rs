@@ -135,8 +135,12 @@ pub const BUILTIN_TYPES: [&str; 14] = [
 pub struct ModuleTypes {
     /// `type X = T` aliases, in declaration order. A [`Ty::Alias`] names one.
     pub aliases: Vec<TypeAlias>,
-    /// The parameters of the module's `export default`, in curried call
-    /// order. Empty when the default export is not an arrow function.
+    /// The parameters of the module's `export default` arrow itself, in
+    /// curried call order. Empty when the default export is not an arrow.
+    ///
+    /// Only that one arrow: a function nested in the value it returns (a
+    /// template under a `templates` attrset, say) is not described here, so a
+    /// `--help` renderer cannot reach it yet. See #4453.
     pub parameters: Vec<Parameter>,
 }
 
@@ -242,6 +246,20 @@ impl Mapper<'_> {
         };
         if property.computed {
             return Err(self.err(property.span, "computed keys have no runtime check"));
+        }
+        // Rejected rather than ignored, for the crate's usual reason: a form
+        // with no Nix meaning is an error, not a no-op. Every Nix attrset is
+        // immutable, so `readonly` asserts nothing a reader could act on.
+        //
+        // Load-bearing beyond that: `readonly` is the only modifier a property
+        // signature can carry, so refusing it is what keeps a member's span
+        // starting at its key. `crate::map` reports a destructured field's
+        // check location from the member span and relies on the two agreeing.
+        if property.readonly {
+            return Err(self.err(
+                property.span,
+                "`readonly` has no Nix equivalent; every attrset is already immutable",
+            ));
         }
         let name = match &property.key {
             ast::PropertyKey::StaticIdentifier(ident) => ident.name.to_string(),
