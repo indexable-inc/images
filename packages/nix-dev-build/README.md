@@ -65,14 +65,27 @@ cold or wide rebuild. When the process gets that core promptly, `real` is within
 about 1.5x `user` and the edit roughly doubles.
 
 `user` also inflates when contended, 6.10s to 9.76s, so the same compile costs
-more processor time and not only more wall clock. Why is not established. Two
-candidates survive: contention for cache and memory bandwidth, or displacement
-onto a slower core. Forcing the lowest core tier with `taskpolicy -b` costs 2.5x
-in `user`, 15.8s and 17.0s against 6.4s and 8.1s, which bounds displacement
-without isolating it, and that flag moves scheduling priority as well as tier.
-The topology defeats the obvious guess in any case: `hw.perflevel0` is 6 cores
-named `Super` and `hw.perflevel1` is 12 named `Performance`, with no efficiency
-tier on this part.
+more processor time and not only more wall clock. Why is not established, and the
+two obvious candidates are not independent on this part. `hw.nperflevels` is 2,
+`perflevel0` is 6 cores named `Super` and `perflevel1` is 12 named `Performance`,
+with no efficiency tier, and the tiers differ 2x in cache:
+
+| tier | cores | l1d | l1i | l2 |
+| --- | --- | --- | --- | --- |
+| `Super` | 6 | 128K | 192K | 16M |
+| `Performance` | 12 | 64K | 128K | 8M |
+
+So a compile displaced to the lower tier loses half its L1d and half its L2 as a
+consequence of moving. Displacement and cache pressure are the same explanation
+here, not competing ones; they separate only for the narrower case where the
+compile stays on `Super` and other processes evict its lines.
+
+Nothing here measures that the cache delta causes the 1.59x. The available bound
+is that forcing the lowest tier with `taskpolicy -b` costs 2.5x in `user`, and
+that is an upper bound rather than a measurement because the flag drops scheduling
+priority as well as tier. The experiment that would isolate it pins to
+`perflevel0` specifically, rather than raising or lowering quality of service,
+and runs under contention on a machine somebody has claimed.
 
 So when quoting a number from this loop, report `real` and `user` together rather
 than load. And discard the first run: another session measured a 34% first-run
