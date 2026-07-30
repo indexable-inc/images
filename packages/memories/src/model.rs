@@ -199,9 +199,6 @@ pub struct Memory {
     pub yaml: String,
     /// 1-based file line the YAML block starts on.
     pub yaml_start_line: usize,
-    /// 1-based file line the body starts on, so a diagnostic about body text
-    /// points at the file rather than at an offset inside the body.
-    pub body_start_line: usize,
 }
 
 impl Memory {
@@ -453,8 +450,6 @@ pub fn parse_memory(
         frontmatter_slug: raw.slug,
         yaml: sections.yaml.to_owned(),
         yaml_start_line: sections.yaml_start_line,
-        // The YAML block, then its closing fence, then the body.
-        body_start_line: sections.yaml_start_line + sections.yaml.lines().count() + 1,
     })
 }
 
