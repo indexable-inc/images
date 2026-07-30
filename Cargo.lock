@@ -7481,6 +7481,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix-dev-build"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "error-chain",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "nix-web-monitor"
 version = "0.1.0"
 dependencies = [
