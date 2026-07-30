@@ -34,30 +34,6 @@ export default ({ index, hyperion }) => {
     // an address.
     defaults: [
       { ix: { networking: { groups: ["hyperion"] } } },
-      // TRANSITIONAL, step 1 of 2. Delete this line, and only this line, once
-      // every node in the fleet is running a generation built from it.
-      //
-      // The three older nodes run a generation that declares a `tmp.mount`
-      // unit. index main no longer declares one, so a switch onto main stops
-      // that unit -- and until `66c0bcca` nixpkgs' `RequiresMountsFor=/tmp` on
-      // the system bus meant systemd stopped the bus in the same transaction,
-      // killing the switch that was issuing the job over it. That is
-      // ENG-11080, and it broke three guests and cost a 13-minute outage.
-      //
-      // A fix in the new generation cannot help, because
-      // switch-to-configuration reads the RUNNING generation's unit files and
-      // reloads only after its stop phase. So this apply deliberately KEEPS
-      // the mount declared: nothing is removed, nothing is stopped, and the
-      // node lands on a generation that carries
-      // `modules/system/dbus-survives-mount-removal`. Deleting the line is
-      // then the apply that retires the mount, with the fix already running.
-      //
-      // `useTmpfs` is `lib.mkDefault false` in `lib/image/platform.nix`, so
-      // this plain definition wins. It does not change whether /tmp is a
-      // tmpfs -- ix's injected PID 1 mounts one before systemd exists either
-      // way (ENG-11365) -- only whether the generation declares the unit
-      // systemd adopts it under, which is the whole of the bug.
-      { boot: { tmp: { useTmpfs: true } } },
       packages,
       import("./pki.nix"),
       hyperion.nixosModules["game-server"],
