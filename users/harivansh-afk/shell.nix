@@ -22,6 +22,12 @@
   programs.zsh = {
     enable = true;
 
+    # Pinned to the pre-26.05 home-manager default. Leaving it implicit makes
+    # the dotfile location a function of home.stateVersion, which this profile
+    # only mkDefaults, so a consuming host bumping the state version would
+    # silently relocate .zshrc/.zshenv to $XDG_CONFIG_HOME/zsh.
+    dotDir = config.home.homeDirectory;
+
     defaultKeymap = "viins";
 
     autosuggestion.enable = true;
