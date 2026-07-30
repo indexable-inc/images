@@ -50,9 +50,17 @@ in {
 
       install -m 0644 "$fixtures/good.json" net-trace-summary.json
       bash validate.sh
+      # validate.sh is the workflow step body verbatim, so its rejection
+      # message is the literal GitHub Actions "::error::" annotation string
+      # (#4031). Redirecting only stderr left that string on stdout, so
+      # every one of these five expected rejections printed an
+      # alarming, failure-shaped line into an otherwise-passing build;
+      # readers skimming an unrelated red run for "error" have twice
+      # mistaken this line for the cause. Suppress both streams and rely
+      # on the exit status the `if` already checks.
       for bad in bad-host bad-label bad-newline bad-scheme missing; do
         install -m 0644 "$fixtures/$bad.json" net-trace-summary.json
-        if bash validate.sh 2>/dev/null; then
+        if bash validate.sh >/dev/null 2>&1; then
           echo "validate $bad: accepted a hostile summary" >&2
           exit 1
         fi
