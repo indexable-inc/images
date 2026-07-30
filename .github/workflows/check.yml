@@ -202,12 +202,15 @@ jobs:
       # not this PR's tree: a PR-tree build would eval the PR's flake untraced
       # and warm exactly the fetches the tracer exists to catch. Fail open: a
       # missing attr (first run after landing) or any build error just leaves
-      # NET_TRACE unset and the gate runs untraced.
+      # NET_TRACE unset and the gate runs untraced. Stderr is left on the
+      # console (only stdout feeds the `out=` capture) so that fail-open
+      # path still leaves a reason in the log instead of silently dropping
+      # the diagnostic that would explain why tracing never turned on.
       - name: Bootstrap net-trace
         continue-on-error: true
         run: |
           set -uo pipefail
-          if out="$(nix build 'github:${{ github.repository }}/main#net-trace' --no-link --print-out-paths 2>/dev/null)"; then
+          if out="$(nix build 'github:${{ github.repository }}/main#net-trace' --no-link --print-out-paths)"; then
             echo "NET_TRACE=${out}/bin/net-trace" >> "$GITHUB_ENV"
           fi
 
