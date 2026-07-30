@@ -1,0 +1,23 @@
+{
+  "$defs": {
+    "Params": {
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/Params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

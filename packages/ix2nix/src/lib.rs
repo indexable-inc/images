@@ -41,6 +41,11 @@
 //! | `type X = T` | `let ty'X = <T>` (referenced by annotations) |
 //! | `({ a }: { a: T }) => e` | per-field `__ixTy.arg` checks on the bound names |
 //!
+//! An annotation is parsed once into [`ty::Ty`], the crate's own description
+//! of it, and lowered twice: to the checker above, and to a JSON Schema
+//! ([`schema`]) so `--help` text and editor completion for a module's
+//! parameters are generated rather than hand-mirrored.
+//!
 //! Type spellings: `string`, `bool`, `int`, `float`, `drv`, `any`/`unknown`,
 //! `object`, `T[]`, `Record<string, T>`, `{ a: T; b?: U }`, function types
 //! (callability only), literal unions, and `T \| null`, plus refinements:
@@ -58,10 +63,12 @@
 //! statements, `function` expressions, zero-argument functions and calls,
 //! numeric indexing (use `builtins.elemAt`), `%`, `**`, bitwise operators.
 
+pub mod checker;
 pub mod error;
 pub mod map;
 pub mod nix;
 pub mod render;
+pub mod schema;
 pub mod ty;
 
 pub use error::Error;
@@ -77,6 +84,35 @@ use oxc_span::SourceType;
 /// Returns a positioned [`Error`] when the source is not a valid ES module or
 /// uses any `JavaScript` form without a 1:1 Nix equivalent.
 pub fn convert(source: &str) -> Result<String, Error> {
+    Ok(render::module(&mapped(source)?.module))
+}
+
+/// The JSON Schema (draft 2020-12) for a `.ix` module's parameters.
+///
+/// Generated from the same annotations [`convert`] lowers to eval-time checks,
+/// so the two cannot drift; see [`schema::document`] for what the document
+/// describes and what it deliberately cannot.
+///
+/// # Errors
+///
+/// Returns the same positioned [`Error`] [`convert`] would: a module has a
+/// schema exactly when it converts.
+pub fn schema(source: &str) -> Result<String, Error> {
+    Ok(schema::document(&mapped(source)?.types))
+}
+
+/// A `.ix` module's types, for a consumer rendering something other than JSON
+/// Schema (`--help` text, ambient `.d.ts` declarations).
+///
+/// # Errors
+///
+/// Returns the same positioned [`Error`] [`convert`] would.
+pub fn types(source: &str) -> Result<ty::ModuleTypes, Error> {
+    Ok(mapped(source)?.types)
+}
+
+/// Parses `.ix` source and runs the single mapping pass over it.
+fn mapped(source: &str) -> Result<map::Mapped, Error> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
 
@@ -92,6 +128,5 @@ pub fn convert(source: &str) -> Result<String, Error> {
         ));
     }
 
-    let module = map::module(&parsed.program, source)?;
-    Ok(render::module(&module))
+    map::module(&parsed.program, source)
 }

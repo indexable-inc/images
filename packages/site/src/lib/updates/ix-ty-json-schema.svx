@@ -1,0 +1,116 @@
+---
+id: ix-ty-json-schema
+postedAt: "2026-07-29"
+title: a .ix module's type annotations now generate a JSON Schema
+links:
+  - label: "index#4447"
+    href: https://github.com/indexable-inc/index/issues/4447
+tags:
+  - nix
+  - ix2nix
+---
+
+The `ix2nix-wasm` plugin has a second export. `builtins.wasm { function =
+"schema"; }` takes `.ix` source and returns a JSON Schema (draft 2020-12) for
+the module's parameters, generated from the same TypeScript annotations that
+already lower to eval-time `__ixTy` checks. The `ix2nix` binary grew a
+`--schema` flag over the same code path.
+
+## why a checker could not answer this
+
+`packages/ix2nix/src/ty.rs` used to walk an annotation straight onto a
+`__ixTy.<checker>` expression and drop the type. A checker is a Nix function,
+so nothing downstream could ask a type what it accepts. That single missing
+property is what blocked three separate things at once: a JSON Schema for
+`params.json` completion, `ix new <template> --help` text, and any ambient
+`.d.ts` export.
+
+An annotation now parses once into `ix2nix::ty::Ty` -- plain data -- and lowers
+twice, from the same value produced by the same pass:
+
+- `src/checker.rs` emits the `__ixTy` expression, byte-identical to before.
+  The golden files did not move.
+- `src/schema.rs` emits the schema.
+
+One traversal, two outputs. A separate pass over the annotations for the schema
+could have described a type the emitted checks do not enforce, which is the one
+failure a generated schema exists to rule out.
+
+## what the schema says
+
+The root constrains the argument of `export default`. For
+`packages/ix2nix/tests/golden/typed-curried.ix` that is a bare `$ref`:
+
+```json
+{
+  "$defs": {
+    "Params": {
+      "properties": {
+        "name": { "minLength": 1, "type": "string" },
+        "port": { "maximum": 65535, "minimum": 0, "type": "integer" }
+      },
+      "required": ["name"],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/Params",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
+```
+
+Every `type` alias lands in `$defs`, reachable or not, so a named type stays
+named. A module whose default export is not an annotated function gets a root
+with only `$schema` on it: an empty schema says "nothing is known about this
+argument", which is the truth, and is not the same claim as "this module takes
+nothing".
+
+## four places the schema and the checker deliberately disagree
+
+Each is commented at the decision in `src/schema.rs`, because the failure mode
+of guessing is silent -- a schema wider than the eval-time check green-lights a
+params file that then fails at eval, and a narrower one rejects data the module
+would have taken.
+
+- **`float` widens to `number`, which is looser.** JSON has one number type and
+  draft 2020-12 counts `2.0` as an integer, so no schema can say "float, not
+  int" the way `builtins.typeOf` does. The strict spelling
+  (`"not": {"type": "integer"}`) would reject `2.0`, a perfectly good Nix
+  float. A consumer gets no editor warning that `1` is not a float and learns
+  it from the check instead.
+- **`path` becomes `{"type": "string", "pattern": "^/"}`.** A Nix path *value*
+  cannot appear in a JSON document, so the only spelling left is the other
+  branch `ix-ty.nix`'s `path` accepts. Relative paths and store-path string
+  context are gone, neither of which survives JSON anyway.
+- **`drv` and function types validate against nothing.** Both emit
+  `{"not": {}}` plus a `description` saying why. `{"not": {}}` is the boolean
+  schema `false` with room for a reason, and the person who needs the reason is
+  the one staring at their editor's error on the field. A `drv`-typed field
+  cannot be filled from a params file at all -- only from Nix.
+- **Object schemas stay open.** No `additionalProperties: false`, because
+  `ix-ty.nix`'s `attrs` checker reads required field *names* and permits
+  extras. Closing the object here would reject a params file the module
+  accepts.
+
+## what is still missing
+
+Deep checking. `ix-ty.nix` still stops at weak head normal form, so
+`__ixTy.listOf __ixTy.string` checks "is a list" and never looks at an element,
+while the schema it generates says `"items": {"type": "string"}`. A params file
+that passes eval can still carry `hosts = [ 1 2 ]`. That is the other half of
+#4447 and it is filed separately.
+
+## smaller things in the same change
+
+A parenthesized default export used to lose its signature:
+`export default ((a: int) => a)` recorded no parameters, so its schema came out
+empty. Found by the new property test, which walks every `$ref` in a generated
+schema and requires it to resolve into `$defs`.
+
+Duplicate fields in an object type (`{ a: int; a: string }`) are now rejected.
+They had no sensible checker -- the runtime would demand `a` twice -- and no
+sensible schema, since JSON object keys are unique so one silently wins.
+
+A destructured parameter's field types may now use string-literal keys
+(`({ a }: { "a": int })`), which used to be an error. The restriction existed
+only because the old code compared AST key nodes; comparing names is both
+simpler and correct.

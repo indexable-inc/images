@@ -1,0 +1,6 @@
+{ __dir, __importIx, __ixTy }:
+let
+  ty'Proto = __ixTy.enum [ "tcp" "udp" ];
+  ty'Endpoint = __ixTy.attrs [ (__ixTy.req "host" __ixTy.nonEmptyStr) (__ixTy.req "port" __ixTy.port) ];
+in
+params: __ixTy.arg "7:17 argument `params`" (__ixTy.attrs [ (__ixTy.req "name" __ixTy.string) (__ixTy.req "count" __ixTy.int) (__ixTy.req "ratio" __ixTy.float) (__ixTy.req "enabled" __ixTy.bool) (__ixTy.req "tiny" __ixTy.u8) (__ixTy.req "small" __ixTy.u16) (__ixTy.req "wide" __ixTy.u32) (__ixTy.req "signedTiny" __ixTy.i8) (__ixTy.req "signedSmall" __ixTy.i16) (__ixTy.req "signedWide" __ixTy.i32) (__ixTy.req "listen" __ixTy.port) (__ixTy.req "root" __ixTy.path) (__ixTy.req "label" __ixTy.nonEmptyStr) (__ixTy.req "package" __ixTy.drv) (__ixTy.req "render" __ixTy.func) (__ixTy.req "anything" __ixTy.any) (__ixTy.req "loose" (__ixTy.attrsOf __ixTy.any)) (__ixTy.req "hosts" (__ixTy.listOf __ixTy.string)) (__ixTy.req "grid" (__ixTy.listOf (__ixTy.listOf __ixTy.int))) (__ixTy.req "byName" (__ixTy.attrsOf ty'Endpoint)) (__ixTy.req "proto" ty'Proto) (__ixTy.req "fallback" (__ixTy.nullable ty'Proto)) (__ixTy.req "retries" (__ixTy.nullable __ixTy.int)) (__ixTy.req "mode" (__ixTy.enum [ 1 2 3 ])) (__ixTy.req "nested" (__ixTy.attrs [ (__ixTy.req "host" __ixTy.string) (__ixTy.opt "alias" __ixTy.string) ])) ]) params params.name

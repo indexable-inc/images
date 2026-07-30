@@ -1,6 +1,7 @@
 //! The `builtins.wasm` face of [`ix2nix`]: a `wasm32-unknown-unknown` cdylib
-//! exporting `convert(ValueId) -> ValueId` against the patched Nix
-//! evaluator's non-WASI host interface (`src/libexpr/primops/wasm.cc`).
+//! exporting `convert(ValueId) -> ValueId` and `schema(ValueId) -> ValueId`
+//! against the patched Nix evaluator's non-WASI host interface
+//! (`src/libexpr/primops/wasm.cc`).
 //!
 //! The evaluator instantiates the module, calls the exported
 //! `nix_wasm_init_v1()`, then calls the configured function with the argument
@@ -91,12 +92,13 @@ mod plugin {
         unsafe { host::make_string(span.ptr, span.len) }
     }
 
-    /// `convert` entry: `.ix` source string in, Nix source string out; a
-    /// conversion error traps with the rendered diagnostic.
-    pub fn convert(source_id: u32) -> u32 {
+    /// Runs one converter entry point over the Nix string `source_id` and
+    /// returns its output as a fresh Nix string; a conversion error traps with
+    /// the rendered diagnostic.
+    pub fn entry(source_id: u32, run: fn(&str) -> Result<String, ix2nix::Error>) -> u32 {
         let source = nix_string(source_id);
-        match ix2nix::convert(&source) {
-            Ok(nix_source) => make_nix_string(&nix_source),
+        match run(&source) {
+            Ok(out) => make_nix_string(&out),
             Err(error) => trap(&error.to_string()),
         }
     }
@@ -111,9 +113,22 @@ pub extern "C" fn nix_wasm_init_v1() {
     std::panic::set_hook(Box::new(|info| plugin::trap(&info.to_string())));
 }
 
-/// The `builtins.wasm { function = "convert"; }` entry point.
+/// The `builtins.wasm { function = "convert"; }` entry point: `.ix` source in,
+/// Nix source out.
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
 pub extern "C" fn convert(source_id: u32) -> u32 {
-    plugin::convert(source_id)
+    plugin::entry(source_id, ix2nix::convert)
+}
+
+/// The `builtins.wasm { function = "schema"; }` entry point: `.ix` source in,
+/// the module's JSON Schema out.
+///
+/// A separate export rather than one entry returning both, because
+/// `builtins.wasm` names exactly one function per call and a caller wanting
+/// only the schema should not pay for rendering Nix it will throw away.
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn schema(source_id: u32) -> u32 {
+    plugin::entry(source_id, ix2nix::schema)
 }

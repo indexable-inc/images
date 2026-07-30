@@ -14,6 +14,11 @@ oxc_ast.workspace = true
 oxc_diagnostics.workspace = true
 oxc_parser.workspace = true
 oxc_span.workspace = true
+# JSON Schema assembly and printing (src/schema.rs). Hand-rolling the writer
+# would mean hand-rolling JSON string escaping, which is exactly the kind of
+# detail that is wrong only for inputs nobody tested; and the escaping would
+# have to be right for source text this crate does not control.
+serde_json.workspace = true
 
 [dev-dependencies]
 hegeltest = { workspace = true, default-features = false }

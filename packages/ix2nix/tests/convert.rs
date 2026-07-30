@@ -67,6 +67,14 @@ fn destructured_annotation_must_be_inline_and_bound() {
 }
 
 #[test]
+fn duplicate_object_type_fields_are_rejected() {
+    // Two `a` fields have no sensible checker and no sensible schema, so the
+    // declaration is rejected rather than resolved to one of them.
+    let error = diagnostic("export default (x: { a: int; a: string }) => x;\n");
+    assert!(error.message().contains("duplicate field `a`"), "{error}");
+}
+
+#[test]
 fn number_is_rejected_naming_int_and_float() {
     let error = diagnostic("export default (x: number) => x;\n");
     assert!(error.message().contains("`int` or `float`"), "{error}");

@@ -63,8 +63,9 @@
   # nix-ix evaluator loads the plugin (`wasm-builtin`), the shim's calling
   # convention matches the renderer's `{ __dir, __importIx, __ixTy }:`
   # wrapper, a relative `.ix` import recurses through the shim, a conversion
-  # error surfaces its positioned diagnostic as a Nix eval error, and type
-  # annotations check in `assert` mode and cost nothing in `erase` mode.
+  # error surfaces its positioned diagnostic as a Nix eval error, type
+  # annotations check in `assert` mode and cost nothing in `erase` mode, and
+  # the `schema` export reproduces the crate's own golden.
   # Deliberately runs the freshly BUILT `${package}`, not the committed
   # `lib/ix2nix.wasm` the repo wires into `importIxWasm`: a converter
   # regression then fails here on the same PR that introduces it, before
@@ -119,6 +120,17 @@
         printf 'typed-error.ix under erase: expected 1, got %s\n' "$value" >&2
         exit 1
       fi
+
+      # The second export, over the same artifact: `schema` must reproduce the
+      # bytes `cargo test` pins for the same input, so a caller reaching the
+      # converter through `builtins.wasm` and a caller reaching it through the
+      # library cannot be told different things about one module's types.
+      nix eval --raw \
+        --extra-experimental-features 'nix-command wasm-builtin' \
+        --impure \
+        --expr "(builtins.wasm { path = ${package}/lib/ix2nix.wasm; function = \"schema\"; }) (builtins.readFile ${crateDir + "/tests/golden"}/typed-surface.ix)" \
+        > schema.json
+      diff -u ${crateDir + "/tests/golden"}/typed-surface.schema.golden schema.json
 
       if evalIx ${crateDir + "/examples"}/strict-equality.ix 2> diagnostic.log; then
         echo "conversion of strict-equality.ix unexpectedly succeeded" >&2

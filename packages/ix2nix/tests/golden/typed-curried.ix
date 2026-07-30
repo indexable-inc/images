@@ -1,0 +1,6 @@
+// A curried default export. A JSON document describes one value, so the
+// schema's root covers `params` only and `extra` is invisible to it; the root
+// is a bare `$ref`, which draft 2020-12 evaluates alongside `$schema`.
+type Params = { name: nonEmptyStr; port?: port };
+
+export default (params: Params, extra: int) => params;

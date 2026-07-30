@@ -8,20 +8,57 @@ use std::collections::HashSet;
 use oxc_ast::ast;
 use oxc_span::{GetSpan as _, Span};
 
+use crate::checker::{alias_binding, arg_check, checker};
 use crate::error::Error;
-use crate::ty::{BUILTIN_TYPES, alias_binding, arg_check, nullable};
 use crate::nix::{
     Attr, BinaryOp, Binding, Expr, LetBinding, Module, Param, PatternField, StrPart, UnaryOp,
     is_bare_ident,
 };
+use crate::ty::{BUILTIN_TYPES, ModuleTypes, Parameter, Ty, TypeAlias};
 
-/// Maps a parsed ES module onto a Nix [`Module`].
+/// The two products of the one mapping pass: the Nix module [`crate::render`]
+/// prints, and the type description [`crate::schema`] reads.
+///
+/// Both come out of the same traversal on purpose. A separate pass over the
+/// annotations for the schema could describe a type the emitted checks do not
+/// enforce, which is the one failure a generated schema exists to rule out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mapped {
+    pub module: Module,
+    pub types: ModuleTypes,
+}
+
+/// A parsed numeric literal. Nix splits int from float and so does this, so
+/// the two positions a number can appear in -- a value and a literal type --
+/// agree by construction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Number {
+    Int(i64),
+    Float(f64),
+}
+
+/// An arrow function's two products: the Nix lambda, and the parameter
+/// description [`module`] keeps for the one arrow a caller can apply.
+struct Arrow {
+    expr: Expr,
+    parameters: Vec<Parameter>,
+}
+
+/// One `__ixTy.arg` check an annotated parameter contributes: the type, the
+/// bound name it reads, and where a failure points.
+struct ParamCheck {
+    loc: String,
+    ty: Ty,
+    value: Expr,
+}
+
+/// Maps a parsed ES module onto a Nix [`Module`] and its type description.
 ///
 /// # Errors
 ///
 /// Returns a positioned [`Error`] for any `JavaScript` form without a 1:1 Nix
 /// equivalent.
-pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error> {
+pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Mapped, Error> {
     // Alias names are collected up front so annotations anywhere in the
     // module can reference an alias declared after them (Nix `let` is
     // recursive, so the emitted bindings tolerate any order).
@@ -43,14 +80,20 @@ pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error>
     };
 
     let mut bindings = Vec::new();
+    let mut types = ModuleTypes::default();
     let mut default = None;
     for statement in &program.body {
         match statement {
             ast::Statement::VariableDeclaration(declaration) => {
                 mapper.const_bindings(declaration, &mut bindings)?;
             }
-            ast::Statement::TSTypeAliasDeclaration(alias) => {
-                mapper.alias_bindings(alias, &mut bindings)?;
+            ast::Statement::TSTypeAliasDeclaration(declaration) => {
+                let alias = mapper.type_alias(declaration)?;
+                bindings.push(LetBinding {
+                    name: alias_binding(&alias.name),
+                    value: checker(&alias.ty),
+                });
+                types.aliases.push(alias);
             }
             ast::Statement::TSInterfaceDeclaration(interface) => {
                 return Err(mapper.err(
@@ -74,7 +117,19 @@ pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error>
                 if default.is_some() {
                     return Err(mapper.err(export.span, "duplicate `export default`"));
                 }
-                default = Some(mapper.expr(expression)?);
+                // The default export is the module's entry point, and its
+                // signature is the one a caller sees. Recorded here rather
+                // than inside `arrow`, which runs for every arrow in the
+                // module: an inner helper's parameters describe nothing a
+                // consumer of the module can pass.
+                default = Some(match unparenthesized(expression) {
+                    ast::Expression::ArrowFunctionExpression(arrow) => {
+                        let entry = mapper.arrow(arrow)?;
+                        types.parameters = entry.parameters;
+                        entry.expr
+                    }
+                    other => mapper.expr(other)?,
+                });
             }
             other => {
                 return Err(mapper.err(
@@ -92,9 +147,26 @@ pub fn module(program: &ast::Program<'_>, source: &str) -> Result<Module, Error>
             "module must `export default` an expression (its Nix value)",
         ));
     };
-    Ok(Module {
-        body: make_let(bindings, body),
+    Ok(Mapped {
+        module: Module {
+            body: make_let(bindings, body),
+        },
+        types,
     })
+}
+
+/// Peels `(expr)` wrappers, which mean nothing in either language.
+///
+/// `export default ((a: T) => e)` is the same function as the unparenthesized
+/// form, so its signature has to survive the parentheses; [`Mapper::expr`]
+/// peels them on the value side for the same reason.
+fn unparenthesized<'a, 'ast>(
+    mut expression: &'a ast::Expression<'ast>,
+) -> &'a ast::Expression<'ast> {
+    while let ast::Expression::ParenthesizedExpression(paren) = expression {
+        expression = &paren.expression;
+    }
+    expression
 }
 
 fn make_let(bindings: Vec<LetBinding>, body: Expr) -> Expr {
@@ -127,7 +199,10 @@ impl Mapper<'_> {
                 Ok(Expr::Ident(if lit.value { "true" } else { "false" }.into()))
             }
             ast::Expression::NullLiteral(_) => Ok(Expr::Ident("null".into())),
-            ast::Expression::NumericLiteral(lit) => self.number(lit),
+            ast::Expression::NumericLiteral(lit) => Ok(match self.number(lit)? {
+                Number::Int(value) => Expr::Int(value),
+                Number::Float(value) => Expr::Float(value),
+            }),
             ast::Expression::StringLiteral(lit) => {
                 Ok(Expr::Str(vec![StrPart::Lit(lit.value.to_string())]))
             }
@@ -135,7 +210,7 @@ impl Mapper<'_> {
             ast::Expression::Identifier(ident) => self.ident(ident),
             ast::Expression::ArrayExpression(array) => self.array(array),
             ast::Expression::ObjectExpression(object) => self.object(object),
-            ast::Expression::ArrowFunctionExpression(arrow) => self.arrow(arrow),
+            ast::Expression::ArrowFunctionExpression(arrow) => Ok(self.arrow(arrow)?.expr),
             ast::Expression::CallExpression(call) => self.call(call),
             ast::Expression::ImportExpression(import) => self.import(import),
             ast::Expression::StaticMemberExpression(member) => self.static_member(member),
@@ -201,7 +276,7 @@ impl Mapper<'_> {
         }
     }
 
-    pub(crate) fn number(&self, lit: &ast::NumericLiteral<'_>) -> Result<Expr, Error> {
+    pub(crate) fn number(&self, lit: &ast::NumericLiteral<'_>) -> Result<Number, Error> {
         let Some(raw) = lit.raw.as_ref() else {
             return Err(self.err(lit.span, "numeric literal without source text"));
         };
@@ -217,11 +292,11 @@ impl Mapper<'_> {
         let parsed = if let Some(radix) = radix {
             i64::from_str_radix(&digits[2..], radix).ok()
         } else if digits.contains(['.', 'e', 'E']) {
-            return Ok(Expr::Float(lit.value));
+            return Ok(Number::Float(lit.value));
         } else {
             digits.parse().ok()
         };
-        parsed.map(Expr::Int).ok_or_else(|| {
+        parsed.map(Number::Int).ok_or_else(|| {
             self.err(lit.span, "integer literal does not fit in a 64-bit Nix integer")
         })
     }
@@ -357,15 +432,12 @@ impl Mapper<'_> {
             return Ok(value);
         }
         let ty = self.ty(&cast.type_annotation)?;
-        Ok(self.ret_check(cast.type_annotation.span(), "as", ty, value))
+        Ok(self.ret_check(cast.type_annotation.span(), "as", &ty, value))
     }
 
-    /// `type X = T` becomes a `ty'X` checker binding in the emitted `let`.
-    fn alias_bindings(
-        &self,
-        alias: &ast::TSTypeAliasDeclaration<'_>,
-        bindings: &mut Vec<LetBinding>,
-    ) -> Result<(), Error> {
+    /// One `type X = T` declaration; [`module`] turns it into both a `ty'X`
+    /// checker binding and an entry in the module's type description.
+    fn type_alias(&self, alias: &ast::TSTypeAliasDeclaration<'_>) -> Result<TypeAlias, Error> {
         if let Some(type_parameters) = &alias.type_parameters {
             return Err(self.err(
                 type_parameters.span,
@@ -379,14 +451,13 @@ impl Mapper<'_> {
                 format!("`type {name}` shadows the built-in type `{name}`"),
             ));
         }
-        bindings.push(LetBinding {
-            name: alias_binding(&name),
-            value: self.ty(&alias.type_annotation)?,
-        });
-        Ok(())
+        Ok(TypeAlias {
+            name,
+            ty: self.ty(&alias.type_annotation)?,
+        })
     }
 
-    fn arrow(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
+    fn arrow(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Arrow, Error> {
         if arrow.r#async {
             return Err(self.err(arrow.span, "`async` has no Nix equivalent"));
         }
@@ -416,12 +487,13 @@ impl Mapper<'_> {
         // the innermost body, so its check wraps `e` before the lambdas fold.
         if let Some(return_type) = &arrow.return_type {
             let ty = self.ty(&return_type.type_annotation)?;
-            body = self.ret_check(return_type.span, "return", ty, body);
+            body = self.ret_check(return_type.span, "return", &ty, body);
         }
         // `(a, b) => e` curries to `a: b: e`, matching curried call mapping.
         // Each parameter's checks wrap the body directly inside that
         // parameter's own lambda, so a check reads exactly its own binder
         // (immune to shadowing) and fires on partial application.
+        let mut parameters = Vec::with_capacity(arrow.params.items.len());
         for item in arrow.params.items.iter().rev() {
             if item.optional {
                 return Err(self.err(
@@ -436,22 +508,42 @@ impl Mapper<'_> {
                      parameter (Nix `{ a ? default }`)",
                 ));
             }
-            if let Some(annotation) = &item.type_annotation {
-                let mut checks = Vec::new();
-                self.param_checks(&item.pattern, annotation, &mut checks)?;
-                for (loc, ty, value) in checks.into_iter().rev() {
-                    body = arg_check(loc, ty, value, body);
+            let ty = match &item.type_annotation {
+                Some(annotation) => {
+                    let mut checks = Vec::new();
+                    let ty = self.param_checks(&item.pattern, annotation, &mut checks)?;
+                    for check in checks.into_iter().rev() {
+                        body = arg_check(check.loc, checker(&check.ty), check.value, body);
+                    }
+                    Some(ty)
                 }
-            }
+                None => None,
+            };
+            let param = self.param(&item.pattern)?;
+            parameters.push(Parameter {
+                name: match &param {
+                    Param::Ident(name) => Some(name.clone()),
+                    Param::Pattern { .. } => None,
+                },
+                ty,
+            });
             body = Expr::Lambda {
-                param: self.param(&item.pattern)?,
+                param,
                 body: Box::new(body),
             };
         }
-        Ok(body)
+        // The loop folds the lambdas inside-out, so the parameters came out in
+        // reverse; a description is only useful in call order.
+        parameters.reverse();
+
+        Ok(Arrow {
+            expr: body,
+            parameters,
+        })
     }
 
-    /// Collects the checks one annotated parameter contributes.
+    /// Collects the checks one annotated parameter contributes and returns the
+    /// parameter's type.
     ///
     /// A plain parameter checks its own binding. A destructured parameter has
     /// no binding for the whole attrset, so its annotation must be an inline
@@ -461,17 +553,17 @@ impl Mapper<'_> {
         &self,
         pattern: &ast::BindingPattern<'_>,
         annotation: &ast::TSTypeAnnotation<'_>,
-        checks: &mut Vec<(String, Expr, Expr)>,
-    ) -> Result<(), Error> {
+        checks: &mut Vec<ParamCheck>,
+    ) -> Result<Ty, Error> {
         match pattern {
             ast::BindingPattern::BindingIdentifier(ident) => {
-                let loc =
-                    self.check_loc(ident.span, &format!("argument `{}`", ident.name));
-                checks.push((
-                    loc,
-                    self.ty(&annotation.type_annotation)?,
-                    Expr::Ident(ident.name.to_string()),
-                ));
+                let ty = self.ty(&annotation.type_annotation)?;
+                checks.push(ParamCheck {
+                    loc: self.check_loc(ident.span, &format!("argument `{}`", ident.name)),
+                    ty: ty.clone(),
+                    value: Expr::Ident(ident.name.to_string()),
+                });
+                Ok(ty)
             }
             ast::BindingPattern::ObjectPattern(object) => {
                 let ast::TSType::TSTypeLiteral(literal) = &annotation.type_annotation else {
@@ -481,63 +573,57 @@ impl Mapper<'_> {
                          (`({ a }: { a: T })`); there is no binding for the whole set",
                     ));
                 };
+                // Walks the members rather than calling `self.ty` on the whole
+                // literal, because each check reports the field's own source
+                // position and only the AST knows it.
+                let mut fields = Vec::with_capacity(literal.members.len());
                 for member in &literal.members {
-                    let ast::TSSignature::TSPropertySignature(property) = member else {
-                        return Err(self.err(
-                            member.span(),
-                            "only property signatures lower; index, call, and method \
-                             signatures have no runtime check",
-                        ));
-                    };
-                    let ast::PropertyKey::StaticIdentifier(key) = &property.key else {
-                        return Err(self.err(
-                            property.key.span(),
-                            "pattern field types use plain identifier keys",
-                        ));
-                    };
+                    let field = self.field(member)?;
+                    self.reject_duplicate_field(&fields, &field, member.span())?;
+                    // A pattern binds identifiers, so an unspellable field
+                    // name can never be `bound` and never reaches `Expr::Ident`
+                    // below.
                     let bound = object.properties.iter().any(|bound| {
                         matches!(
                             &bound.key,
-                            ast::PropertyKey::StaticIdentifier(name) if name.name == key.name
+                            ast::PropertyKey::StaticIdentifier(name) if name.name.as_str() == field.name
                         )
                     });
                     if !bound {
                         return Err(self.err(
-                            key.span,
+                            member.span(),
                             format!(
                                 "field `{}` is declared but not bound by the pattern; \
                                  only bound fields can be checked",
-                                key.name
+                                field.name
                             ),
                         ));
                     }
-                    let Some(field_annotation) = &property.type_annotation else {
-                        return Err(
-                            self.err(property.span, "property signature needs a type")
-                        );
-                    };
-                    let loc =
-                        self.check_loc(key.span, &format!("argument field `{}`", key.name));
-                    let field_ty = self.ty(&field_annotation.type_annotation)?;
                     // An optional field's Nix default (conventionally `null`)
                     // binds when the caller omits it; `T | null` is the type
-                    // the bound name actually has.
-                    let field_ty = if property.optional {
-                        nullable(field_ty)
+                    // the bound name actually has. The recorded field keeps
+                    // the declared type, since a params record spells an
+                    // omitted optional field by leaving it out, not by null.
+                    let checked = if field.optional {
+                        Ty::Nullable(Box::new(field.ty.clone()))
                     } else {
-                        field_ty
+                        field.ty.clone()
                     };
-                    checks.push((loc, field_ty, Expr::Ident(key.name.to_string())));
+                    checks.push(ParamCheck {
+                        loc: self
+                            .check_loc(member.span(), &format!("argument field `{}`", field.name)),
+                        ty: checked,
+                        value: Expr::Ident(field.name.clone()),
+                    });
+                    fields.push(field);
                 }
+                Ok(Ty::Object(fields))
             }
-            other => {
-                return Err(self.err(
-                    other.span(),
-                    "this parameter shape cannot carry a type annotation",
-                ));
-            }
+            other => Err(self.err(
+                other.span(),
+                "this parameter shape cannot carry a type annotation",
+            )),
         }
-        Ok(())
     }
 
     fn arrow_body(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
@@ -910,7 +996,7 @@ impl Mapper<'_> {
             let mut value = self.expr(init)?;
             if let Some(annotation) = &declarator.type_annotation {
                 let ty = self.ty(&annotation.type_annotation)?;
-                value = self.ret_check(annotation.span(), &format!("const `{name}`"), ty, value);
+                value = self.ret_check(annotation.span(), &format!("const `{name}`"), &ty, value);
             }
             bindings.push(LetBinding { name, value });
         }
