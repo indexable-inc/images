@@ -37,6 +37,10 @@ defmodule IxMcp.Imsg do
   Messages.app accepts the message; delivery is asynchronous, so when it
   matters check the message's `error` flag via `recent/1` a moment later.
 
+  `to` is a handle, or `{:chat, guid}` for a group chat -- the guid
+  `chats/1` returns. A group is addressable only on a machine the thread has
+  already reached.
+
   `mac:` picks which machine sends: `Mac.local()` (the default, the mac the
   kernel runs on, signed in as the user) or `Mac.guest(node)` for a macOS
   guest VM signed in as the agent's own Apple ID.
@@ -56,7 +60,8 @@ defmodule IxMcp.Imsg do
   can misfire if the user is typing into another window, so pass a format
   flag only where the formatting itself is the point.
   """
-  @spec send(String.t(), String.t(), keyword()) :: :ok | {:error, String.t()}
+  @spec send(String.t() | {:chat, String.t()}, String.t(), keyword()) ::
+          :ok | {:error, String.t()}
   def send(to, text, opts \\ []) do
     mac = Mac.from_opts(opts)
 
@@ -71,6 +76,12 @@ defmodule IxMcp.Imsg do
       [] -> osascript(mac, plain_script(to, text))
       formats -> formatted(mac, to, text, formats)
     end
+  end
+
+  defp formatted(_mac, {:chat, guid}, _text, _formats) do
+    {:error,
+     "formatted sends address a handle through an imessage:// URL, which " <>
+       "cannot name the group chat #{guid}"}
   end
 
   defp formatted(mac, to, text, formats) do
@@ -101,11 +112,26 @@ defmodule IxMcp.Imsg do
         mac,
         "display notification #{applescript_str(text)} " <>
           "with title #{applescript_str("Agent sent an iMessage")} " <>
-          "subtitle #{applescript_str(to)} sound name \"Glass\""
+          "subtitle #{applescript_str(describe(to))} sound name \"Glass\""
       )
     end
 
     :ok
+  end
+
+  # A group chat has no handle to address, so it is named by the guid
+  # `chats/1` returns. Messages resolves that guid only once the thread has
+  # reached this machine: being added to a group delivers nothing, so a
+  # device that has never seen a message in it cannot send one either.
+  defp describe({:chat, guid}), do: guid
+  defp describe(to), do: to
+
+  defp plain_script({:chat, guid}, text) do
+    """
+    tell application "Messages"
+      send #{applescript_str(text)} to chat id #{applescript_str(guid)}
+    end tell
+    """
   end
 
   defp plain_script(to, text) do

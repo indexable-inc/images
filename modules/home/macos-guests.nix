@@ -127,6 +127,49 @@
         description = "launchd agents keyed by label, pushed to ~/Library/LaunchAgents on the guest.";
       };
 
+      brews = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = ''
+          Homebrew formulae the guest must have, installed by the apply
+          command when missing. Homebrew rather than nix because nix cannot
+          install on a macOS guest at all: its installer creates a volume and
+          adds a line to /etc/fstab, and writing that file is refused there
+          even as root. Homebrew upgrades on its own schedule, so a formula
+          here pins that the package exists, never which version.
+        '';
+      };
+
+      beamNode = {
+        enable = lib.mkEnableOption ''
+          a BEAM node on the guest that the host kernel calls into over
+          distributed Erlang. Persistent rather than a command per action,
+          because a node can also push guest events back to the host
+        '';
+        name = lib.mkOption {
+          type = lib.types.str;
+          default = "ixagent@${config.ssh.host}";
+          defaultText = lib.literalExpression ''"ixagent@''${ssh.host}"'';
+          description = ''
+            Node name. A long name, not a short one: `-sname` needs both ends
+            to share a DNS suffix, which the vmnet bridge does not give them.
+          '';
+        };
+        distPort = lib.mkOption {
+          type = lib.types.port;
+          default = 9100;
+          description = ''
+            Fixed distribution port. Unpinned, Erlang picks an ephemeral one
+            per boot, which the host cannot reach across the bridge.
+          '';
+        };
+        elixir = lib.mkOption {
+          type = lib.types.str;
+          default = "/opt/homebrew/bin/elixir";
+          description = "Guest path to the elixir that runs the node.";
+        };
+      };
+
       binaries = lib.mkOption {
         type = lib.types.attrsOf (lib.types.submodule ({name, ...}: {
           options = {
@@ -149,7 +192,43 @@
         description = "Pinned binaries pushed to the guest, keyed by command name.";
       };
     };
+
+    config = lib.mkIf config.beamNode.enable {
+      brews = ["elixir"];
+      binaries.ix-agent-node.source = beamNodeScript config;
+      launchAgents."dev.ix.agent-node".config = {
+        ProgramArguments = ["${guestHome config}/.local/bin/ix-agent-node"];
+        EnvironmentVariables = {
+          HOME = guestHome config;
+          # launchd agents get the bare system PATH, and elixir execs `erl`
+          # off PATH: without this the agent dies with "exec: erl: not found".
+          PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+        };
+        RunAtLoad = true;
+        KeepAlive = true;
+        ProcessType = "Background";
+        StandardOutPath = "/tmp/ix-agent-node.log";
+        StandardErrorPath = "/tmp/ix-agent-node.log";
+      };
+    };
   };
+
+  # The node runs under the guest's own bash: a store shebang would name a
+  # /nix path no macOS guest has.
+  beamNodeScript = guest:
+    pkgs.writeTextFile {
+      name = "ix-agent-node";
+      executable = true;
+      text = ''
+        #!/bin/bash
+        export PATH="/opt/homebrew/bin:$PATH"
+        exec ${guest.beamNode.elixir} \
+          --erl "-kernel inet_dist_listen_min ${toString guest.beamNode.distPort} inet_dist_listen_max ${toString guest.beamNode.distPort}" \
+          --name ${guest.beamNode.name} \
+          --cookie "$(cat "$HOME/.erlang.cookie")" \
+          -e 'Process.sleep(:infinity)'
+      '';
+    };
 
   guestHome = guest: "/Users/${guest.autoLoginUser}";
 
@@ -167,6 +246,10 @@
       inherit label;
       source = renderAgent label agent;
       target = "Library/LaunchAgents/${label}.plist";
+      # The executable launchd runs, so the apply can restart an agent whose
+      # plist is unchanged but whose program was just replaced. Without it a
+      # pushed binary sits on disk while the old one keeps running.
+      program = lib.head (agent.config.ProgramArguments or [""]);
     }) (lib.filterAttrs (_: agent: agent.enable) guest.launchAgents);
 
   # The per-guest data seam: everything the apply command (and, later, the
@@ -174,7 +257,7 @@
   guestManifest = name: guest:
     jsonFormat.generate "macos-guest-${name}.json" {
       inherit name;
-      inherit (guest) ssh autoLoginUser display vmkitGuestDir;
+      inherit (guest) ssh autoLoginUser display vmkitGuestDir brews;
       home = guestHome guest;
       resources = guestResources guest;
     };
@@ -221,18 +304,43 @@
               remote_path: $remote_path
               source: $r.source
               label: ($r.label? | default null)
+              program: ($r.program? | default null)
             }
           }
         }
 
         # Idempotent apply: push only drifted resources; bootout + bootstrap
-        # only agents that changed or are not loaded. Fails loudly on any hop;
-        # the terminal check reads each agent's live launchd state.
+        # only agents that changed, are not loaded, or whose executable this
+        # run replaced. Fails loudly on any hop; the terminal check reads each
+        # agent's live launchd state.
+        # Formulae first: a pushed binary may name the interpreter one of them
+        # provides. `brew list` once rather than `brew install` per formula,
+        # because an install that is already satisfied still costs a network
+        # round trip to Homebrew's API.
+        def ensure-brews [tgt: string, brews: list<string>] {
+          if ($brews | is-empty) { return }
+          let have = ssh-run $tgt "/opt/homebrew/bin/brew list --formula -1" | lines | str trim
+          for formula in $brews {
+            if $formula in $have {
+              print $"in sync: brew ($formula)"
+            } else {
+              ssh-run $tgt $"/opt/homebrew/bin/brew install ($formula)"
+              print $"installed: brew ($formula)"
+            }
+          }
+        }
+
         def main [] {
           let spec = open $manifest_file
           let tgt = ssh-target $spec
           let uid = ssh-run $tgt "id -u" | str trim
-          for row in (drift-table) {
+          ensure-brews $tgt $spec.brews
+          let rows = drift-table
+          # An agent whose plist is unchanged still runs the old executable
+          # after its binary is replaced, so a pushed binary restarts every
+          # agent that names it.
+          let replaced = $rows | where {|r| $r.kind == "binary" and (not $r.in_sync) } | get remote_path
+          for row in $rows {
             if $row.in_sync {
               print $"in sync: ($row.target)"
             } else {
@@ -250,7 +358,7 @@
               # `launchctl bootout` of an absent service is an error, not
               # idempotence, so probe with `print` instead of swallowing it.
               let loaded = (do { ^/usr/bin/ssh -o BatchMode=yes $tgt $"launchctl print ($service)" } | complete | get exit_code) == 0
-              if (not $row.in_sync) or (not $loaded) {
+              if (not $row.in_sync) or (not $loaded) or ($row.program in $replaced) {
                 if $loaded {
                   ssh-run $tgt $"launchctl bootout ($service)"
                   # bootout is asynchronous: an immediate bootstrap races the
@@ -280,9 +388,17 @@
         # Read-only drift report; exits 1 when the guest diverges from the
         # declaration so it can gate automation.
         def "main status" [] {
+          let spec = open $manifest_file
           let rows = drift-table
           print ($rows | select kind target in_sync | table)
-          if not ($rows | all {|r| $r.in_sync }) {
+          let have = if ($spec.brews | is-empty) { [] } else {
+            ssh-run (ssh-target $spec) "/opt/homebrew/bin/brew list --formula -1" | lines | str trim
+          }
+          let missing = $spec.brews | where {|f| $f not-in $have }
+          if not ($missing | is-empty) {
+            print $"missing brews: ($missing | str join ', ')"
+          }
+          if (not ($rows | all {|r| $r.in_sync })) or (not ($missing | is-empty)) {
             exit 1
           }
         }
