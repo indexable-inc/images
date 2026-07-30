@@ -761,6 +761,48 @@
     };
   }
   {
+    stackedPrs = {
+      topics = ["workflow"];
+      text = ''
+        Retarget every PR stacked on a branch before merging that branch, not
+        after: `--delete-branch` removes the base, GitHub closes the
+        dependents, and a closed PR whose base is gone can be neither
+        retargeted nor reopened. Recovery needs the deleted base sha
+        re-pushed, so fetch `refs/pull/<n>/head` before touching a stack.
+      '';
+      reason = ''
+        Merging indexable-inc/nix#8 with `--delete-branch` silently closed #9,
+        which was stacked on it; the merge printed nothing about #9, and both
+        `gh pr edit --base` and `gh pr reopen` then refused. Only a local
+        `refs/pull/8/head` made it recoverable. The natural order, land the
+        base then retarget what sat on top, is the order that breaks
+        (ENG-11407).
+      '';
+    };
+  }
+  {
+    checkRollup = {
+      topics = ["workflow"];
+      text = ''
+        Read merge readiness from `statusCheckRollup`, never
+        `mergeStateStatus`: require the rollup non-empty and every check both
+        `COMPLETED` and passing. `UNSTABLE` cannot distinguish a failed check
+        from a pending one, and `CLEAN` cannot distinguish a passing check from
+        no check yet. Treat `SKIPPED` as never-ran, not as passed, when it sits
+        downstream of a failed `needs:`.
+      '';
+      reason = ''
+        indexable-inc/nix#11 was merged over a `pre-commit checks: FAILURE`
+        that had been terminal for 36 minutes, because `UNSTABLE` was read as
+        "still running"; the change then aborted the builder on ix-patched and
+        had to be reverted. #9 and #6 were merged on `CLEAN` before any check
+        had reported. In the same incident a red `pre-commit` skipped every
+        test job through `basic-checks`'s `needs:`, so the riskiest change in
+        the stack merged having run no tests at all (ENG-11431).
+      '';
+    };
+  }
+  {
     forceMerge = {
       topics = ["workflow"];
       text = ''

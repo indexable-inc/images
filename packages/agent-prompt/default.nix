@@ -106,7 +106,14 @@
     "AI"
     "API"
     "CI"
+    # CLEAN, COMPLETED, SKIPPED, and UNSTABLE below are not abbreviations:
+    # they are GitHub's own literal `statusCheckRollup` state and conclusion
+    # values (index#4442), spelled in caps by that API, not standing for a
+    # longer phrase. "Expanding" one, e.g. "the finished state (COMPLETED)",
+    # would misrepresent an API literal as an initialism.
+    "CLEAN"
     "CLI"
+    "COMPLETED"
     "CPU"
     "CSS"
     "DNS"
@@ -122,11 +129,13 @@
     "PR"
     "RAM"
     "SDK"
+    "SKIPPED"
     "SQL"
     "SSH"
     "TCP"
     "TLS"
     "UI"
+    "UNSTABLE"
     "URL"
     "VM"
     "XML"
