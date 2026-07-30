@@ -99,11 +99,31 @@ ix shell worker-2 -- curl --silent http://127.0.0.1:8081/
 ix shell worker-2 -- nginx -T | grep worker_processes   # worker_processes 4;
 ```
 
-The repo's own gate is the `vm-templates` group in `tests/default.nix`, which
-forces every node this example renders to a system derivation without building
-one, and additionally checks each guard in `lib/templates.nix` by making the
-mistake it exists to catch. It lives there rather than in a `checks` output
-here because that group is what CI already runs.
+This directory has no committed `flake.lock`, on purpose: like every other
+example it resolves `index` from GitHub, so it demonstrates the current release
+rather than a frozen one. If a `flake.lock` has appeared here locally, delete it
+— a stale one pins an `index` from before this feature and the symptom is
+`error: attribute 'templates' missing`, which reads like a broken example rather
+than a stale pin.
+
+Two gates cover this example, and they are not the same gate:
+
+```sh
+nix flake check          # from this directory: evaluates every node here
+nix run .#lint           # from the repo root
+```
+
+`checks.fleet-eval` in [`flake.nix`](flake.nix) forces every node this example
+renders to a system derivation without building one, so a type error in
+`worker.nix` or a params change that breaks a module throws in seconds. It is
+here rather than only in the repo because `exampleFleetsFor` cannot see a config
+that exports `templates` — it classifies on the fleet shape — so nothing in the
+repo evaluates this directory (index#4454).
+
+The `vm-templates` group in the repo's `tests/default.nix` is the other gate. It
+covers `lib/templates.nix`, checking each guard by making the mistake that guard
+exists to catch. That is coverage of the library, which is why this example needs
+its own check as well.
 
 ## Scale
 

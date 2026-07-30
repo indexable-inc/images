@@ -40,18 +40,51 @@ know it.
   instanceSeparator = "@";
   nodeSeparator = "-";
 
-  # Both halves of an instance name end up in a node name, so both have to be
-  # legal DNS-label material. Checking it here rather than letting nixpkgs'
-  # `networking.hostName` type reject the joined string is what makes the
-  # error name the `instances` key that caused it, instead of an option two
-  # module layers down. A template can now DECLARE this (`instance: nonEmptyStr`)
-  # and have the generated JSON Schema carry it -- index#4450 shipped the
-  # generator -- but only for a params record spelled as one named parameter: an
-  # alias cannot annotate a destructured pattern, and an inline annotation never
-  # reaches the schema document. So a CLI that rejects a bad `--set` before nix
-  # starts is possible and not yet built, and this stays the only place the
-  # instance id is checked.
-  nameFragment = "[[:alnum:]][[:alnum:]_-]*";
+  /**
+  Whether `candidate` is a name `networking.hostName` will accept, which is
+  what a node name has to be: `mkVm` sets that option from it, so a node name
+  the option rejects is a config that cannot evaluate.
+
+  Public because the ix CLI needs the same answer about a `--name` before it
+  starts nix, and a second implementation of this rule is a second place it can
+  drift.
+  */
+  isNodeName = candidate: builtins.match nodeNamePattern candidate != null;
+
+  # The rule itself, MIRRORED FROM NIXPKGS RATHER THAN DERIVED, which is a
+  # liability a reviewer now carries.
+  #
+  # nixpkgs declares it inline on the option --
+  # `types.strMatching "^$|^[[:alnum:]]([[:alnum:]_-]{0,61}[[:alnum:]])?$"` in
+  # nixos/modules/tasks/network-interfaces.nix -- so the only two handles on it
+  # are the option's own `type.check`, which needs an evaluated NixOS option set
+  # rather than the bare `lib` this file takes, and the pattern text. If nixpkgs
+  # ever grows a `lib.types.hostName`, delete this and call that instead.
+  #
+  # Until then the drift is caught rather than trusted: `tests/default.nix`
+  # extracts this pattern from that nixpkgs file and asserts `isNodeName` agrees
+  # with it verdict for verdict, so a bump that tightens the rule fails the eval
+  # suite instead of leaving this guard passing a name the option then rejects.
+  #
+  # That failure is not hypothetical: it shipped. #4452 checked each HALF of an
+  # instance name against `[[:alnum:]][[:alnum:]_-]*`, which accepted `worker@1-`
+  # and `worker@a_` and any joined name over 63 characters, and the error then
+  # arrived from `networking.hostName` two module layers down -- the one thing
+  # the check exists to prevent. Checking each half was checking a proxy; the
+  # node name is the string nixpkgs will type, so that is the string checked.
+  #
+  # The `^$` alternative is dropped deliberately: an empty hostname means "ask
+  # DHCP for one", which a name we constructed can never want.
+  nodeNamePattern = "[[:alnum:]]([[:alnum:]_-]{0,61}[[:alnum:]])?";
+
+  # Implied by the pattern (one leading character, up to 61 middle, one
+  # trailing), and deliberately NOT re-checked inside `isNodeName`: the pattern
+  # already refuses anything longer, so a second length test there would let this
+  # number be wrong with no check able to notice -- a constant asserted against
+  # itself. It exists for the error message, the one place that has to say by HOW
+  # MUCH to shorten, and a test pins it to the pattern by walking a name of
+  # exactly this length and one character more.
+  nodeNameMaxLength = 63;
 
   /**
   Join a template name and an instance id into an instance name (`worker@1`).
@@ -75,28 +108,49 @@ know it.
   Split an instance name (`worker@1`) into the template it instantiates, the
   instance id (systemd's `%i`), and the node name its VM is created under.
 
-  Returns `{ template; instance; node; }`. Throws, naming the offending
-  string, on anything that is not `<template>@<instance>` with both halves
-  spellable as a DNS label fragment.
+  Returns `{ template; instance; node; }`. Throws, naming the offending string
+  and the node name it would have rendered, on anything that is not
+  `<template>@<instance>` whose joined node name `isNodeName` accepts.
   */
   parseInstanceName = name: let
     parts = lib.splitString instanceSeparator name;
     template = builtins.head parts;
     instance = builtins.elemAt parts 1;
-    legal = part: builtins.match nameFragment part != null;
+    node = "${template}${nodeSeparator}${instance}";
+    # Positive when the joined name is too long, and by how much, which is the
+    # number the caller needs rather than the fact that a limit exists.
+    overBy = builtins.stringLength node - nodeNameMaxLength;
+    lengthOf = part: builtins.toString (builtins.stringLength part);
   in
+    # The two per-half checks, and the only two that belong per half: how many
+    # separators there are, and that each side has something in it. Everything
+    # else about the halves is a property of the string they join into, so it is
+    # checked there.
     assert lib.assertMsg (builtins.length parts == 2) ''
       ix: ${context}
         Instance name '${name}' is not '<template>${instanceSeparator}<instance>'.
         Exactly one '${instanceSeparator}', the template name before it, the instance id after, as in systemd's getty@tty3.
     '';
-    assert lib.assertMsg (legal template && legal instance) ''
+    assert lib.assertMsg (template != "" && instance != "") ''
       ix: ${context}
-        Instance name '${name}': each half must start alphanumeric and hold only letters, digits, '-' and '_'.
-        Both end up in the VM's node name ('${template}${nodeSeparator}${instance}'), which is a DNS label.
+        Instance name '${name}': both halves must be non-empty.
+        The template name goes before the '${instanceSeparator}' and the instance id after it.
+    '';
+    # Length before shape. `isNodeName` below rejects an over-long name on its
+    # own, so this assert is not what makes the rule hold -- it is what makes the
+    # failure actionable, being the only message that can name both halves and
+    # the number of characters to cut.
+    assert lib.assertMsg (overBy <= 0) ''
+      ix: ${context}
+        Instance name '${name}' renders the node name '${node}', which is ${lengthOf node} characters. A hostname is at most ${builtins.toString nodeNameMaxLength}.
+        Shorten the template name ('${template}', ${lengthOf template}) or the instance id ('${instance}', ${lengthOf instance}) by ${builtins.toString overBy} characters between them.
+    '';
+    assert lib.assertMsg (isNodeName node) ''
+      ix: ${context}
+        Instance name '${name}' renders the node name '${node}', which is not a legal hostname.
+        It has to begin and end alphanumeric, with letters, digits, '-' and '_' in between: `mkVm` sets `networking.hostName` from the node name, and nixpkgs types that option exactly that way.
     ''; {
-      inherit template instance;
-      node = "${template}${nodeSeparator}${instance}";
+      inherit template instance node;
     };
 
   /**
@@ -204,6 +258,14 @@ know it.
     # holds exactly the one node its own key names (asserted above), and the
     # keys are attribute names.
     instanceNodes = lib.concatMapAttrs (_name: vm: vm.nixosConfigurations) instances;
+    # Keys, which are node names because `mkVm` keys its `nixosConfigurations`
+    # by node name and a config spreads that attrset unchanged. The one way this
+    # becomes a proxy for what it claims is a config that re-keys an `mkVm`
+    # result by hand, putting a VM named `a` under the key `b`; then the
+    # collision this compares is between keys rather than between the names two
+    # guests will answer to. Nothing in the tree does that, and the rendered-node
+    # assertion in `renderInstance` refuses it for instances, so a named VM is
+    # the only place it could hide.
     collisions = builtins.attrNames (builtins.intersectAttrs named instanceNodes);
     nixosConfigurations = named // instanceNodes;
   in
@@ -230,8 +292,13 @@ know it.
 in {
   inherit
     instanceNameOf
+    isNodeName
     parseInstanceName
     renderConfig
     renderInstance
     ;
+  # Exported for the drift guard in `tests/default.nix`, which pins the length
+  # to the pattern through this binding rather than restating 63, and for a CLI
+  # that wants to say how long a name may be before offering to make one.
+  inherit nodeNameMaxLength;
 }

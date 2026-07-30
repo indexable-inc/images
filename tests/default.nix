@@ -2311,8 +2311,39 @@
         instance = "1-2_3";
       }
     ];
+    # nixpkgs' own rule for `networking.hostName`, read out of the module that
+    # declares it rather than copied alongside it. `lib/templates.nix` mirrors
+    # this pattern because the option declares it inline and there is no
+    # `lib.types.hostName` to call; this is what makes the mirror safe, by
+    # failing the suite the day a bump changes the rule.
+    #
+    # `findSingle` is the guard on the guard. It returns its `multiple` argument
+    # when more than one line matches, so if that file ever grows a second
+    # `strMatching` the extraction yields null and the assertion below fails
+    # loudly, rather than silently pinning whichever one came first.
+    hostNameTypeLine =
+      lib.findSingle (line: lib.hasInfix "strMatching" line) null null
+      (lib.splitString "\n" (
+        builtins.readFile (nixpkgs + "/nixos/modules/tasks/network-interfaces.nix")
+      ));
+    nixpkgsHostNamePattern = builtins.head (
+      builtins.match ".*strMatching \"(.*)\";" hostNameTypeLine
+    );
+    # Node names, not instance names: this table is about the hostname rule
+    # itself, so comparing verdicts needs neither a separator nor a parse. The
+    # middle three are the cases #4452 got wrong.
+    nodeNameRows = [
+      "worker-1"
+      "worker-1-"
+      "worker-a_"
+      (lib.concatStrings (lib.genList (_: "9") 70))
+      "worker--1"
+      "w"
+      "9"
+      "worker-pool-eu_west-1"
+    ];
   in {
-    inherit rendered roundTripPairs;
+    inherit rendered roundTripPairs nixpkgsHostNamePattern nodeNameRows;
     nodeNames = builtins.attrNames rendered.nixosConfigurations;
     nodeOf = pair: (ix.templates.parseInstanceName (ix.templates.instanceNameOf pair)).node;
     shardsOf = node: rendered.nixosConfigurations."${node}".config.services.nginx.appendConfig;
@@ -4231,8 +4262,55 @@
           (ix.templates.parseInstanceName "worker@a@b")
           (ix.templates.parseInstanceName "worker@a/b")
           (ix.templates.parseInstanceName "-worker@1")
+          # The three #4452 admitted: a trailing '-' or '_' on a half, and a
+          # joined name over the hostname length limit. All three passed the
+          # per-half check and then failed `networking.hostName`, which is the
+          # error path the guard exists to close.
+          (ix.templates.parseInstanceName "worker@1-")
+          (ix.templates.parseInstanceName "worker@a_")
+          (ix.templates.parseInstanceName (
+            "worker@" + lib.concatStrings (lib.genList (_: "9") 70)
+          ))
         ];
         message = "a malformed instance name, a node name included, should be refused at the parse rather than by a hostname option four layers down";
+      }
+      {
+        # The mirror in lib/templates.nix is only safe because this fires when it
+        # stops matching nixpkgs. Verdicts are compared, not pattern strings:
+        # what has to hold is that the two agree about every name, not that they
+        # are spelled the same way.
+        assertion =
+          vmTemplatesExample.nodeNameRows
+          != []
+          && lib.all (
+            node:
+              ix.templates.isNodeName node
+              == (builtins.match vmTemplatesExample.nixpkgsHostNamePattern node != null)
+          )
+          vmTemplatesExample.nodeNameRows;
+        message = "isNodeName should agree with nixpkgs' own networking.hostName pattern on every name in the table";
+      }
+      {
+        # Pins the length limit to the pattern without restating 63 anywhere:
+        # a name of exactly that length is accepted, one character more is not.
+        assertion = let
+          filled = count: lib.concatStrings (lib.genList (_: "a") count);
+        in
+          ix.templates.isNodeName (filled ix.templates.nodeNameMaxLength)
+          && !(ix.templates.isNodeName (filled (ix.templates.nodeNameMaxLength + 1)));
+        message = "the node-name length limit should be exactly the longest name the hostname pattern accepts";
+      }
+      {
+        # A deliberate loosening, recorded because it is visible: #4452's
+        # per-half check refused an instance id starting with the node
+        # separator, and `worker--1` is a hostname nixpkgs accepts. A guard
+        # stricter than the option it stands in front of rejects working
+        # configs, which is its own kind of wrong.
+        assertion = let
+          parsed = ix.templates.parseInstanceName "worker@-1";
+        in
+          parsed.instance == "-1" && ix.templates.isNodeName parsed.node;
+        message = "an instance id starting with the node separator should be accepted, because the hostname it renders is legal";
       }
       {
         assertion = vmTemplatesExample.throws (vmTemplatesExample.render {name = "atNamed@1";});
