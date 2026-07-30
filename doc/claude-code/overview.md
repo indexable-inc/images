@@ -87,7 +87,9 @@ positional). Both rules are learned from real breakage; see the long comment at
   `=`; it is safe only because `--thinking-display` follows it.
 - `--dangerously-load-development-channels server:index`: lets the baked
   `index` MCP server push channel events into the running session without
-  Claude's approved-channel allowlist error.
+  Claude's approved-channel allowlist error. The flag only wires the
+  transport; whether a loaded channel may push is the managed-settings key
+  `channelsEnabled` (below).
 - `--thinking-display=summarized`: forces visible reasoning. The API default
   flipped to "omitted" on Opus 4.7/4.8, hiding thinking in the UI and
   transcript; this hidden flag is the only lever that restores it (verified on
@@ -115,8 +117,11 @@ scope can reach:
 - NixOS: `environment.etc."claude-code/managed-settings.json"`, as
   `lib/dev/agents.nix` already does for the dev images.
 
-Both read `passthru.settingsPolicy` (or `passthru.settingsPolicyFile`, the same
-value as a store JSON file).
+A workstation hands the darwin module the whole render, read as
+`passthru.settingsPolicy` (or `passthru.settingsPolicyFile`, the same value as a
+store JSON file). The dev images declare a much smaller posture of their own
+(root bypass, transcript retention) and take the channel policy from the same
+render, so the two cannot disagree about whether channels are on.
 
 Two earlier designs failed, and the reasons are why this one looks like it
 does. An injected `--settings` flag shadowed the user's own writable settings,
@@ -154,6 +159,19 @@ defaults so package-owned keys always win:
   hosted-service tool posture. Override with
   `systemTools.<ToolName> = true` when that surface earns its context cost.
 - `hooks` (below).
+- `channelsEnabled = true`: channels are allowed. This one is worth spelling
+  out, because it is the key the managed layer *has* to carry rather than one it
+  merely may. 2.1.220 blocks a channel on
+  `policySettings !== null && policySettings.channelsEnabled !== true`, so the
+  mere existence of a managed-settings file flips the Console default from on
+  to off; the key's own schema text reads "claude.ai Teams/Enterprise: default
+  off. Console: default on unless managed settings exist." Every consumer here
+  installs the render as managed settings, so a render that says nothing ships a
+  channel that is loaded but muted: the session prints "Channels are not enabled
+  for your org" and drops every inbound `notify(...)`. It sits in the house
+  posture defaults rather than the controlled keys, so a host that must refuse
+  inbound pushes still can, with
+  `programs.claude-code.defaults.channelsEnabled = false`.
 
 ### MCP servers (`--mcp-config`, `default.nix:90-94`, `295-297`)
 

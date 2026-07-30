@@ -191,9 +191,11 @@
   # entry. Defaults to the `index`
   # server WHEN it is baked (so notify()/interactive resources reach a session
   # with no per-launch flag), and to nothing otherwise (the overlay build has no
-  # `index` server, so referencing it would be a dead flag). A session whose org
-  # policy (`channelsEnabled`) disables channels, or that never receives a push,
-  # is unaffected. `[ ]` bakes no flag.
+  # `index` server, so referencing it would be a dead flag). `[ ]` bakes no flag.
+  # Loading a channel is only half of it: the org policy key `channelsEnabled`
+  # decides whether a loaded channel may push at all, and it lives in the
+  # settings render (`houseSettingsDefaults` below, on by default) rather than
+  # here, because managed settings are the only scope that can set it.
   developmentChannels ? lib.optional (mcpServers ? index) "server:index",
   # Rule names dropped from the default house prompt (forwarded to
   # ../prompt's `omitRules`). Only affects the computed `systemPrompt`
@@ -443,6 +445,23 @@
     fileCheckpointingEnabled = false;
     autoUpdatesChannel = "latest";
     skipAutoPermissionPrompt = true;
+    # Channels on. Loading a channel (`developmentChannels` above) only wires
+    # the transport; this key is the org-policy gate that decides whether a
+    # loaded channel may push, and only the MANAGED scope can set it. Worse,
+    # the mere EXISTENCE of a managed-settings file flips the default from on
+    # to off: 2.1.220 blocks on `e!==null&&e.channelsEnabled!==!0`, and the
+    # key's own schema text reads "claude.ai Teams/Enterprise: default off.
+    # Console: default on unless managed settings exist." Every consumer of
+    # this render installs it as managed settings, so before this line the
+    # baked `--dangerously-load-development-channels server:index` was
+    # loaded-but-muted -- the session printed "Channels are not enabled for
+    # your org" and silently dropped every kernel `notify(...)`. Sitting in
+    # the house defaults (not `controlledSettings`) keeps the opt-out real: a
+    # host that must refuse inbound pushes sets
+    # `programs.claude-code.defaults.channelsEnabled = false`, which outranks
+    # this layer. Key verified present in the settings schema of every pinned
+    # CLI from 2.1.159 through 2.1.220.
+    channelsEnabled = true;
     # Remove the Claude-bundled `dataviz` skill outright: it injects
     # Anthropic's own chart-style guidance with no benefit to this harness,
     # and before this override it sat permission-denied yet still listed,
