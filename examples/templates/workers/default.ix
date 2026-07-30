@@ -35,12 +35,13 @@ export default ({ index }) => {
       // illegal in a hostname and means "digest" in an OCI reference, so the
       // instance name and the VM name cannot be the same string.
       //
-      // Params are untyped here. Annotating them (`port: port;
-      // shards: ints.positive`) is what index#4447 unlocks, at which point the
-      // one annotation also generates `ix new worker --help` and a JSON schema
-      // for a params file. Until then a wrong param is still caught -- nix
-      // rejects an unexpected argument by name, and the module system types
-      // everything the params reach -- just later and further from the typo.
+      // Params are untyped here. Annotating them (`port: port; shards: u32`)
+      // checks them at eval time, and ix2nix generates a JSON Schema from the
+      // same annotation (index#4450) -- but only when the params are one named
+      // parameter rather than this destructured one, which is the gap RFC 0042's
+      // Typed params section records. Untyped, a wrong param is still caught:
+      // nix refuses an unexpected argument by name, and the module system types
+      // everything the params reach. Just later, and further from the typo.
       worker: ({ instance, name, port = 8080, shards = 1 }) =>
         index.lib.mkVm({
           name: name,
