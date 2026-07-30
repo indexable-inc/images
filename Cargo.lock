@@ -1862,6 +1862,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cli-entry"
+version = "0.1.0"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5661,6 +5668,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cli-entry",
  "crossterm",
  "plist",
  "ratatui",
@@ -5680,6 +5688,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "cli-entry",
  "libc",
  "nix 0.31.3",
  "serde",
@@ -7090,6 +7099,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "memories"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "clap",
+ "cli-entry",
+ "dirs 6.0.0",
+ "file-search",
+ "glob",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "snafu",
+ "source-meta",
+ "tempfile",
 ]
 
 [[package]]

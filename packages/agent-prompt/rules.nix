@@ -103,15 +103,41 @@
     memory = {
       topics = ["tooling"];
       text = ''
-        Write a memory at the moment of learning: one fact per file with its
-        concrete handle; frontmatter `name`, `description`, `metadata.type`
-        (user, feedback, project, reference). Update in place, editing only
-        that file's `MEMORY.md` line (`- file.md: <hook>`). Recalled memories
-        go stale; verify before use.
+        Memories are files: `.memories/` at the root of every repo you touch,
+        plus your own `~/.memories`. Nothing arrives unasked, so read them
+        with `Memories.search("query").hits` in the index kernel, which
+        returns them ranked, alongside the directories it read. Save what you
+        learned, what you got wrong, and what you decided against, at the
+        moment it happens: a corrected mistake and a rejected design are the
+        things nobody can rederive from the diff.
+        Every save names the command that proves it in `validated[].how`,
+        because a claim nobody can re-run is only a date. Recalled facts go
+        stale, so re-run that command before trusting one and record the
+        result with `Memories.validate`, including when it fails. Correct a
+        memory by writing the new one with `supersedes:`, never by editing
+        it.
       '';
       reason = ''
-        End-of-session saves were forgotten; regenerating the whole index
-        once destroyed its curation.
+        Replaced the frontmatter and `MEMORY.md` text, which described the
+        native markdown auto-memory retired by index#3849 and disabled on
+        this workstation through CLAUDE_CODE_DISABLE_AUTO_MEMORY, so the rule
+        named a directory the harness no longer loads (ENG-11390). What it
+        points at instead is the `.memories` system in index#4433: repo-local
+        files, one ranked `memories` search, and validation receipts that
+        carry the command. Repo-local storage and saving everything learned,
+        got wrong, or reconsidered were both asked for by the user on
+        2026-07-29; end-of-session saves being forgotten, and one regenerated
+        index destroying its curation, are why the rule exists at all.
+
+        "Nothing arrives unasked" is load-bearing, not filler: the weave
+        SessionStart digest was deleted rather than reimplemented over
+        `.memories`, and the format has no `always:` field, so an agent that
+        does not search has no memories. That is the measured call --
+        docs/_archive/design/context-research.html (2026-06-12, 14 agents,
+        live A/B) put deliberate prior-search 4 to 8 times ahead while
+        ambient injection into ordinary prompts was net-negative, 3 of 5
+        casual prompts pulling 0.3 to 9k tokens of noise. The user's answer
+        on reading it was "yea no ambient injection".
       '';
     };
   }

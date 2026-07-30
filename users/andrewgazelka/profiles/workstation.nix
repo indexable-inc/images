@@ -96,8 +96,9 @@
     doCheck = false;
   });
 
-  # One statement of the store location: the digest script and the
-  # WEAVE_MEMORY_STORE session variable both derive from it.
+  # The weave store behind IxMcp.Memory, reached through the
+  # WEAVE_MEMORY_STORE session variable below (its only consumer since the
+  # SessionStart digest was deleted, see the note above claudeSettings).
   memoryStore = "${config.home.homeDirectory}/.config/nix/claude/memory/.weave";
 
   # One statement of the protected primary checkouts: the claude-code
@@ -119,35 +120,26 @@
     "/Users/*/.config/nix/ix/index"
   ];
 
-  # SessionStart memory digest: the derived replacement for the retired
-  # MEMORY.md flat index (index#3849). One-shot weave queries against the
-  # private store; stdout becomes session context via the wrappers'
-  # extraSessionStart seam. Exits 0 with a pointer when the store is missing
-  # so a fresh machine still boots.
-  memoryDigest = ix.writeBashApplication pkgs {
-    name = "claude-memory-digest";
-    text = ''
-        store=${lib.escapeShellArg memoryStore}
-        if [ ! -d "$store" ]; then
-          echo "Memory store missing at $store; create it with: weave --store \"$store\" init"
-          exit 0
-        fi
-        echo "## Memory"
-        echo "Durable memory is a weave store at $store: append-only facts, Datalog-derived views."
-      echo "Save at the moment of learning: Memory.remember(\"slug\", \"one-line hook\", type: \"project\", topic: \"nix\", handle: \"cmd/path\", body: long_md, about: [\"gh:indexable-inc/ix#8088\", \"host:hydra\"]) in the index kernel."
-      echo "Link every memory into the entity graph: 1-4 about: ids for the concrete things it describes -- gh:<org>/<repo>#<n> (issue or PR), repo:<org>/<name>, host:<name>, tool:<name>, person:<login>. Mint ids exactly (short cites expand: ix -> indexable-inc/ix; full table in mem:memory-ontology); a misspelled id fragments the graph silently. Recall walks these edges, so co-cited memories surface together; Memory.graph(\"slug\") shows a memory's neighborhood."
-        echo "Recall: Memory.recall(\"regex\") (rich rows: id, time, type, topic, handle, body) or Memory.query(datalog). Recalled facts go stale; verify before use and record the re-check with Memory.verify(\"slug\") -- verified memories rank first below. Never edit history: newer facts win, Memory.retract(id) kills a wrong one."
-        echo
-        echo "### Hooks (freshest verification first, then recency)"
-        # Rank by the newest mem/verified-at seq per entity (0 when never
-        # verified), then by the desc fact's own seq: a re-checked memory
-        # outranks a merely recent one (index#3865).
-        ${lib.getExe cfg.packages.weave} --store "$store" query 'vseq(E, max(S)) :- fact_id(I, E, "mem/verified-at", V), fact_seq(I, S). rank(V, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), vseq(E, V). rank(0, S, E, D) :- latest(E, "mem/desc", D), fact_id(I, E, "mem/desc", D), fact_seq(I, S), not vseq(E, _). ?- rank(V, S, E, D) order V desc, S desc limit 150.'
-        echo
-        echo "### Counts by type"
-        ${lib.getExe cfg.packages.weave} --store "$store" query 'per_type(T, count(E)) :- latest(E, "mem/type", T). ?- per_type(T, N) order N desc.'
-    '';
-  };
+  # There is deliberately NO SessionStart memory digest here. The
+  # weave-backed one (removed 2026-07-29, index#4433) injected ~150 memory
+  # hooks into every session unasked, and that is the shape the measurement
+  # rejects: docs/_archive/design/context-research.html (2026-06-12, 14
+  # agents, live A/B on this fleet) found deliberate prior-search paying 4
+  # to 8 times over -- 53k injected tokens against 220-400k tokens of
+  # avoided rediscovery across 10 recurring task types -- while ambient
+  # injection into ordinary prompts was net-negative: 3 of 5 casual prompts
+  # pulled 0.3 to 9k tokens of pure noise, breaking even only score-gated
+  # at 0.70 with a ~1200-token cap. Its own conclusion: "Session-start
+  # digests must come from distilled facts, never live vector hits." The
+  # operator's call on reading that was no ambient injection, so `.memories`
+  # (index#4433) has no `always:` field and nothing replaced the digest:
+  # memories reach a model when it searches, which the `memory` prompt rule
+  # tells it to do.
+  #
+  # The `session-digest` hook (packages/claude-hooks/src/main.rs:195) still
+  # reads ~/.cache/ix/context-digest.md, caps at 6000 chars and stays silent
+  # when the file is absent, so with no producer it simply goes quiet.
+  # Nothing here writes that file.
 
   # Personal-only Claude config, folded into the wrapper's settings render via
   # `extraSettings` (see the claudeCode override below). The render reaches
@@ -165,11 +157,13 @@
   # `codex.passthru.hooksJson` (Codex, delivered to ~/.codex/hooks.json below).
 
   claudeSettings = {
-    # Native markdown auto-memory is retired (index#3849): durable memory now
+    # Native markdown auto-memory is retired (index#3849): durable memory
     # lives in the weave store at ~/.config/nix/claude/memory/.weave (private
-    # repo), loaded via the memoryDigest SessionStart hook below and written
-    # through the kernel's Memory helper. The env knob matters: merely
-    # dropping autoMemoryDirectory would silently revert to the per-project
+    # repo), still written and read through the kernel's Memory helper. It is
+    # no longer loaded at session start by anything: the digest that did that
+    # is deleted (see the note above), so a memory reaches a model when a
+    # session searches for it. The env knob matters: merely dropping
+    # autoMemoryDirectory would silently revert to the per-project
     # ~/.claude/projects/<slug>/memory default instead of disabling.
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
     enabledPlugins = {
@@ -202,10 +196,20 @@
   # into their defaulted package, and this profile sets `package =` explicitly,
   # which discarded the fold and shipped prompts WITH the forceMerge rule
   # (index#3537).
-  # memory: the shared rule prescribes markdown-file memories plus a
-  # MEMORY.md index; this workstation replaced that flow with the weave
-  # store (index#3849), whose usage instructions ride the SessionStart
-  # digest instead.
+  # memory: omitted since index#3849, when the shared rule still prescribed
+  # markdown-file memories plus a MEMORY.md index and this workstation had
+  # moved to the weave store, whose instructions rode the SessionStart
+  # digest. Both halves of that reason are now gone: the rule describes
+  # `.memories` and `Memories.search` (index#4433), and the digest is
+  # deleted, so as long as `memory` stays in this list a session on this
+  # host gets no memory instruction from anywhere. Dropping it is the
+  # intended end state -- the contract's "memories reach a model exactly one
+  # way: it searches for them, because the rule in the system prompt tells
+  # it to" -- and it waits only on the `memories` binary being reachable
+  # here: nothing puts it on PATH yet (darwin-home.nix installs weave, not
+  # memories), so today the rule would name a command that raises. Land the
+  # CLI, add it to home.packages, drop "memory" from this list, in one
+  # change.
   agentPromptOmitRules = ["forceMerge" "memory"];
 
   # claude-code from the index FLAKE PACKAGE SET (packages/claude-code in the
@@ -260,12 +264,6 @@
     # shell/file/search. Until #4224 the rule also claimed those harness tools
     # were absent, which is no longer why it is dropped.
     omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
-    # SessionStart memory digest from the weave store; replaces the retired
-    # MEMORY.md load (index#3849).
-    extraSessionStart = lib.optional (cfg.packages.weave != null) {
-      package = memoryDigest;
-      timeout = 15;
-    };
     # Matches agentPromptOmitRules `forceMerge` above: without this the baked
     # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
     # rule permits.
@@ -364,11 +362,6 @@
       # into its defaulted package, and the explicit `package = codex` below
       # discarded it, shipping prompts WITH the forceMerge rule (index#3537).
       omitRules = agentPromptOmitRules;
-      # Same SessionStart memory digest as claudeCode above (index#3849).
-      extraSessionStart = lib.optional (cfg.packages.weave != null) {
-        package = memoryDigest;
-        timeout = 15;
-      };
     })
     // {
       # Upstream main keeps Cargo's workspace version at 0.0.0. Home Manager
@@ -1286,8 +1279,10 @@ in {
   # codex's hash-pinned trust gate means a one-time `/hooks` trust after a bump.
   home.file.".codex/hooks.json" = {
     # The OVERRIDDEN package's render: codexBase's would drop every
-    # override-level hook input (extraSessionStart lost the memory digest
-    # here, index#3849); `codex` is what programs.codex puts on PATH.
+    # override-level hook input, which is how this file once lost the
+    # SessionStart memory digest (index#3849; that digest is gone now, but
+    # the next override-level hook would be lost the same way). `codex` is
+    # what programs.codex puts on PATH.
     source = codex.passthru.hooksJson;
     force = true;
   };

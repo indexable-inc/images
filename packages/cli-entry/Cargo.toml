@@ -1,0 +1,12 @@
+[package]
+name = "cli-entry"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The shared clap entry point every ix CLI binary calls from `fn main`"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
