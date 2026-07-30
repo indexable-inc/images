@@ -579,8 +579,16 @@ impl Mapper<'_> {
                 let ast::TSType::TSTypeLiteral(literal) = &annotation.type_annotation else {
                     return Err(self.err(
                         annotation.span,
+                        // Names both annotatable spellings, not just this one.
+                        // The cross product -- a destructured pattern with an
+                        // alias annotation -- is the shape that reads most
+                        // naturally and is the one that does not exist, so an
+                        // author who reaches for it needs to be pointed at the
+                        // alternative rather than only told this is wrong.
                         "a destructured parameter needs an inline object type \
-                         (`({ a }: { a: T })`); there is no binding for the whole set",
+                         (`({ a }: { a: T })`); there is no binding for the whole \
+                         set. To annotate with a `type` alias, take one named \
+                         parameter instead: `(params: Params)`",
                     ));
                 };
                 // Walks the members rather than calling `self.ty` on the whole

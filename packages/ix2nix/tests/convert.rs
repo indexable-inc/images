@@ -62,6 +62,11 @@ fn destructured_parameter_checks_bound_fields() {
 fn destructured_annotation_must_be_inline_and_bound() {
     let error = diagnostic("type T = { a: int };\nexport default ({ a }: T) => a;\n");
     assert!(error.message().contains("inline object type"), "{error}");
+    // Must name the other annotatable spelling too. An author reaching for the
+    // cross product (destructured pattern, alias annotation) is reaching for
+    // the shape that reads most naturally and does not exist, so being told
+    // only that it is wrong leaves them guessing.
+    assert!(error.message().contains("(params: Params)"), "{error}");
     let error = diagnostic("export default ({ a }: { b: int }) => a;\n");
     assert!(error.message().contains("not bound by the pattern"), "{error}");
 }
