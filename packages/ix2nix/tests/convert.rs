@@ -112,6 +112,45 @@ fn destructured_optional_must_pair_with_a_nix_default() {
 }
 
 #[test]
+fn an_alias_may_be_referenced_before_it_is_declared() {
+    // Why `map::module` collects alias names in a pass of its own: an
+    // annotation anywhere may name an alias declared later, and the emitted
+    // `let` is recursive so order does not matter. Untested until now, and the
+    // failure mode is a `ty'P` reference with no binding, i.e. an `undefined
+    // variable` at eval rather than anything the converter would report.
+    let out = nix("export default (x: P) => x;\ntype P = int;\n");
+    assert!(out.contains("ty'P = __ixTy.int"), "{out}");
+    assert!(out.contains("ty'P x"), "{out}");
+}
+
+#[test]
+fn a_const_cannot_collide_with_an_alias_binding() {
+    // `alias_binding` spells `ty'P` and claims a `const` can never collide,
+    // because `'` is legal in a Nix identifier but not a JavaScript one. That
+    // rests on the parser, so pin it: the collision is unspellable in source.
+    let error = diagnostic("const ty'P = 1;\nexport default 1;\n");
+    assert!(error.message().starts_with("parse error"), "{error}");
+}
+
+#[test]
+fn an_unspellable_bound_field_name_is_rejected_at_the_pattern() {
+    // The field check emits the bound name as a bare Nix identifier, so a
+    // binder that is not one has to be refused. Both of these are legal
+    // JavaScript identifiers and neither is a legal Nix one.
+    for source in [
+        "export default ({ then }: { then: int }) => 1;\n",
+        "export default ({ $x }: { $x: int }) => 1;\n",
+    ] {
+        let error = diagnostic(source);
+        assert!(
+            error.message().contains("not a valid Nix identifier"),
+            "{source}: {error}"
+        );
+        assert_eq!(error.column(), 19, "{source}: {error}");
+    }
+}
+
+#[test]
 fn readonly_property_signatures_are_rejected() {
     // No Nix meaning, and accepting it silently shifted a destructured field's
     // reported column from the key to the `readonly` keyword.

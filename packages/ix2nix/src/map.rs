@@ -590,9 +590,6 @@ impl Mapper<'_> {
                 for member in &literal.members {
                     let field = self.field(member)?;
                     self.reject_duplicate_field(&fields, &field, member.span())?;
-                    // A pattern binds identifiers, so an unspellable field
-                    // name can never be `bound` and never reaches `Expr::Ident`
-                    // below.
                     let bound = object.properties.iter().find(|bound| {
                         matches!(
                             &bound.key,
@@ -610,6 +607,13 @@ impl Mapper<'_> {
                         ));
                     };
                     self.reject_unpaired_optional(&field, bound, member.span())?;
+                    // The check below reads the bound name as a bare Nix
+                    // identifier, which is only valid if it is spellable as
+                    // one. `object_param` rejects an unspellable binder too,
+                    // later, when it renders the pattern -- but a line's
+                    // justification belongs on that line, not in a backstop
+                    // three functions away.
+                    let binder = self.checked_name(bound.span, &field.name)?;
                     // An optional field's Nix default (conventionally `null`)
                     // binds when the caller omits it; `T | null` is the type
                     // the bound name actually has. The recorded field keeps
@@ -628,7 +632,7 @@ impl Mapper<'_> {
                         loc: self
                             .check_loc(member.span(), &format!("argument field `{}`", field.name)),
                         ty: checked,
-                        value: Expr::Ident(field.name.clone()),
+                        value: Expr::Ident(binder),
                     });
                     fields.push(field);
                 }
@@ -643,21 +647,29 @@ impl Mapper<'_> {
 
     /// Requires a destructured field's `?` marker and its Nix default to agree.
     ///
-    /// The two are one fact spelled twice, and only the pattern half reaches
-    /// Nix: `({ a, b }: { a: int; b?: string })` renders `{ a, b }:`, so Nix
-    /// demands `b` however the annotation marked it. Left alone, the emitted
-    /// module and the generated JSON Schema disagree about whether a caller may
-    /// omit the field, and a `params.json` that validates then dies at eval
-    /// with `called without required argument 'b'`.
+    /// The check just above lowers `b?: T` to `nullable T`, and that lowering is
+    /// only correct if the pattern carries `b = null`: the whole reason a bound
+    /// optional field can be null is that its Nix default binds when the caller
+    /// omits it. The converter used to emit that check on the strength of the
+    /// assumption and never verify it, which is the actual defect here -- a
+    /// property of the pattern asserted in a comment with nothing enforcing it.
+    ///
+    /// Two symptoms followed. The generated schema read `required` off the `?`
+    /// and reported a field optional that `{ a, b }:` makes mandatory, so a
+    /// `params.json` omitting it validated and then died at eval with `called
+    /// without required argument 'b'`. And in the other direction, a `nullable`
+    /// check sat on a field that can never be absent, quietly accepting a `null`
+    /// the author never meant to allow.
     ///
     /// Rejecting is the fix rather than deriving the schema's `required` from
-    /// the pattern, because the mirror spelling lies the same way in the other
-    /// direction: a pattern default under a non-optional annotation lets Nix
-    /// bind the default and then fails the field's own check on it. Deriving
-    /// from either half alone leaves the other decorative, and picking a
-    /// winner is the sort of silent reinterpretation this crate refuses
-    /// everywhere else. With the two required to agree, `required` follows
-    /// from the annotation by construction.
+    /// the pattern: that would stop the schema reporting the contradiction
+    /// while leaving it in the emitted checker, which fixes the instrument and
+    /// not the fault. The mirror spelling lies the same way anyway -- a pattern
+    /// default under a non-optional annotation lets Nix bind the default and
+    /// then fails the field's own check on it -- so deriving from either half
+    /// alone leaves the other decorative. With the two required to agree, both
+    /// the `nullable` lowering and the schema's `required` are justified by
+    /// something the converter has actually checked.
     ///
     /// What this gives up: `{ a, b }: { a: int; b?: string }` no longer
     /// converts. The meaning it was reaching for -- present but possibly null
