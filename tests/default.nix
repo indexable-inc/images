@@ -6527,6 +6527,34 @@
     test -e ${uvApplication.uvWheelhouse}/click-8.1.7-py3-none-any.whl
   '';
 
+  # The planner graph must not name a store path. Nix derives an output's
+  # references by scanning its bytes for store hashes, so a single absolute
+  # `src_path` makes this ~500 KB metadata file declare the whole vendor dir
+  # as a runtime reference: hyperion's graph measured 618,148,280 bytes of
+  # closure around a 488 KB file, of which ~258 MB was Windows crates no
+  # target here compiles. `unitGraphJson` templates both roots out and the
+  # render stage fills them back in, so what lands on disk is placeholders.
+  # Reverting either `sed` in `lib/rust/cargo-unit.nix` fails this.
+  cargoUnitGraphClosureScript = ''
+    graph=${cargoUnitWorkspace.unitGraphJson}
+    if grep -qm1 "${builtins.storeDir}/" "$graph"; then
+      echo "cargo-unit-graph.json names a store path, so its closure now carries the vendor dir:" >&2
+      grep -om3 "${builtins.storeDir}/[^\"]*" "$graph" >&2
+      exit 1
+    fi
+    # The placeholders must actually be there: a graph with neither absolute
+    # paths nor placeholders would pass the check above while meaning the
+    # planner emitted nothing to template, which is a different bug.
+    grep -q '@vendorRoot@' "$graph" || {
+      echo "cargo-unit-graph.json has no @vendorRoot@ placeholder; the planner emitted no vendored source path" >&2
+      exit 1
+    }
+    grep -q '@workspaceRoot@' "$graph" || {
+      echo "cargo-unit-graph.json has no @workspaceRoot@ placeholder; the planner emitted no workspace source path" >&2
+      exit 1
+    }
+  '';
+
   cargoUnitRealWorkspaceAssertions = [
     {
       assertion = builtins.hasAttr "serde_derive" cargoUnitRealWorkspaces.serde.buildWorkspace.libraries;
@@ -6551,6 +6579,7 @@
   ];
 
   cargoUnitRealWorkspaceScript = ''
+    ${cargoUnitGraphClosureScript}
     test -d ${cargoUnitRealWorkspaces.serde.buildRoots}
     test -d ${cargoUnitRealWorkspaces.thiserror.buildRoots}
     test -d ${cargoUnitRealWorkspaces.indexmap.buildRoots}
