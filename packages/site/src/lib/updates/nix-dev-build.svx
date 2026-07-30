@@ -1,0 +1,42 @@
+---
+id: nix-dev-build
+postedAt: 2026-07-29T20:50:00-07:00
+title: "`nix-dev-build`: editing the nix fork without rebuilding the closure"
+tags: [nix-dev-build, tooling, nix, rust]
+links:
+  - label: packages/nix-dev-build
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix-dev-build
+---
+
+Four sessions in one night iterated on the nix evaluator's C++ through a whole-package `nix build`, which recompiles the modular C++ closure in a sandbox for every one-line edit. The tree is a meson project and the fork's own manual documents the ninja loop, so that work was avoidable the whole time.
+
+`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced. Measured on an 18 core aarch64-darwin Mac: 11.9s to configure, 51.3s for the first build of all 332 targets, 8.6s after touching `src/libexpr/eval.cc`, 0.1s for a no-op. Add 1.4s per run for entering the dev shell.
+
+The dependencies are not vendored here. Every run re-execs itself under `nix develop <checkout>#default`, so the compiler, meson, ninja and the libraries nix links against come from the checkout's own flake, and entering it costs 0.41s warm. The flake reference is a bare path rather than `path:<checkout>`, which matters more than it looks: a `path:` reference copies the whole directory into the store on every invocation, and in a checkout that has been built once that directory contains a 2.0G `build/`. A bare path resolves to `git+file://`, so `.gitignore` applies and the store copy is 17M.
+
+Anything scripting this loop by hand hits a trap the manual does not mention. `configurePhase` and `buildPhase` are stdenv shell functions, and under `nix develop --command bash -c` they are not defined: `type -t` prints nothing for both and the run dies with `configurePhase: command not found`. Drive `meson setup` and `ninja` directly instead, which is what this tool and `packages/nix-ninja-build` both do.
+
+## Which binary you built, and why `--version` will not tell you
+
+The report always names the absolute path, the checkout's revision, and the `nix` already on PATH:
+
+```
+built src/nix/nix in 8.6s
+
+  binary   /tmp/worktree/indexable-inc/nix/fastloop/build/src/nix/nix
+  version  nix (Nix) 2.34.7
+  tree     b20ed84bb
+  on PATH  /run/current-system/sw/bin/nix, nix (Nix) 2.34.7+ix.g8db4d3805919.h6eeae576
+```
+
+The version strings are the point. Meson takes the version from `.version`, so a checkout build of any branch prints a bare `nix (Nix) 2.34.7`, while the packaged `nix-ix` stamps its revision in. The build is therefore the one that looks stock, which is the opposite of the intuition, and a test like "does `--version` contain `+ix`" identifies the system nix rather than yours. Two builds of two different branches are indistinguishable by version string altogether. So the path and the revision are the identification, and both binaries are printed side by side so the difference cannot be misread.
+
+The revision is reported rather than compiled in on purpose. `nix-ninja-build` writes the version into `.version` in its scratch copy, which is the right answer there; doing it to a developer's checkout would modify a tracked file in their working tree.
+
+## What it refuses, and what it does not do
+
+There is no fallback to `nix build`. A ninja failure means the tree does not compile. A checkout that is not a nix source tree is refused, naming each marker it looked for and whether it was found. A build directory configured against a different checkout, or left broken by a failed configure, is refused rather than built through, since ninja's output in that case is confusing rather than wrong.
+
+`packages/nix-ninja-build` remains the other incremental lane and is not replaced. It materializes the packaged source into a scratch directory and turns each compilation unit into its own content-addressed derivation, on x86_64-linux only. This one builds the checkout you are editing, with local ninja, and is the only lane that works on aarch64-darwin.
+
+Stated plainly: the tool has only been run on aarch64-darwin. The Linux side is covered by the packaged build and the repo's checks, not by execution. `--shell native-ccacheStdenv` exists for the ccache stdenv the fork manual recommends but is untested, and whether the default shell provides ccache at all was never established. A prompt rule pointing future sessions at this tool is proposed separately and is waiting on a human read, since it changes what every session follows.
