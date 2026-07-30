@@ -40,18 +40,40 @@ know it.
   instanceSeparator = "@";
   nodeSeparator = "-";
 
-  # Both halves of an instance name end up in a node name, so both have to be
-  # legal DNS-label material. Checking it here rather than letting nixpkgs'
-  # `networking.hostName` type reject the joined string is what makes the
-  # error name the `instances` key that caused it, instead of an option two
-  # module layers down. A template can now DECLARE this (`instance: nonEmptyStr`)
+  # A template can now DECLARE the instance id's type (`instance: nonEmptyStr`)
   # and have the generated JSON Schema carry it -- index#4450 shipped the
   # generator -- but only for a params record spelled as one named parameter: an
   # alias cannot annotate a destructured pattern, and an inline annotation never
   # reaches the schema document. So a CLI that rejects a bad `--set` before nix
   # starts is possible and not yet built, and this stays the only place the
   # instance id is checked.
-  nameFragment = "[[:alnum:]][[:alnum:]_-]*";
+  #
+  # WHAT IS CHECKED IS THE JOINED NODE NAME, not each half of the instance name.
+  # Checking the halves is checking a proxy: the string nixpkgs types is
+  # `template-instance`, and a per-half rule that looks strict enough is not the
+  # same rule. Every half below passes an "alphanumeric first, then alphanumeric
+  # or `-` or `_`" test and produces a node name `networking.hostName` refuses,
+  # which is the error two module layers down that this check exists to
+  # forestall:
+  #
+  #     worker@1-            -> worker-1-             trailing `-`
+  #     worker@a_            -> worker-a_             trailing `_`
+  #     worker@<70 digits>   -> worker-<70 digits>    over the 63-character cap
+  #
+  # This pattern MIRRORS nixpkgs' `networking.hostName` type, minus its empty
+  # alternative, because that type is not reachable from what `mkVm` returns
+  # (`nixosConfigurations.<node>` exposes `config`, never `options`). A mirror
+  # drifts, so it is not trusted: the `vm-templates` group in tests/default.nix
+  # asserts that this predicate and the real evaluator agree, by evaluating
+  # `config.networking.hostName` under `builtins.tryEval` for every row of an
+  # adversarial table and requiring the two verdicts to match. If nixpkgs
+  # tightens or loosens the type, that test fails and names the row.
+  nodeLabelPattern = "[[:alnum:]]([[:alnum:]_-]{0,61}[[:alnum:]])?";
+  isNodeLabel = node: builtins.match nodeLabelPattern node != null;
+
+  # The cap the pattern above encodes, named so the "too long" message can do
+  # arithmetic instead of quoting a regex at somebody.
+  nodeLabelMaxLength = 63;
 
   /**
   Join a template name and an instance id into an instance name (`worker@1`).
@@ -76,27 +98,39 @@ know it.
   instance id (systemd's `%i`), and the node name its VM is created under.
 
   Returns `{ template; instance; node; }`. Throws, naming the offending
-  string, on anything that is not `<template>@<instance>` with both halves
-  spellable as a DNS label fragment.
+  string, on anything that is not `<template>@<instance>` whose joined node
+  name is a legal DNS label.
   */
   parseInstanceName = name: let
     parts = lib.splitString instanceSeparator name;
     template = builtins.head parts;
     instance = builtins.elemAt parts 1;
-    legal = part: builtins.match nameFragment part != null;
+    node = "${template}${nodeSeparator}${instance}";
+    # Reported separately from the character rule because the two have
+    # different fixes: one is "spell it differently", the other is "spell it
+    # shorter", and only the second can say by how much.
+    overBy = builtins.stringLength node - nodeLabelMaxLength;
   in
     assert lib.assertMsg (builtins.length parts == 2) ''
       ix: ${context}
         Instance name '${name}' is not '<template>${instanceSeparator}<instance>'.
         Exactly one '${instanceSeparator}', the template name before it, the instance id after, as in systemd's getty@tty3.
     '';
-    assert lib.assertMsg (legal template && legal instance) ''
+    assert lib.assertMsg (template != "" && instance != "") ''
       ix: ${context}
-        Instance name '${name}': each half must start alphanumeric and hold only letters, digits, '-' and '_'.
-        Both end up in the VM's node name ('${template}${nodeSeparator}${instance}'), which is a DNS label.
+        Instance name '${name}': neither half may be empty.
+    '';
+    assert lib.assertMsg (overBy <= 0) ''
+      ix: ${context}
+        Instance name '${name}': its node name '${node}' is ${toString (builtins.stringLength node)} characters, ${toString overBy} over the ${toString nodeLabelMaxLength}-character DNS label limit.
+        Shorten the template name ('${template}', ${toString (builtins.stringLength template)}) or the instance id ('${instance}', ${toString (builtins.stringLength instance)}) by ${toString overBy}.
+    '';
+    assert lib.assertMsg (isNodeLabel node) ''
+      ix: ${context}
+        Instance name '${name}': its node name '${node}' is not a DNS label, which is what nixpkgs types 'networking.hostName' as.
+        A label starts and ENDS alphanumeric, and holds only letters, digits, '-' and '_' between. A trailing '-' or '_' on either half of the instance name lands at the end of the node name.
     ''; {
-      inherit template instance;
-      node = "${template}${nodeSeparator}${instance}";
+      inherit template instance node;
     };
 
   /**

@@ -2275,6 +2275,52 @@
       # a plain `//` merge keeps only the last, silently.
       collapsing = _: {nixosConfigurations.worker = {};};
     };
+    # The mirror check. `nodeLabelPattern` in lib/templates.nix restates
+    # nixpkgs' `networking.hostName` type because that type is not reachable
+    # from what `mkVm` returns (`nixosConfigurations.<node>` exposes `config`,
+    # never `options`). A restated pattern is a mirror, and a mirror that
+    # nothing holds against its original drifts silently -- the day nixpkgs
+    # tightens the type, our guard starts passing names the option then
+    # rejects, which is exactly the bug this guard was written to prevent and
+    # which it shipped with (found in review of #4452).
+    #
+    # So hold the two against each other, on the real evaluator rather than on
+    # a second copy of the regex: for each row, ask our guard and ask nixpkgs,
+    # and require the same answer. `tryEval` catches an option type error, and
+    # forcing `config.networking.hostName` alone forces the module system for
+    # one option rather than a whole toplevel, so the cost is an eval and not a
+    # build.
+    #
+    # Every row spells exactly one `@`, so both sides are answering the same
+    # question -- whether the JOINED node name is a legal label -- rather than
+    # our side rejecting on arity while nixpkgs never sees a name at all.
+    labelAgreementNames = [
+      "worker@1" # the ordinary case, accepted by both
+      "worker@1-" # trailing `-` lands at the end of the node name
+      "worker@a_" # trailing `_`, same shape, different character
+      "worker-pool@eu_1" # separators inside both halves, still a legal label
+      "worker@${lib.concatStrings (lib.genList (_: "9") 70)}" # over the 63-character cap
+    ];
+    labelAgreement =
+      map (
+        name: let
+          ours = (builtins.tryEval (ix.templates.parseInstanceName name)).success;
+          # Spell the node name here rather than reading it off `parseInstanceName`:
+          # for a row our guard rejects there is no result to read, and taking the
+          # node name from the thing under test would make the comparison circular.
+          node = lib.replaceStrings ["@"] ["-"] name;
+          vm = ix.mkVmFor "x86_64-linux" {
+            name = node;
+            modules = [];
+          };
+          theirs =
+            (builtins.tryEval (
+              toString vm.nixosConfigurations.${node}.config.networking.hostName
+            ))
+            .success;
+        in {inherit name ours theirs;}
+      )
+      labelAgreementNames;
     # Hand-picked rather than generated: the repo has no Nix property-test
     # framework (hegel is Python/Hypothesis, and this is pure eval), so a
     # generator would mean writing one first. This is the adversarial table a
@@ -2312,7 +2358,7 @@
       }
     ];
   in {
-    inherit rendered roundTripPairs;
+    inherit labelAgreement rendered roundTripPairs;
     nodeNames = builtins.attrNames rendered.nixosConfigurations;
     nodeOf = pair: (ix.templates.parseInstanceName (ix.templates.instanceNameOf pair)).node;
     shardsOf = node: rendered.nixosConfigurations."${node}".config.services.nginx.appendConfig;
@@ -4167,6 +4213,35 @@
     ];
 
     vm-templates = [
+      {
+        # THE MIRROR CHECK, and the reason the guard above can be trusted at
+        # all. `parseInstanceName`'s label rule is a copy of nixpkgs'
+        # `networking.hostName` type, kept because that type is unreachable
+        # from `mkVm`'s return. This asks both and requires the same verdict,
+        # so a nixpkgs bump that moves the original fails here instead of
+        # shipping a guard that waves through names the option rejects. To
+        # watch it fail: loosen `nodeLabelPattern` to drop its trailing
+        # `[[:alnum:]]` and the `worker@1-` row disagrees.
+        assertion = lib.all (row: row.ours == row.theirs) vmTemplatesExample.labelAgreement;
+        message = let
+          disagreed = lib.filter (row: row.ours != row.theirs) vmTemplatesExample.labelAgreement;
+        in "index.lib.templates' node-label rule disagrees with nixpkgs' networking.hostName type on: ${
+          lib.concatMapStringsSep ", " (
+            row: "'${row.name}' (ours ${lib.boolToString row.ours}, nixpkgs ${lib.boolToString row.theirs})"
+          )
+          disagreed
+        }";
+      }
+      {
+        # The table has to contain a row of each verdict, or "they agree" is
+        # satisfied by a table nixpkgs rejects entirely, or accepts entirely,
+        # and the check passes having compared nothing interesting. A count
+        # alone would not catch that: five accepted rows agree five times.
+        assertion =
+          lib.any (row: row.theirs) vmTemplatesExample.labelAgreement
+          && lib.any (row: !row.theirs) vmTemplatesExample.labelAgreement;
+        message = "the node-label agreement table must hold both a name nixpkgs accepts and one it rejects, or agreement is vacuous";
+      }
       {
         # The whole of the mapping the ix CLI half will depend on: an instance
         # name splits at its `@`, and the node name rejoins the halves with the
