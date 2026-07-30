@@ -38,18 +38,18 @@ does not relink `src/nix/nix` at all; the change arrives through dynamic linking
 
 ## The rebuild is serial, and contention doubles it. Load average will not tell you
 
-Ten timings of the same `eval.cc` edit, taken across an evening on a shared
-machine, sorted by `real` over `user`:
+Thirteen timings of the same `eval.cc` edit, taken across an evening on a shared
+machine by two sessions, sorted by `real` over `user`:
 
 | real / user | real | reported 1 minute load |
 | --- | --- | --- |
-| 1.04 to 1.11, six runs | 6.36 to 9.38s | 13.18 to 40.76 |
+| 1.04 to 1.12, nine runs | 6.36 to 9.38s | 13.18 to 45.37 |
 | 1.49 to 1.62, four runs | 12.33 to 15.78s | 24.90 to 37.21 |
 
 The ratio separates the fast runs from the slow ones exactly. Load average does
-not: the two load ranges overlap almost completely, and the single fastest run,
-7.39s, was taken at a reported load of 39.24 while a 15.78s run was taken at
-24.90.
+not: the two ranges overlap almost completely, the fastest run of the night sat
+at a reported load of 39.24, a 15.78s run sat at 24.90, and three runs at a
+reported load of 42 to 45 came in at 6.77 to 7.55s.
 
 That is a property of the instrument rather than a surprise about the machine.
 Load average is a decaying one minute mean and this rebuild is a seven second
@@ -88,9 +88,15 @@ priority as well as tier. The experiment that would isolate it pins to
 and runs under contention on a machine somebody has claimed.
 
 So when quoting a number from this loop, report `real` and `user` together rather
-than load. And discard the first run: another session measured a 34% first-run
-penalty, 9.06s against 6.77s steady, from cold page cache on the object and the
-dylib.
+than load.
+
+Discard the first run only after an idle gap, which is narrower than a blanket
+instruction. A session measured a 34% penalty on a first run taken after a gap,
+9.06s against 6.77s steady, and then no penalty at all on three consecutive runs
+taken immediately after building, 7.45s, 7.55s and 6.77s. A third set, taken
+while building intermittently, showed 10%. So the page cache is warm if you have
+just built, and the first number is suspect only when the machine has been doing
+something else in between.
 
 An earlier revision of this file claimed the slowdown had a threshold at
 `hw.ncpu`, 18 here. That was two samples and a coincidence with the core count.
@@ -101,10 +107,20 @@ than rescued.
 ## Asserting the exit code is not optional here
 
 Every timing above was re-taken with `ninja`'s exit status checked per run, and
-all four re-runs reported `rc=0`. The first versions of these measurement loops
-parsed `real` out of `/usr/bin/time` without looking at the status, which is a
-hole: a build that failed early still prints a plausible `real`, and it prints a
-fast one, so a broken run enters the table looking like a good result.
+every re-run reported `rc=0`. The first versions of these measurement loops did
+not check, in two different ways, and both produced numbers that looked fine:
+
+- Parsing `real` out of `/usr/bin/time` without looking at the status. A build
+  that fails early still prints a plausible `real`, and it prints a fast one, so
+  a broken run enters the table looking like a good result.
+- Piping `ninja` into `tail`. The pipeline reports `tail`'s status, so a failed
+  build reads as success rather than merely going unchecked. That is the worse
+  of the two, because the check appears to be present.
+
+The same shape turned up in four unrelated measurement harnesses in one evening,
+including one that compared output hashes across runs and reported nine clean
+runs when one had segfaulted, an empty file having a perfectly stable hash. It
+seems to be the cheapest defect class here to look for and the easiest to write.
 
 The tool itself does check. `build.rs` matches on the exit status and treats
 anything but zero as an error, including death by signal, which is what a

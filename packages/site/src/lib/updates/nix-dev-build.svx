@@ -25,16 +25,16 @@ Both runs are real. The one-file row is the one to be careful with, and it took 
 
 **Which file you touch sets the cost.** At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. A 4x spread with load constant, so a single figure needs its file named or it reads as a promise about somebody else's file. Call it 2 to 9s for a body edit in libexpr. Run B recorded its file; run A did not.
 
-**The rebuild is serial, and contention doubles it, but load average will not tell you which you got.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Ten timings of the same `eval.cc` edit across an evening on a shared machine, sorted by `real` over `user`:
+**The rebuild is serial, and contention doubles it, but load average will not tell you which you got.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Thirteen timings of the same `eval.cc` edit across an evening on a shared machine by two sessions, sorted by `real` over `user`:
 
 | real / user | real | reported 1 minute load |
 | --- | --- | --- |
-| 1.04 to 1.11, six runs | 6.36 to 9.38s | 13.18 to 40.76 |
+| 1.04 to 1.12, nine runs | 6.36 to 9.38s | 13.18 to 45.37 |
 | 1.49 to 1.62, four runs | 12.33 to 15.78s | 24.90 to 37.21 |
 
-The ratio separates fast from slow exactly. Load average does not, and the two ranges overlap almost completely: the fastest run of the night, 7.39s, was taken at a reported load of 39.24, while a 15.78s run was taken at 24.90. That is the instrument, not the machine. Load average is a decaying one minute mean and this rebuild is a seven second event, so it reports the minute that just ended and stays inflated for a minute after a burst of other work has finished.
+The ratio separates fast from slow exactly. Load average does not, and the two ranges overlap almost completely: the fastest run of the night sat at a reported load of 39.24, a 15.78s run sat at 24.90, and three runs at a reported load of 42 to 45 came in at 6.77 to 7.55s. That is the instrument, not the machine. Load average is a decaying one minute mean and this rebuild is a seven second event, so it reports the minute that just ended and stays inflated for a minute after a burst of other work has finished.
 
-So report `real` and `user` together rather than load, and throw away the first run, which carries a 34% cold-page-cache penalty: 9.06s against 6.77s steady.
+So report `real` and `user` together rather than load. And discard the first run only after an idle gap, which is narrower than the blanket rule an earlier revision of this entry gave: the 34% penalty, 9.06s against 6.77s steady, was measured on a first run after a gap, while three consecutive runs taken immediately after building showed no penalty at all, and a third set taken while building intermittently showed 10%.
 
 This entry twice claimed something stronger and both claims are withdrawn. First that the one-file spread was file size and not load, then that load explained it with a threshold at the core count. The file spread is real, measured back to back at constant conditions. The contention effect is real, and `real` over `user` is its signal. Reported load average predicts neither, which is why run A's rebuild row above is marked void rather than reinterpreted: it was taken above the load gate its own author was enforcing, its file was `eval.cc` like everyone else's, and no `user` time was recorded, so nothing in it can be classified.
 
