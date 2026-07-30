@@ -209,14 +209,21 @@ in {
     enable = true;
     package = hyperionProxy;
     listen = "[::]:25565";
-    # A name, not an address, and that is not a stylistic choice: the host part
+    # A name, not an address, and that is not a stylistic choice: the name
     # becomes the TLS server name the proxy expects on the game server's
     # certificate, which is issued for this exact string. Group members resolve
     # each other as `<name>.ix.internal` through the group's own resolver
     # (ENG-10855, fixed in ix#8978 and ix#9095), so nothing has to pin an
     # address to make this work. The `/etc/hosts` pin this file used to carry
     # for that is gone.
-    gameServer = "${gameFqdn}:${toString game.port}";
+    #
+    # Two typed fields rather than one `host:port` string, since hyperion#1078:
+    # the string form made the port a second copy of the game server's own
+    # option, free to drift from it.
+    gameServer = {
+      host = gameFqdn;
+      inherit (game) port;
+    };
     pki = {
       rootCaCert = "/var/lib/hyperion-pki/root_ca.crt";
       cert = "/var/lib/hyperion-pki/node.crt";

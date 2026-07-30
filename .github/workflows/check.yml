@@ -440,3 +440,51 @@ jobs:
             printf 'flake-check result was %s; refusing a false-green closure gate\n' "${FLAKE_CHECK_RESULT}" >&2
             exit 1
           fi
+
+  # The one example in this tree that `exampleFleetsFor` cannot see. ENG-10986.
+  #
+  # `examples/minecraft/hyperion/default.ix` takes a `hyperion` argument, and
+  # `lib/discovery.nix`'s aggregator has only `index` to give, so it skips the
+  # example and every `nix run .#lint` prints the skip. The consequence was that
+  # nothing in either repository evaluated this fleet: the required `flake-check`
+  # lints these files but never builds their module system, and hyperion's own CI
+  # has been `workflow_dispatch:` only since hyperion#1088 with no required
+  # status context. A change could be stylistically perfect and not evaluate.
+  #
+  # It was not hypothetical. hyperion#1078 turned
+  # `services.hyperion-proxy.gameServer` from a `host:port` string into a
+  # submodule; `proxy.nix` kept passing a string, and the pin could not advance
+  # at all. Nobody found out until somebody evaluated it by hand. ENG-11448.
+  #
+  # THE TEMPTING FIX IS THE WRONG ONE. Teaching `exampleFleetsFor` to supply
+  # `hyperion` would make the example visible to the aggregator and would also
+  # pull hyperion's own nixpkgs and rust-overlay into index's ROOT lock, because
+  # that flake deliberately does not follow ours (a follow there swaps the
+  # toolchain under a nightly-only Rust workspace). That is the same closure
+  # invalidation behind the 2026-07-20 decision to disable index's scheduled
+  # flake bumps, and it would drift this repo's CI ahead of the workstation and
+  # fleet pins. Evaluating the example against its OWN lock, from its own
+  # directory, is what keeps hyperion out of index entirely.
+  #
+  # Not a required context. Adding `hyperion-example` to ruleset 16845582 is a
+  # one-line change for whoever owns that ruleset; until then this is a visible
+  # red rather than a merge block.
+  hyperion-example:
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-hyperion-example', github.run_id, github.run_attempt) }}"]
+    # The check evaluates four NixOS systems and builds none of them; it is
+    # seconds of work plus whatever the inputs cost to fetch on a cold store.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # Deliberately the same command a contributor types in that directory, so
+      # this job cannot drift from what can be reproduced locally.
+      - name: Evaluate the hyperion fleet against its own lock
+        working-directory: examples/minecraft/hyperion
+        run: nix build --no-link --print-out-paths .#checks.x86_64-linux.fleet-eval
