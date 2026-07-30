@@ -50,6 +50,8 @@ members = [
   "packages/audio/score",
   "packages/blast-radius",
   "packages/nix-dag",
+  "packages/nix-dev-build",
+  "packages/git-probe",
   "packages/chromium-cookies",
   "packages/ast-merge/ast",
   "packages/ast-merge/cli",
@@ -294,6 +296,7 @@ error-chain = { path = "packages/error-chain" }
 code-highlight = { path = "packages/code-highlight" }
 code-tokenizer = { path = "packages/code-tokenizer" }
 file-search = { path = "packages/file-search" }
+git-probe = { path = "packages/git-probe" }
 github-avatar = { path = "packages/github-avatar" }
 google-auth = { path = "packages/google/auth" }
 google-calendar = { path = "packages/google/calendar" }

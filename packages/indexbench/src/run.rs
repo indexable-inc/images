@@ -26,28 +26,14 @@ impl GitContext {
     #[must_use]
     pub fn resolve(repo: &std::path::Path) -> Self {
         let commit =
-            git_output(repo, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
+            git_probe::output(repo, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
         // `status --porcelain` prints one line per changed path; empty means
         // clean. A failure (not a repo) is reported as clean alongside the
         // `unknown` commit.
-        let dirty =
-            git_output(repo, &["status", "--porcelain"]).is_some_and(|s| !s.trim().is_empty());
+        let dirty = git_probe::output(repo, &["status", "--porcelain"])
+            .is_some_and(|s| !s.trim().is_empty());
         Self { commit, dirty }
     }
-}
-
-/// Run a `git` command in `repo`, returning trimmed stdout on success.
-fn git_output(repo: &std::path::Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 /// Execute every bench in `suite` and return one [`Run`] per bench.

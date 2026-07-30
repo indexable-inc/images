@@ -1,0 +1,82 @@
+---
+id: nix-dev-build
+postedAt: 2026-07-29T20:50:00-07:00
+title: "`nix-dev-build`: editing the nix fork without rebuilding the closure"
+tags: [nix-dev-build, tooling, nix, rust]
+links:
+  - label: packages/nix-dev-build
+    href: https://github.com/indexable-inc/index/tree/main/packages/nix-dev-build
+---
+
+Four sessions in one night iterated on the nix evaluator's C++ through a whole-package `nix build`, which recompiles the modular C++ closure in a sandbox for every one-line edit. The tree is a meson project and the fork's own manual documents the ninja loop, so that work was avoidable the whole time.
+
+`nix run .#nix-dev-build -- --checkout <path>` is that loop as one command. It finds the checkout, configures meson if the build directory is absent, runs ninja, and names the binary it produced.
+
+Two independent runs on the same 18 core aarch64-darwin Mac, each phase timed alone with the dev shell entry outside the span. Entry is 0.4 to 0.9s per invocation on top.
+
+| step | run A, load 13 to 24 | run B, load 7 to 10 |
+| --- | --- | --- |
+| `meson setup` | 12s | 11.9s |
+| first full build, 332 targets | 93s | 51.3s |
+| rebuild after touching one file | 18s, void, see below | 7.1 to 8.9s |
+| no-op rebuild | 1s | 0.1s |
+
+Both runs are real. The one-file row is the one to be careful with, and it took three sessions and a disagreement to pin down, because two different effects were being confused for one.
+
+**Which file you touch sets the cost.** At a load held between 7 and 8: 7.9s, 7.2s and 7.1s over three runs touching `src/libexpr/eval.cc`, 8.9s on `primops.cc`, 2.1s on `nixexpr.cc`. A 4x spread with load constant, so a single figure needs its file named or it reads as a promise about somebody else's file. Call it 2 to 9s for a body edit in libexpr. Run B recorded its file; run A did not.
+
+**The rebuild is serial, and contention doubles it, but load average will not tell you which you got.** The rebuild needs exactly one core, so a jobs flag earns nothing on a single-file edit: `ninja -j1` costs 7.03s and 7.34s against 6.36 to 6.80s at the default. Thirteen timings of the same `eval.cc` edit across an evening on a shared machine by two sessions, sorted by `real` over `user`:
+
+| real / user | real | reported 1 minute load |
+| --- | --- | --- |
+| 1.04 to 1.12, nine runs | 6.36 to 9.38s | 13.18 to 45.37 |
+| 1.49 to 1.62, four runs | 12.33 to 15.78s | 24.90 to 37.21 |
+
+The ratio separates fast from slow exactly. Load average does not, and the two ranges overlap almost completely: the fastest run of the night sat at a reported load of 39.24, a 15.78s run sat at 24.90, and three runs at a reported load of 42 to 45 came in at 6.77 to 7.55s. That is the instrument, not the machine. Load average is a decaying one minute mean and this rebuild is a seven second event, so it reports the minute that just ended and stays inflated for a minute after a burst of other work has finished.
+
+So report `real` and `user` together rather than load. And discard the first run only after an idle gap, which is narrower than the blanket rule an earlier revision of this entry gave: the 34% penalty, 9.06s against 6.77s steady, was measured on a first run after a gap, while three consecutive runs taken immediately after building showed no penalty at all, and a third set taken while building intermittently showed 10%.
+
+This entry twice claimed something stronger and both claims are withdrawn. First that the one-file spread was file size and not load, then that load explained it with a threshold at the core count. The file spread is real, measured back to back at constant conditions. The contention effect is real, and `real` over `user` is its signal. Reported load average predicts neither, which is why run A's rebuild row above is marked void rather than reinterpreted: it was taken above the load gate its own author was enforcing, its file was `eval.cc` like everyone else's, and no `user` time was recorded, so nothing in it can be classified.
+
+`user` inflates when contended too, 6.10s to 9.76s, so the same compile costs more processor time and not only more wall clock. Why is open, and the two obvious candidates turn out not to be independent on this part. `hw.nperflevels` is 2: `perflevel0` is 6 cores named `Super` with 128K L1d and 16M L2, `perflevel1` is 12 named `Performance` with 64K L1d and 8M L2, and there is no efficiency tier at all. A compile displaced to the lower tier therefore loses half its L1d and half its L2 as a consequence of moving, so displacement and cache pressure are the same explanation rather than competing ones. They separate only for the narrower case where the compile stays on `Super` and other processes evict its lines.
+
+Nothing here measures that the cache delta causes the 1.59x. Forcing the lowest tier with `taskpolicy -b` costs 2.5x in `user`, which is an upper bound rather than a measurement, because that flag drops scheduling priority as well as tier. Isolating it means pinning to `perflevel0` specifically, not changing quality of service, under contention, on a machine somebody has claimed.
+
+A body-only edit runs 3 of 10 edges and does not relink `src/nix/nix` at all, because the dylib symbol file is unchanged and the edit arrives through dynamic linking.
+
+The dependencies are not vendored here. Every run re-execs itself under `nix develop <checkout>#default`, so the compiler, meson, ninja and the libraries nix links against come from the checkout's own flake, and entering it costs 0.41s warm. The flake reference is a bare path rather than `path:<checkout>`, which matters more than it looks: a `path:` reference copies the whole directory into the store on every invocation, and in a checkout that has been built once that directory contains a 2.0G `build/`. A bare path resolves to `git+file://`, so `.gitignore` applies and the store copy is 17M.
+
+Anything scripting this loop by hand hits a trap the manual does not mention. `configurePhase` and `buildPhase` are stdenv shell functions, and under `nix develop --command bash -c` they are not defined: `type -t` prints nothing for both and the run dies with `configurePhase: command not found`. Drive `meson setup` and `ninja` directly instead, which is what this tool and `packages/nix-ninja-build` both do.
+
+## Which binary you built, and why `--version` will not tell you
+
+The report always names the absolute path, the checkout's revision, and the `nix` already on PATH:
+
+```
+built src/nix/nix in 8.6s
+
+  binary   /tmp/worktree/indexable-inc/nix/fastloop/build/src/nix/nix
+  version  nix (Nix) 2.34.7
+  tree     b20ed84bb
+  on PATH  /run/current-system/sw/bin/nix, nix (Nix) 2.34.7+ix.g8db4d3805919.h6eeae576
+```
+
+The version strings are the point. Meson takes the version from `.version`, so a checkout build of any branch prints a bare `nix (Nix) 2.34.7`, while the packaged `nix-ix` stamps its revision in. The build is therefore the one that looks stock, which is the opposite of the intuition, and a test like "does `--version` contain `+ix`" identifies the system nix rather than yours. Two builds of two different branches are indistinguishable by version string altogether. So the path and the revision are the identification, and both binaries are printed side by side so the difference cannot be misread.
+
+The revision is reported rather than compiled in on purpose. `nix-ninja-build` writes the version into `.version` in its scratch copy, which is the right answer there; doing it to a developer's checkout would modify a tracked file in their working tree.
+
+## What it refuses, and what it does not do
+
+There is no fallback to `nix build`. A ninja failure means the tree does not compile. A checkout that is not a nix source tree is refused, naming each marker it looked for and whether it was found. A build directory configured against a different checkout, or left broken by a failed configure, is refused rather than built through, since ninja's output in that case is confusing rather than wrong.
+
+`packages/nix-ninja-build` remains the other incremental lane and is not replaced. It materializes the packaged source into a scratch directory and turns each compilation unit into its own content-addressed derivation, on x86_64-linux only. This one builds the checkout you are editing, with local ninja, and is the only lane that works on aarch64-darwin.
+
+## The ccache advice in the fork manual does not hold on this tree
+
+The manual says to use `ccacheStdenv` to "drastically improve rebuild time", and `--shell native-ccacheStdenv` reaches it. On this tree it very nearly does nothing, and the obvious check for why is the wrong one: `ccache` is not on PATH in either shell, so its absence proves nothing either way. The compiler is the tell, and it does route through ccache, `clang++` resolving to `ccache-links-wrapper-4.12.1` against `clang-wrapper-21.1.7` in the default shell.
+
+ccache then declines almost every call. A full 332 target build through that shell recorded 17 cacheable calls out of 330, 5.15%, all misses on a cold cache, with 284 of the 313 uncacheable ones reported as `Could not use precompiled header`. The tree compiles with a precompiled header, and ccache will not cache such a compilation unless `sloppiness` includes `pch_defines,time_macros`. Setting that, or dropping the precompiled header, is what would make the advice true. Neither is done here.
+
+That also means the 34.3s first build measured through the ccache shell is not a caching win. The cache was cold with zero hits; the difference from 51.3s is machine load, 7 against 10 rising to 95.
+
+Stated plainly: the tool has only been run on aarch64-darwin. The Linux side is covered by the packaged build and the repo's checks, not by execution. A prompt rule pointing future sessions at this tool is proposed separately and is waiting on a human read, since it changes what every session follows.

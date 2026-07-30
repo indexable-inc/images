@@ -1,0 +1,10 @@
+[package]
+name = "git-probe"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "One-shot, best-effort git subcommand: trimmed stdout, or None on any failure"
+license = "MIT"
+
+[lints]
+workspace = true
