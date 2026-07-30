@@ -1,0 +1,386 @@
+---
+id: 0042-vm-templates
+number: '0042'
+title: VM templates, the systemd unit model
+status: Draft
+authors: Claude Opus 4.6 (AI agent), commissioned by andrewgazelka
+created: '2026-07-29'
+updated: '2026-07-29'
+trackingIssue: 'ix#9242'
+scores:
+  ambition: { value: 6, why: 'one new verb, but it introduces converged state the repo does not declare' }
+  impact: { value: 7, why: 'adding the fourth worker stops meaning editing a file and reviewing a diff' }
+  effort: { value: 6, why: 'CLI verb, a server-side record, and reconciliation in apply' }
+  risk: { value: 6, why: 'apply gains the power to re-render machines nobody declared' }
+  maturity: { value: 3, why: 'designed in full 2026-07-23, nothing implemented; the schema half is in flight' }
+  leverage: { value: 7, why: 'every template author gets --help and editor completion from annotations they already write' }
+  taste: { value: 7, why: 'the imperative/declarative split is the whole design, and systemd already solved it' }
+supersedes: null
+supersededBy: null
+description: 'Give `default.ix` a `templates` export: each template is a typed function from params to a VM. `ix new <template> <JSON>` instantiates one imperatively as `worker@3`, the server records template plus params, and every later `ix apply` re-renders each recorded instance from the current template. Existence is imperative; definition stays declarative.'
+---
+
+## Summary
+
+Add a `templates` export to `default.ix`. A template is a function from a params
+object to what `index.lib.mkVm` already returns. `ix new worker '{"port":9090}'`
+instantiates one as `worker@3`, the way systemd names `getty@tty3`. The server
+records the instance as **template name plus params plus source ref**, and every
+later `ix apply` re-renders each recorded instance from the *current* template
+definition with the *recorded* params.
+
+That last sentence is the design. Existence is imperative; definition stays
+declarative. Fix a bug in `worker.nix`, run `ix apply`, and all seven workers
+pick it up while keeping their own ports.
+
+Params are JSON, and typed: the params record carries ordinary `.ix` type
+annotations, and `ix new worker --help` plus a JSON Schema for `params.json`
+generate from those same annotations via
+[index#4447](https://github.com/indexable-inc/index/issues/4447).
+
+## Motivation
+
+**There is no way to add a fourth worker without editing a file.** Today
+`default.ix` exports fixed, named VMs, and the only imperative create is
+`ix apply <oci-image-ref>` with a pile of flags (`--name`, `--env`,
+`--secret-*`, `--l7-proxy-port`) that bypasses the config entirely. The flags
+*are* the config, and nothing remembers them as intent. `mkFleet` is deprecated
+off the product surface ([index#4077](https://github.com/indexable-inc/index/issues/4077),
+[index#4079](https://github.com/indexable-inc/index/issues/4079)), so "several
+similar VMs" means copy-pasting `mkVm` calls.
+
+**The reconciliation hole is the real cost, and fly.io demonstrates it.**
+`fly.toml` is declarative, `fly machine run` is imperative, and the two do not
+know about each other. A machine created by hand is invisible to the next
+deploy: it drifts, forever, silently. Every system that grows an imperative
+create path without a record ends up here.
+
+**This was designed once already and lost.** The full design was reached on
+2026-07-23 in a chat session, was never filed and never implemented, and
+recovering it took a sweep across 42 transcript files. This document is that
+recovery; the verbatim original is preserved in `ix#9242`.
+
+## Detailed design
+
+### The systemd map
+
+systemd got this split right: the unit *file* is declarative and versioned, but
+starting an *instance* of it is an imperative act the system then remembers.
+
+| systemd | ix equivalent |
+|---|---|
+| `foo.service` | named VM in `default.ix`, unchanged |
+| `foo@.service` template | `templates.worker`, a function in `default.ix` |
+| `systemctl start foo@bar` | `ix new worker bar` |
+| `%i` specifier | `instance`, injected into the params object as a real value |
+| drop-in `foo@bar.service.d/*.conf` | override layer on the instance record |
+| `systemctl edit` | `ix config edit worker@3` |
+| `systemctl cat` / `systemd-delta` | `ix config show worker@3`, with per-key provenance |
+| `systemctl enable` | the instance record itself |
+| `systemd-run` transient unit | `ix new --transient` |
+| preset files | the `instances` block in `default.ix` |
+| `daemon-reload` | `ix apply` |
+
+**Where the analogy breaks, on purpose.** A systemd unit is local, free, and
+stateless to restart. A VM is remote, billed by the hour, and has a disk people
+care about. Three consequences, each load-bearing:
+
+1. `ix apply` may re-converge instances but must never *create or destroy* an
+   instance it did not declare.
+2. Deleting a template from the repo orphans its instances with a loud warning
+   rather than collecting them. They are billed machines with disks.
+3. The override merge happens at eval time in one place, never as config
+   fragments scattered across guests.
+
+### Declaring a template
+
+```js
+// default.ix
+export default ({ index }) => {
+  const group = { ix: { networking: { groups: ["app"] } } };
+
+  const web = index.lib.mkVm({
+    name: "web",
+    deployment: { l7ProxyPorts: [443] },
+    modules: [import("./web.nix"), group],
+  });
+
+  return {
+    nixosConfigurations: { ...web.nixosConfigurations },
+
+    templates: {
+      // `instance` is systemd's %i, injected by ix. The annotation is what
+      // `ix new worker --help` and params.json completion are generated from.
+      worker: ({ instance, port = 8080, shards = 1 }: {
+        instance: nonEmptyStr;
+        port: port;
+        shards: ints.positive;
+      }) =>
+        index.lib.mkVm({
+          name: `worker@${instance}`,
+          deployment: { l7ProxyPorts: [port] },
+          modules: [
+            import("./worker.nix"),
+            group,
+            { services: { appWorker: { port, shards } } },
+          ],
+        }),
+    },
+
+    // Presets: instances pinned declaratively, created by `ix apply` like a
+    // named VM. Same template, no drift.
+    instances: {
+      "worker@1": { port: 8080 },
+    },
+  };
+};
+```
+
+**Why a function and not a data schema with substitution.** Kubernetes and fly
+encode templates as data and bolt a substitution language on top. `.ix` needs
+neither: the body computes, branches on params, and composes modules, and the
+eval machinery that already runs `default.ix` runs the function. A config with
+no `templates` key evaluates exactly as it does today.
+
+### Typed params
+
+A bare function has no declared schema: no `ix new worker --help`, no early type
+error, and a misspelled param silently takes the default. systemd does better,
+which is the objection this section answers.
+
+Nothing unsafe reaches a VM either way, because params flow into `mkVm` and the
+module system type-checks every option at eval time. The gap is purely where the
+error arrives: deep in an eval trace, naming a module option rather than your
+param, after nix has started.
+
+**The params record carries ordinary `.ix` annotations, and the schema is
+generated from them.** `packages/ix2nix/src/ty.rs` already parses those
+annotations; it lowers them to a `__ixTy` checker and discards the type AST.
+[index#4447](https://github.com/indexable-inc/index/issues/4447) inserts a
+serializable type representation in between, so one annotation yields three
+consumers: the eval-time check that exists today, `--help` text, and a JSON
+Schema.
+
+That buys, from a declaration the template author was going to write anyway:
+
+- `ix new worker --help`, rendered from the annotations;
+- boundary-time errors naming the param — *port must be 0 to 65535, got 99999* —
+  raised by the CLI in milliseconds, before nix starts;
+- an unknown param as a hard error rather than a silently applied default;
+- editor completion and validation of `params.json` from the generated schema.
+
+A bare untyped function stays legal, with its schema reported as "any attrset"
+and flagged in `--help` as unchecked, so the quick case stays quick.
+
+**Why not the module system, which [RFC 0008](/plans/0008-module-typed-builders)
+established as this repo's typed schema language.** 0008 is right about Nix-side
+builder arguments and this does not contradict it. It cannot serve this
+boundary, for one concrete reason: `ix new --help` and the rejection of a
+malformed `--set` must happen in the Rust CLI *before* a nix evaluation, and an
+`evalModules` schema is only readable by evaluating nix. ix2nix is already a
+Rust crate, so a schema derived from it is available to the CLI at
+zero cost. The generated-schema discipline is the same one 0008 applies — one
+declaration, every other artifact derived from it, never a second copy
+maintained by hand.
+
+Nickel stays where the original design put it: an optional later contracts layer
+*above* JSON for external param files. It evaluates to the same JSON values, so
+adding it later breaks nothing, and once ix-ty is introspectable a Nickel
+contract export is a third consumer of the same representation rather than a
+second type system. Note that a curated Nickel config schema was already
+proposed and closed as `NOT_PLANNED`
+([ix#8132](https://github.com/indexable-inc/ix/issues/8132), ENG-9345).
+
+### Instantiating
+
+```console
+$ ix new worker                                  # worker@2, next free ordinal, all defaults
+$ ix new worker --set port=9090 --set shards=4
+$ ix new worker 7 --set port=9090                # explicit instance: worker@7
+$ ix new devbox ml '{"repo":"github:acme/ml"}'   # inline JSON
+$ ix new devbox ml ./params.json
+$ ix new worker --transient                      # systemd-run semantics
+$ ix new worker --name ingest-eu --set port=9090 # opt out of @ naming
+```
+
+`--set k=v` is sugar for shallow keys, parsing the value as JSON first
+(`--set shards=4` is a number) and falling back to string.
+
+**Params are JSON. That is a position, not a preference.** A template's params
+are a Nix value, and JSON is the exact data subset of both Nix and `.ix`, so a
+literal or a file round-trips into the eval with no translation. Not YAML:
+implicit typing (the Norway problem, where an unquoted `no` becomes `false`),
+significant whitespace inside a CLI argument, and several incompatible dialects
+buy nothing, because nobody hand-maintains these as config files. They are call
+arguments.
+
+**What gets recorded**, server side, next to the VM row:
+
+```json
+{
+  "vm": "worker@7",
+  "template": "worker",
+  "params": { "port": 9090, "shards": 4 },
+  "source": { "ref": "github:acme/infra", "rev": "e4f1c2a", "workdir": "." },
+  "overrides": [],
+  "transient": false
+}
+```
+
+**What `ix new` actually does.** Resolve the config the way `ix apply` already
+does, validate params against the generated schema in the CLI, eval
+`templates.<name>` with `{ instance } + defaults + params`, then run the
+existing flake-converge create path from `commands/up.rs` with the rendered
+system, inside the create TUI that `tui/apps/new` already renders. The only new
+persistent artifact is the instance record: no new build path, no new image path.
+
+### Reconciliation
+
+The question that kills most designs like this: what does the next `ix apply` do
+to a VM someone created with `ix new`?
+
+- **Declared things converge as today.** Named VMs and the `instances` preset
+  block are created if missing and converged in place.
+- **Recorded instances re-render.** For every non-transient record whose
+  template lives in this config, apply evaluates the *current* template with the
+  *recorded* params plus overrides and converges that VM in place. This is
+  `systemctl enable` plus `daemon-reload`.
+- **`--transient` instances are invisible to apply.** Rendered once at creation,
+  never re-converged, deleted by `ix rm` with no record left. For experiments,
+  where "apply upgraded my scratch box mid-bisect" is a bug.
+- **Orphans warn, never die.** A renamed or deleted template leaves its
+  instances listed and running. The user deletes or re-adopts
+  (`ix config adopt worker@7 --template ingester`) explicitly.
+
+### Drop-in overrides
+
+```console
+$ ix config set worker@3 shards=8      # records an override, converges the VM
+$ ix config edit worker@3              # systemctl edit: opens merged params, stores the diff
+$ ix config show worker@3              # systemctl cat + systemd-delta in one
+
+worker@3   template worker   github:acme/infra @ e4f1c2a
+  port    9090    # ix new (2026-07-20)
+  shards  8       # override (2026-07-23), template default 1, ix new set 4
+```
+
+Merge order, lowest to highest: template defaults, creation params, overrides in
+recorded order. Every key says which layer won, so "why is this instance
+different" is one command.
+
+**Why overrides live server side and not in the repo.** systemd drop-ins are
+files because units are files. Instance state here is already server side, and
+putting overrides in the repo would make the repo lie: it would claim to define
+instances that exist only because someone ran a command. The repo owns the
+template, reviewed and versioned; the server owns existence and per-instance
+deltas, auditable and listable. Anything that graduates from an override into
+policy moves into the template or the `instances` block, and `ix config show`
+makes that drift visible rather than hiding it.
+
+### CLI surface
+
+```
+ix new <tmpl> [instance] [params.json | '{...}'] [--set k=v]... [--transient] [--name N] [--region R]
+ix apply                       # declared VMs + instances block + recorded instances
+ix apply .#worker@3            # converge exactly one instance
+ix apply --declared-only       # skip recorded instances (CI that must not touch hand-made VMs)
+ix config show|set|edit|adopt <vm>
+ix rm worker@3                 # VM and its record
+ix rm 'worker@*'               # all instances of a template, with confirmation
+```
+
+`ix ls` gains a TEMPLATE column.
+
+### Migration
+
+Nothing existing is touched. Configs without `templates` evaluate as before;
+`ix apply .#name`, bare `.`, OCI refs, and snapshot UUIDs keep their shapes and
+flag sets. `ix apply <oci-ref>` remains the escape hatch for imperative creates
+outside any config, and its flag pile is what templates exist to replace.
+
+**The verb slot is free, but only recently, and the copy has not caught up.**
+`crates/ix/cli/src/run/client_command/new_command.rs` implemented
+`ix new <image|snapshot-uuid>` on the `8071-terminal-landing` worktree, and the
+landing page terminal was built around a literal `❯ ix new` prompt.
+[ix#8134](https://github.com/indexable-inc/ix/issues/8134) (PR #8144) absorbed it
+into `ix apply`. Reusing the verb means auditing landing-page copy and docs from
+that era in the same change.
+
+## Drawbacks
+
+- **`ix apply` gains the power to re-render machines nobody declared.** That is
+  the feature, and it is also the blast radius: one template edit reaches every
+  instance on the next apply. A reader of the repo can no longer enumerate what
+  apply will touch from the repo alone.
+- **A new server-side record** that must survive VM migration and appear in
+  `ix history`.
+- **Params are visible to anyone who can read the VM**, which is why secrets
+  must not be params, and why that needs a mechanism rather than a sentence.
+- **Two ways to create a VM** for as long as `ix apply <oci-ref>` stays.
+- **The typed half depends on unshipped work.** Without index#4447, `ix new`
+  either ships untyped or grows its own schema surface, which is the outcome
+  this design exists to avoid.
+
+## Alternatives
+
+- **Do nothing.** Copy-paste `mkVm` calls, and reach for `ix apply <oci-ref>`
+  with flags for anything ad hoc. The drift stays invisible, which is the fly.io
+  outcome.
+- **Pure declarative, Terraform `for_each` style.** Powerful, and adding one
+  worker means editing code and re-planning the world. That friction is exactly
+  what `ix new` removes.
+- **Kubernetes Deployments: a replica count with anonymous instances.** Proven
+  at scale, and wrong here: ix instances are named and individually owned, which
+  is why systemd's `@` naming fits and a replica count does not.
+- **Module-option params instead of `.ix` annotations.** Discussed under Typed
+  params: it cannot give the Rust CLI a schema without a nix evaluation.
+- **Nickel as the params language.** Already proposed and closed
+  (ix#8132 / ENG-9345). It is a layer above JSON, not a replacement for it.
+
+## Prior art
+
+- **systemd** template units, drop-ins, `systemctl edit`, `systemd-delta`,
+  `systemd-run`. The whole design is a translation.
+- **fly.io**: the same imperative/declarative split, arrived at accidentally and
+  without a record. The hole this closes.
+- **Kubernetes** Deployments: template rendered per instance, controller
+  converges.
+- **NixOS specialisations**: variants as functions over a base config rather
+  than textual overlays.
+- **[RFC 0008](/plans/0008-module-typed-builders)**: one declaration, every
+  other artifact derived. Same discipline, different boundary.
+- **`packages/mkapp`**: the repo's only existing template system, and the source
+  of the `passthru.tests.scaffold` idea — a gate that refuses to emit an
+  incomplete scaffold.
+
+## Unresolved questions
+
+1. **Template-edit blast radius.** Should `ix apply` diff-preview per instance,
+   and should a record pin the rev it last converged to so `ix config show` can
+   say "3 applies behind"?
+2. **Secrets must not be params**, and that is currently a rule with no
+   mechanism. Templates should reference the existing `ix secret` store by name.
+   Should a param be markable as secret-ref typed, and should `ix new` reject
+   values that look like credentials?
+3. **Region: param or flag?** Leaning flag: region is placement, not
+   configuration, and mixing them makes templates non-portable.
+4. **Config identity.** What happens when the same template name exists in two
+   configs the user applies? Likely: records key on `(source, template)`, and
+   apply only touches its own.
+5. **Orphan re-adoption.** Is `ix config adopt` the right shape, or should a
+   renamed template carry a rename hint?
+
+## Future possibilities
+
+- **Instances of one template referencing instances of another.** Deliberately
+  out of scope for v1; templates that need `nodes` from *fixed* VMs already work.
+- **A Nickel contract export** as a third consumer of the ix-ty type
+  representation, for external param files that want ranges and cross-field
+  checks.
+- **Ambient `.d.ts` declarations** generated from the same representation, so an
+  editor type-checks a `.ix` file without a nix evaluation. `src/ty.rs:5` names
+  this as tsc's job and notes those declarations do not exist.
+- **A `templates` flake output.** `flake.nix:535` reads `templates = {};` and
+  RFC 0007 already reserved `templates.dev` for `ix dev init`. A starter
+  template that scaffolds a `default.ix` *containing* templates is the other half
+  of this story, and is a different feature from instantiating one.
