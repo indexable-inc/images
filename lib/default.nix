@@ -879,6 +879,19 @@
 
   importIx = importIxWasm;
 
+  /**
+  VM templates (RFC 0042 / ix#9242): renders a `default.ix` config's
+  `templates` + `instances` exports into VMs. Needs only `lib` and `errors` --
+  a template calls `index.lib.mkVm` itself, so nothing in there wants the
+  image machinery or a host system, which is also why it is not curried over
+  one the way `mkVmFor`/`mkDevFor` are.
+
+  Not to be confused with the flake's own `templates` output (`ix dev init`
+  scaffolds, RFC 0007): that one scaffolds a `default.ix`, this one
+  instantiates the templates inside one.
+  */
+  templates = import ./templates.nix {inherit lib errors;};
+
   inherit
     (import ./discovery.nix {
       inherit
@@ -937,6 +950,7 @@
         pkgs
         portableServices
         system
+        templates
         uvLockFor
         ;
 

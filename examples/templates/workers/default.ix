@@ -1,0 +1,67 @@
+// One `worker` template, two instances of it, and one ordinary named VM:
+//
+//   ix apply .#web .#worker-1 .#worker-2
+//
+// A template is a FUNCTION from params to a VM, not a directory of files with
+// a substitution language over it: the body computes, branches, and composes
+// modules, because the evaluator that already runs this file runs it too.
+//
+// The `instances` block is systemd's preset file. Those instances are declared
+// in the repo, so a plain `ix apply` creates and converges them exactly like
+// the named VM next to them. RFC 0042's imperative half (`ix new worker --set
+// port=9000`, recorded server-side and re-rendered by later applies) is not
+// built yet, and nothing here waits for it.
+export default ({ index }) => {
+  // One private east-west network for everything in this example.
+  const group = { ix: { networking: { groups: ["templates-workers"] } } };
+
+  const web = index.lib.mkVm({
+    name: "web",
+    modules: [import("./web.nix"), group],
+  });
+
+  return {
+    nixosConfigurations: { ...web.nixosConfigurations },
+    // The named VM's own result (plan, lifecycle wrappers) for tooling, the
+    // way every other example exposes it. The instances' equivalents come
+    // back from `index.lib.templates.renderConfig` in flake.nix instead,
+    // keyed by instance name rather than node name.
+    vms: { web: web },
+
+    templates: {
+      // `instance` is systemd's %i, the id after the `@`. `name` is the node
+      // name ix derives from it (`worker@2` -> `worker-2`), injected so that
+      // spelling lives in one place instead of in every template: `@` is
+      // illegal in a hostname and means "digest" in an OCI reference, so the
+      // instance name and the VM name cannot be the same string.
+      //
+      // Params are untyped here. Annotating them (`port: port;
+      // shards: ints.positive`) is what index#4447 unlocks, at which point the
+      // one annotation also generates `ix new worker --help` and a JSON schema
+      // for a params file. Until then a wrong param is still caught -- nix
+      // rejects an unexpected argument by name, and the module system types
+      // everything the params reach -- just later and further from the typo.
+      worker: ({ instance, name, port = 8080, shards = 1 }) =>
+        index.lib.mkVm({
+          name: name,
+          modules: [
+            import("./worker.nix"),
+            group,
+            // Params reach the guest as one module argument named after the
+            // template, which worker.nix destructures. The alternative is a
+            // NixOS option per param, and that is a second schema to maintain
+            // for values the template already names.
+            { _module: { args: { worker: { instance, port, shards } } } },
+          ],
+        }),
+    },
+
+    // worker@1 takes every default; worker@2 overrides both params. Two VMs
+    // from one definition that still differ where they are meant to, which is
+    // the property copy-pasted mkVm calls cannot keep.
+    instances: {
+      "worker@1": {},
+      "worker@2": { port: 8081, shards: 4 },
+    },
+  };
+};

@@ -1,0 +1,30 @@
+---
+id: vm-templates-instances
+postedAt: 2026-07-29T14:10:00-07:00
+title: "A `default.ix` can declare VM `templates` and pin `instances` of them"
+tags: [nix, vm, templates, examples]
+links:
+  - label: RFC 0042
+    href: https://ix.dev/plans/0042-vm-templates
+  - label: lib/templates.nix
+    href: https://github.com/indexable-inc/index/blob/main/lib/templates.nix
+  - label: examples/templates/workers
+    href: https://github.com/indexable-inc/index/tree/main/examples/templates/workers
+---
+
+A `default.ix` can now export `templates`, each one a function from params to what `index.lib.mkVm` returns, plus an `instances` block that pins instances of them in the repo. `index.lib.templates.renderConfig` renders every declared instance through its template and merges the result with the config's named VMs, so a plain `ix apply` creates them and cannot tell which VM came from where.
+
+```js
+templates: {
+  worker: ({ instance, name, port = 8080, shards = 1 }) =>
+    index.lib.mkVm({ name: name, modules: [import("./worker.nix")] }),
+},
+instances: {
+  "worker@1": {},
+  "worker@2": { port: 8081, shards: 4 },
+},
+```
+
+`worker@1` is the instance name, systemd's spelling; `worker-1` is the VM. They differ because they must: `@` is not legal in a `networking.hostName` and introduces a digest in an OCI reference. The node name is derived once and injected as the `name` param, so a template body is `index.lib.mkVm({ name, ... })` and one that names its VM anything else is refused with the reason.
+
+Params are unchecked at the boundary in this version — nix still refuses an unexpected param by name, and the module system types everything a param reaches. Generating `ix new worker --help` and a JSON schema from the same annotation needs index#4447. The imperative half of RFC 0042 (`ix new`, a server-side instance record, and apply re-rendering recorded instances) is not built; a config exporting neither key evaluates exactly as it did before.

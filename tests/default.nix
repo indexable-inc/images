@@ -2232,7 +2232,100 @@
       };
     };
   in {
+    # The config's own return value, for the `vm-templates` group's
+    # pass-through assertion: a config exporting no `templates` must come back
+    # out of `renderConfig` exactly as it went in, and checking that against a
+    # real config rather than a literal is what keeps it true as this one
+    # changes.
+    inherit example;
     gateway.config = example.vms.gateway.nodes.gateway;
+  };
+
+  # VM templates, RFC 0042 / ix#9242: a config's `templates` + `instances`
+  # exports rendered through `index.lib.templates`. Two halves here. The
+  # example is the real path -- one config through `renderConfig`, with every
+  # rendered node's toplevel forced in the assertions below. The stubs are the
+  # guards, one deliberate mistake each, because a guard nobody has watched
+  # fail is not a guard.
+  vmTemplatesExample = let
+    example = ix.importIx (paths.examples + "/templates/workers/default.ix") {
+      index = {
+        lib = ix;
+      };
+    };
+    rendered = ix.templates.renderConfig example;
+    # A template's entire contract is "returns what mkVm returns", so a stub
+    # returning that shape reaches every guard without evaluating a NixOS
+    # closure.
+    stubs = {
+      worker = {
+        instance,
+        name,
+        port ? 8080,
+      }: {
+        nixosConfigurations."${name}" = {inherit instance port;};
+      };
+      # Names its VM the way RFC 0042 writes it (`worker@1`). That string
+      # fails nixpkgs' `networking.hostName` type, so catching it at this
+      # boundary is the difference between one line and a module-system trace.
+      atNamed = {instance, ...}: {
+        nixosConfigurations."worker@${instance}" = {};
+      };
+      # Forgets `instance`, so every instance of it renders the same node and
+      # a plain `//` merge keeps only the last, silently.
+      collapsing = _: {nixosConfigurations.worker = {};};
+    };
+    # Hand-picked rather than generated: the repo has no Nix property-test
+    # framework (hegel is Python/Hypothesis, and this is pure eval), so a
+    # generator would mean writing one first. This is the adversarial table a
+    # generator would have to be steered into anyway -- the node separator
+    # inside either half, both halves one character, digits, underscores, and
+    # the pair whose node names collide.
+    roundTripPairs = [
+      {
+        template = "worker";
+        instance = "1";
+      }
+      {
+        template = "worker-pool";
+        instance = "1";
+      }
+      {
+        template = "worker";
+        instance = "pool-1";
+      }
+      {
+        template = "w";
+        instance = "e";
+      }
+      {
+        template = "worker_pool";
+        instance = "eu_west_1";
+      }
+      {
+        template = "9lives";
+        instance = "0";
+      }
+      {
+        template = "a-b_c";
+        instance = "1-2_3";
+      }
+    ];
+  in {
+    inherit rendered roundTripPairs;
+    nodeNames = builtins.attrNames rendered.nixosConfigurations;
+    nodeOf = pair: (ix.templates.parseInstanceName (ix.templates.instanceNameOf pair)).node;
+    shardsOf = node: rendered.nixosConfigurations."${node}".config.services.nginx.appendConfig;
+    portOf = node: rendered.nixosConfigurations."${node}".config.ix.networking.expose.http.port;
+    render = args: ix.templates.renderInstance ({templates = stubs;} // args);
+    renderStubConfig = config: ix.templates.renderConfig (config // {templates = stubs;});
+    # `tryEval` catches `throw` and a failed `assert`, which is what every
+    # guard in lib/templates.nix raises. It does NOT catch nix's own
+    # unexpected-argument error, which is why an unknown param is not asserted
+    # here: `renderInstance` leaves that case to nix deliberately, since
+    # `builtins.functionArgs` cannot tell `{ a, ... }` from `{ a }`
+    # (index#4447 is the checked, pre-eval version).
+    throws = expression: !(builtins.tryEval expression).success;
   };
 
   k8sK3sExample = let
@@ -4069,6 +4162,173 @@
             "api-2:8080"
           ];
         message = "multi-vm-microservices gateway should resolve every api VM through the mkVm peer seam";
+      }
+    ];
+
+    vm-templates = [
+      {
+        # The whole of the mapping the ix CLI half will depend on: an instance
+        # name splits at its `@`, and the node name rejoins the halves with the
+        # separator a DNS label allows. Nothing else in either repo is allowed
+        # to rediscover this.
+        assertion =
+          ix.templates.parseInstanceName "worker-pool@eu_1"
+          == {
+            template = "worker-pool";
+            instance = "eu_1";
+            node = "worker-pool-eu_1";
+          };
+        message = "an instance name should split at its @ and rejoin as a DNS-label node name";
+      }
+      {
+        # The round trip, over the adversarial table rather than one name:
+        # every (template, instance) pair survives being spelled as an instance
+        # name and parsed back. Written with no separator literal on either
+        # side, so it holds the two functions against each other rather than
+        # against a constant restated here. The non-empty guard is not
+        # decoration: `lib.all` over an empty list is true, which is how a
+        # table that stopped being populated would read as a pass.
+        assertion =
+          vmTemplatesExample.roundTripPairs
+          != []
+          && lib.all (
+            pair: let
+              parsed = ix.templates.parseInstanceName (ix.templates.instanceNameOf pair);
+            in
+              {inherit (parsed) template instance;} == pair
+          )
+          vmTemplatesExample.roundTripPairs;
+        message = "every template/instance pair should survive being spelled as an instance name and parsed back";
+      }
+      {
+        # Why there are two spellings at all, made executable rather than
+        # argued. These two pairs have different instance names and the SAME
+        # node name, so a node name cannot be parsed back into its halves and
+        # `-` could not have been the instance separator. This is the check
+        # that would have caught the ambiguity if anyone had reached for `-`.
+        assertion = let
+          pool = {
+            template = "worker-pool";
+            instance = "1";
+          };
+          nested = {
+            template = "worker";
+            instance = "pool-1";
+          };
+        in
+          ix.templates.instanceNameOf pool
+          != ix.templates.instanceNameOf nested
+          && vmTemplatesExample.nodeOf pool == vmTemplatesExample.nodeOf nested;
+        message = "an instance name should be injective where a node name is not, which is why the two separators differ";
+      }
+      {
+        assertion = lib.all vmTemplatesExample.throws [
+          (ix.templates.parseInstanceName "worker")
+          (ix.templates.parseInstanceName "worker-1")
+          (ix.templates.parseInstanceName "@1")
+          (ix.templates.parseInstanceName "worker@")
+          (ix.templates.parseInstanceName "worker@a@b")
+          (ix.templates.parseInstanceName "worker@a/b")
+          (ix.templates.parseInstanceName "-worker@1")
+        ];
+        message = "a malformed instance name, a node name included, should be refused at the parse rather than by a hostname option four layers down";
+      }
+      {
+        assertion = vmTemplatesExample.throws (vmTemplatesExample.render {name = "atNamed@1";});
+        message = "a template naming its VM worker@1 should be refused: @ is legal in neither a hostname nor an OCI repository";
+      }
+      {
+        assertion = vmTemplatesExample.throws (
+          vmTemplatesExample.renderStubConfig {
+            instances = {
+              "collapsing@1" = {};
+              "collapsing@2" = {};
+            };
+          }
+        );
+        message = "a template that ignores its instance id should be refused, not silently render one VM for two instances";
+      }
+      {
+        assertion = vmTemplatesExample.throws (
+          vmTemplatesExample.renderStubConfig {
+            nixosConfigurations.worker-1 = {};
+            instances."worker@1" = {};
+          }
+        );
+        message = "an instance whose node name collides with a named VM should be refused, not merged over it";
+      }
+      {
+        assertion = vmTemplatesExample.throws (vmTemplatesExample.render {name = "workr@1";});
+        message = "an unknown template name should be refused with the available names listed";
+      }
+      {
+        assertion = vmTemplatesExample.throws (
+          vmTemplatesExample.render {
+            name = "worker@1";
+            params = {instance = "9";};
+          }
+        );
+        message = "params that restate the injected instance identity should be refused rather than silently winning or losing";
+      }
+      {
+        assertion = vmTemplatesExample.throws (ix.templates.renderConfig {instances."worker@1" = {};});
+        message = "an instances block with no templates to render it should be refused";
+      }
+      {
+        # The property every config written before this feature relies on:
+        # `renderConfig` over a config exporting neither key is the identity on
+        # `nixosConfigurations`. This is what makes adding the seam to a
+        # flake.nix safe before there is anything for it to render.
+        assertion = let
+          passthrough = ix.templates.renderConfig multiVmMicroservicesExample.example;
+        in
+          builtins.attrNames passthrough.nixosConfigurations
+          == builtins.attrNames multiVmMicroservicesExample.example.nixosConfigurations
+          && passthrough.instances == {};
+        message = "a config exporting no templates should render exactly the VMs it already declares, and no instances";
+      }
+      {
+        # Guard the guard, by name rather than by count: an empty
+        # `nixosConfigurations` would make the next assertion vacuously true,
+        # and a count would break the moment somebody adds an instance to the
+        # example, which is the digit the example exists to be able to turn.
+        assertion = lib.all (node: builtins.elem node vmTemplatesExample.nodeNames) [
+          "web"
+          "worker-1"
+          "worker-2"
+        ];
+        message = "the templates-workers example should render its named VM and both declared instances";
+      }
+      {
+        # Forces the whole module system for every rendered node without
+        # building any of it: the drvPath string still has to be computed, so a
+        # type error, a missing attribute or a port collision throws here,
+        # while `unsafeDiscardStringContext` keeps the check from depending on
+        # those closures. It costs seconds and it is what makes changing a
+        # template as safe as changing a named VM.
+        assertion =
+          lib.all (
+            entry:
+              builtins.isString (
+                builtins.unsafeDiscardStringContext entry.config.system.build.toplevel.drvPath
+              )
+          )
+          (builtins.attrValues vmTemplatesExample.rendered.nixosConfigurations);
+        message = "every VM the templates-workers example renders should evaluate to a system derivation";
+      }
+      {
+        # Params have to reach the guest, template default and instance
+        # override alike: worker@1 declares no params at all and worker@2 sets
+        # both. Two mechanisms, deliberately: `shards` lands in a generated
+        # nginx directive and `port` in the option that opens the firewall and
+        # claims the port.
+        assertion =
+          vmTemplatesExample.shardsOf "worker-1"
+          == "worker_processes 1;"
+          && vmTemplatesExample.shardsOf "worker-2" == "worker_processes 4;"
+          && vmTemplatesExample.portOf "worker-1" == 8080
+          && vmTemplatesExample.portOf "worker-2" == 8081;
+        message = "a template default and an instance override should both reach the rendered guest";
       }
     ];
 
