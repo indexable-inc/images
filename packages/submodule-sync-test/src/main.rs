@@ -293,6 +293,15 @@ struct Fixture {
     subs: Vec<Submodule>,
 }
 
+/// What `run_pr_path` observed a worker do: the `gh` calls it made, and the
+/// body it wrote for `gh` to post, read back from the `--body-file` it passed.
+struct PrPathObservation {
+    /// Every `gh` invocation the worker made, in order.
+    calls: Vec<String>,
+    /// Contents of the file named by the first `--body-file` argument found.
+    body: String,
+}
+
 impl Fixture {
     /// Lay out the repositories and extract the step under test.
     fn new(tmp: PathBuf, workflow: &Path, report_jq: PathBuf) -> Result<Self> {
@@ -525,7 +534,7 @@ impl Fixture {
     /// not from a filename this test knows, so the argument is checked by being
     /// used. Nothing here touches `ix/main`: this path pushes the rolling
     /// branch, which is why it makes no claim about the pins on main.
-    fn run_pr_path(&self, open_pr: &str) -> Result<(Vec<String>, String)> {
+    fn run_pr_path(&self, open_pr: &str) -> Result<PrPathObservation> {
         let log = self.tmp.join("gh-calls");
         fs::write(&log, "")?;
         self.run_worker(&[
@@ -540,11 +549,10 @@ impl Fixture {
         let body_file = calls
             .iter()
             .filter_map(|call| call.split(" --body-file ").nth(1))
-            .filter_map(|rest| rest.split(' ').next())
-            .next()
+            .find_map(|rest| rest.split(' ').next())
             .ok_or_else(|| eyre!("no gh call passed --body-file; calls were {calls:#?}"))?;
         let body = fs::read_to_string(body_file)?;
-        Ok((calls, body))
+        Ok(PrPathObservation { calls, body })
     }
 
     /// Rewrite `ix/main`'s lock so one source's node already records `rev`,
@@ -680,13 +688,13 @@ fn pr_path_reports_into_the_pull_request(fx: &mut Fixture) -> Result<()> {
     let tip = fx.tip_of("index")?;
     let moves = [("index", old.as_str(), tip.as_str())];
 
-    let (calls, body) = fx.run_pr_path("")?;
+    let PrPathObservation { calls, body } = fx.run_pr_path("")?;
     assert_lists(&body, &moves, "pull request body")?;
     if !calls.iter().any(|call| call.starts_with("pr create ")) {
         bail!("no open PR, yet the run opened none; gh calls were {calls:#?}");
     }
 
-    let (calls, body) = fx.run_pr_path("7")?;
+    let PrPathObservation { calls, body } = fx.run_pr_path("7")?;
     assert_lists(&body, &moves, "refreshed pull request body")?;
     if !calls.iter().any(|call| call.starts_with("pr edit 7 ")) {
         bail!("PR 7 was open, yet its body was never refreshed; gh calls were {calls:#?}");
