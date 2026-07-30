@@ -124,7 +124,7 @@ so Nix demands `b` however the annotation marked it -- while the schema, reading
 the `?`, reported `b` optional. A `params.json` omitting `b` validated and then
 died at eval with `called without required argument 'b'`: exactly the failure
 the schema exists to prevent, shipped inside the change that claimed to prevent
-it. Caught in review of #4450, fixed in #4456.
+it. Caught in review of #4450, fixed in #4459.
 
 Both halves are now required to agree, in both directions, and the converter
 says which one is missing:
