@@ -6,13 +6,32 @@
 //! writes and an editor completes. `type` aliases land in `$defs`, so a named
 //! type stays named in the schema too.
 //!
-//! Four of the type spellings cannot be carried across faithfully: `drv` and
-//! function types have no JSON form at all, `path` keeps only its
-//! absolute-string branch, and `float` cannot be narrowed away from `int`.
-//! Each is decided explicitly below, naming what a consumer gives up, because
-//! the failure mode of guessing is silent: a schema wider than the eval-time
-//! check green-lights a params file that then fails at eval, and a narrower one
-//! rejects data the module would have accepted.
+//! # What the document describes
+//!
+//! The schema states **what the annotation asserts**, not what today's checker
+//! verifies. The two differ because `ix-ty.nix` stops at weak head normal form
+//! (#4451): `listOf string` checks "is a list" and never looks at an element,
+//! and `attrs` reads required field *names* and never checks a field's type. So
+//! `items`, `additionalProperties`, and `properties` are all **stricter** than
+//! the check that runs, deliberately -- `string[]` does mean a list of strings,
+//! and a schema that dropped `items` to match the checker's current reach would
+//! describe the gap instead of the type.
+//!
+//! The one thing the schema must not do is assert something the annotation
+//! never said. That is why an object type stays open: `{ a: int }` in
+//! TypeScript is a lower bound, not a closed record, and `attrs` matches it, so
+//! `additionalProperties: false` would be an invention rather than a
+//! tightening. Strictness beyond the checker is fine when the annotation says
+//! it; strictness the annotation never said is not.
+//!
+//! # Where the mapping is lossy
+//!
+//! Four spellings cannot be carried across faithfully: `drv` and function types
+//! have no JSON form at all, `path` keeps only its absolute-string branch, and
+//! `float` cannot be narrowed away from `int`. Each is decided explicitly
+//! below, naming what a consumer gives up, because the failure mode of guessing
+//! is silent: a schema wider than the annotation green-lights a params file
+//! that then fails at eval, and a narrower one rejects data the module accepts.
 
 use serde_json::{Map, Value, json};
 
@@ -28,7 +47,9 @@ const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 ///
 /// Panics if `serde_json` cannot serialize the assembled document, which no
 /// [`ModuleTypes`] can cause: every keyword below is already a
-/// [`serde_json::Value`].
+/// [`serde_json::Value`], and the one value that could have been lossy -- a
+/// non-finite float literal, which serializes to `null` without erroring -- is
+/// rejected at parse time by [`crate::map`].
 #[must_use]
 pub fn document(types: &ModuleTypes) -> String {
     // The root constrains the argument of `export default`. Nix functions
@@ -148,9 +169,11 @@ fn object(fields: &[Field]) -> Map<String, Value> {
         .map(|field| field.name.clone().into())
         .collect();
 
-    // No `additionalProperties: false`. `ix-ty.nix`'s `attrs` checker reads
-    // required field NAMES and permits extras, so forbidding them here would
-    // reject a params file the module accepts.
+    // No `additionalProperties: false`: a TypeScript object type is a lower
+    // bound, and `ix-ty.nix`'s `attrs` checker agrees, so closing the record
+    // would assert something neither the annotation nor the runtime says. Note
+    // this is not the same call as dropping `items` from a list would be --
+    // see the module header on strictness the annotation did say.
     let mut out = keywords([
         ("type", "object".into()),
         ("properties", Value::Object(properties)),
@@ -175,6 +198,9 @@ fn literal(literal: &Literal) -> Value {
     match literal {
         Literal::Str(text) => text.clone().into(),
         Literal::Int(value) => (*value).into(),
+        // `serde_json` maps a non-finite float to `null` rather than failing,
+        // which would put a silent `null` in an `enum`. Safe only because
+        // [`crate::map`] refuses a literal that overflows to infinity.
         Literal::Float(value) => json!(value),
         Literal::Bool(value) => (*value).into(),
     }

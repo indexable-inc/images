@@ -1,6 +1,6 @@
 ---
 id: ix-ty-json-schema
-postedAt: "2026-07-29"
+postedAt: 2026-07-29T12:00:00-07:00
 title: a .ix module's type annotations now generate a JSON Schema
 links:
   - label: "index#4447"
@@ -28,9 +28,18 @@ property is what blocked three separate things at once: a JSON Schema for
 An annotation now parses once into `ix2nix::ty::Ty` -- plain data -- and lowers
 twice, from the same value produced by the same pass:
 
-- `src/checker.rs` emits the `__ixTy` expression, byte-identical to before.
-  The golden files did not move.
+- `src/checker.rs` emits the `__ixTy` expression.
 - `src/schema.rs` emits the schema.
+
+Every `.ix` file in the tree converts to the same bytes it did before, checked
+by running both converters over all 55 of them. That is a narrower claim than
+"byte-identical", which is false: five classes of input behave differently, and
+none of them appears in the tree. Four are now rejected that used to convert --
+`readonly` on a property signature, a duplicate field in an object type, a
+float literal that overflows to infinity (it emitted `inf.0`, which is not Nix),
+and a destructured field whose `?` disagrees with its Nix default. One is now
+accepted that used to be rejected: a destructured field's type may use a
+string-literal key, `({ a }: { "a": int })`.
 
 One traversal, two outputs. A separate pass over the annotations for the schema
 could have described a type the emitted checks do not enforce, which is the one
@@ -64,7 +73,25 @@ with only `$schema` on it: an empty schema says "nothing is known about this
 argument", which is the truth, and is not the same claim as "this module takes
 nothing".
 
-## four places the schema and the checker deliberately disagree
+## the schema describes the annotation, not the checker
+
+`ix-ty.nix` stops at weak head normal form: `listOf string` checks "is a list"
+and never looks at an element, and `attrs` reads required field *names* and
+never checks a field's type. The schema does not copy that limit. `items`,
+`additionalProperties`, and `properties` all constrain things the checker never
+inspects, so the published schema is **stricter** than the check that runs --
+deliberately, because `string[]` does mean a list of strings, and a schema that
+dropped `items` to match the checker's reach would describe the gap instead of
+the type. Closing that gap is #4451.
+
+The line the schema does not cross is asserting something the annotation never
+said. That is why an object type stays open rather than gaining
+`additionalProperties: false`: a TypeScript object type is a lower bound, not a
+closed record, and `attrs` agrees, so closing it would be an invention rather
+than a tightening. Strictness the annotation stated is fine; strictness it never
+stated is not. Those are the same principle, not opposite calls.
+
+## four places the mapping is lossy
 
 Each is commented at the decision in `src/schema.rs`, because the failure mode
 of guessing is silent -- a schema wider than the eval-time check green-lights a
@@ -86,18 +113,46 @@ would have taken.
   schema `false` with room for a reason, and the person who needs the reason is
   the one staring at their editor's error on the field. A `drv`-typed field
   cannot be filled from a params file at all -- only from Nix.
-- **Object schemas stay open.** No `additionalProperties: false`, because
-  `ix-ty.nix`'s `attrs` checker reads required field *names* and permits
-  extras. Closing the object here would reject a params file the module
-  accepts.
+- **Object schemas stay open**, for the reason in the section above: the
+  annotation never said the record was closed.
+
+## the `?` and the Nix default are one fact
+
+A destructured parameter has two places to say a field is optional, and only one
+of them reaches Nix. `({ a, b }: { a: int; b?: string })` renders `{ a, b }:`,
+so Nix demands `b` however the annotation marked it -- while the schema, reading
+the `?`, reported `b` optional. A `params.json` omitting `b` validated and then
+died at eval with `called without required argument 'b'`: exactly the failure
+the schema exists to prevent, shipped inside the change that claimed to prevent
+it. Caught in review of #4450, fixed in #4459.
+
+Both halves are now required to agree, in both directions, and the converter
+says which one is missing:
+
+```
+error: `port?` needs a default in the pattern (`{ port = null }`); without one
+Nix requires the field whatever the annotation says. For a field that is always
+passed but may be null, write `port: T | null`
+  --> 1:54
+```
+
+Rejecting beats picking a winner. Deriving `required` from the pattern instead
+would leave the `?` decorative, and it still lies in the mirror spelling: a
+pattern default under a non-optional annotation lets Nix bind the default and
+then fails the field's own check on it. With the two required to agree,
+`required` follows from the annotation by construction. The cost is one
+spelling: `{ a, b }: { a: int; b?: string }` no longer converts, and the meaning
+it was reaching for -- always passed, possibly null -- is `b: string | null`,
+which says so exactly and always worked.
 
 ## what is still missing
 
-Deep checking. `ix-ty.nix` still stops at weak head normal form, so
-`__ixTy.listOf __ixTy.string` checks "is a list" and never looks at an element,
-while the schema it generates says `"items": {"type": "string"}`. A params file
-that passes eval can still carry `hosts = [ 1 2 ]`. That is the other half of
-#4447 and it is filed separately.
+Deep checking, per the strictness note above: a params file that passes eval can
+still carry `hosts = [ 1 2 ]` against a `string[]` annotation. #4451.
+
+A `--help` renderer still cannot reach a template's parameters, because
+`ModuleTypes.parameters` describes the `export default` arrow only, and a
+template is a function nested in the attrset that arrow returns. #4453.
 
 ## smaller things in the same change
 

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 /// Every `.ix` fixture in the directory. Pinned so a rename or a lost sibling
 /// shows up as a failure rather than as a harness that matched nothing.
-const FIXTURES: usize = 14;
+const FIXTURES: usize = 15;
 
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden")

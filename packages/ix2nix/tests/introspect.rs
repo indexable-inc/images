@@ -3,7 +3,7 @@
 //! explaining.
 
 use ix2nix::ty::{Field, Parameter, Ty};
-use ix2nix::{schema, types};
+use ix2nix::{convert, schema, types};
 
 fn parameters(source: &str) -> Vec<Parameter> {
     types(source).expect("source should convert").parameters
@@ -118,4 +118,23 @@ fn a_parenthesized_default_export_keeps_its_signature() {
             "{source}"
         );
     }
+}
+
+#[test]
+fn a_destructured_optional_field_is_optional_in_both_outputs() {
+    // The defect this pins: the schema read the annotation's `?` while Nix read
+    // the pattern's default, so a field could be reported optional and be
+    // mandatory, and a params.json omitting it validated and then failed at
+    // eval. The converter now refuses the mismatched spelling, which is what
+    // makes reading `required` off the annotation sound.
+    let source = "export default ({ a, b = null }: { a: int; b?: string }) => a;\n";
+
+    let nix = convert(source).expect("converts");
+    assert!(nix.contains("{ a, b ? null }"), "{nix}");
+
+    let document: serde_json::Value =
+        serde_json::from_str(&schema(source).expect("converts")).expect("schema is JSON");
+    let required = document["required"].as_array().expect("required is a list");
+    assert_eq!(required, &[serde_json::json!("a")], "{document:#}");
+    assert!(document["properties"]["b"].is_object(), "{document:#}");
 }

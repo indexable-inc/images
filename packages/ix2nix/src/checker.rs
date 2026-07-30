@@ -35,7 +35,7 @@ fn str_lit(text: String) -> Expr {
 }
 
 /// The checker expression for one type.
-pub(crate) fn checker(ty: &Ty) -> Expr {
+pub fn checker(ty: &Ty) -> Expr {
     match ty {
         Ty::Any => runtime("any"),
         Ty::Str => runtime("string"),
@@ -96,7 +96,7 @@ fn nullable(ty: Expr) -> Expr {
 /// `__ixTy.arg "<loc>" <ty> <value> <body>`: checks `value`, then is `body`.
 /// Parameter checks wrap the innermost body, where every curried parameter
 /// is in scope.
-pub(crate) fn arg_check(loc: String, ty: Expr, value: Expr, body: Expr) -> Expr {
+pub fn arg_check(loc: String, ty: Expr, value: Expr, body: Expr) -> Expr {
     apply(
         apply(apply(apply(runtime("arg"), str_lit(loc)), ty), value),
         body,
@@ -106,7 +106,7 @@ pub(crate) fn arg_check(loc: String, ty: Expr, value: Expr, body: Expr) -> Expr 
 /// The `let` binding carrying a `type X = ...` alias checker. The `'` is
 /// valid in Nix identifiers but not JavaScript ones, so alias bindings can
 /// never collide with `const` bindings.
-pub(crate) fn alias_binding(name: &str) -> String {
+pub fn alias_binding(name: &str) -> String {
     format!("ty'{name}")
 }
 

@@ -62,6 +62,11 @@ fn destructured_parameter_checks_bound_fields() {
 fn destructured_annotation_must_be_inline_and_bound() {
     let error = diagnostic("type T = { a: int };\nexport default ({ a }: T) => a;\n");
     assert!(error.message().contains("inline object type"), "{error}");
+    // Must name the other annotatable spelling too. An author reaching for the
+    // cross product (destructured pattern, alias annotation) is reaching for
+    // the shape that reads most naturally and does not exist, so being told
+    // only that it is wrong leaves them guessing.
+    assert!(error.message().contains("(params: Params)"), "{error}");
     let error = diagnostic("export default ({ a }: { b: int }) => a;\n");
     assert!(error.message().contains("not bound by the pattern"), "{error}");
 }
@@ -95,6 +100,76 @@ fn lib_types_refinements_lower_to_runtime_checkers() {
     let out = nix("export default (p: port, d: path, s: nonEmptyStr, u: u32) => p;\n");
     for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyStr", "__ixTy.u32"] {
         assert!(out.contains(checker), "{checker} missing in {out}");
+    }
+}
+
+#[test]
+fn destructured_optional_must_pair_with_a_nix_default() {
+    // `{ a, b }` renders `{ a, b }:`, so Nix demands `b` whatever the
+    // annotation says -- and the generated schema, reading only the `?`, would
+    // have told a caller it was optional.
+    let error = diagnostic("export default ({ a, b }: { a: int; b?: string }) => a;\n");
+    assert!(error.message().contains("needs a default in the pattern"), "{error}");
+    // The mirror spelling lies the other way: the default binds and then fails
+    // the field's own check.
+    let error = diagnostic("export default ({ a, b = null }: { a: int; b: string }) => a;\n");
+    assert!(error.message().contains("type must be optional"), "{error}");
+}
+
+#[test]
+fn an_alias_may_be_referenced_before_it_is_declared() {
+    // Why `map::module` collects alias names in a pass of its own: an
+    // annotation anywhere may name an alias declared later, and the emitted
+    // `let` is recursive so order does not matter. Untested until now, and the
+    // failure mode is a `ty'P` reference with no binding, i.e. an `undefined
+    // variable` at eval rather than anything the converter would report.
+    let out = nix("export default (x: P) => x;\ntype P = int;\n");
+    assert!(out.contains("ty'P = __ixTy.int"), "{out}");
+    assert!(out.contains("ty'P x"), "{out}");
+}
+
+#[test]
+fn a_const_cannot_collide_with_an_alias_binding() {
+    // `alias_binding` spells `ty'P` and claims a `const` can never collide,
+    // because `'` is legal in a Nix identifier but not a JavaScript one. That
+    // rests on the parser, so pin it: the collision is unspellable in source.
+    let error = diagnostic("const ty'P = 1;\nexport default 1;\n");
+    assert!(error.message().starts_with("parse error"), "{error}");
+}
+
+#[test]
+fn an_unspellable_bound_field_name_is_rejected_at_the_pattern() {
+    // The field check emits the bound name as a bare Nix identifier, so a
+    // binder that is not one has to be refused. Both of these are legal
+    // JavaScript identifiers and neither is a legal Nix one.
+    for source in [
+        "export default ({ then }: { then: int }) => 1;\n",
+        "export default ({ $x }: { $x: int }) => 1;\n",
+    ] {
+        let error = diagnostic(source);
+        assert!(
+            error.message().contains("not a valid Nix identifier"),
+            "{source}: {error}"
+        );
+        assert_eq!(error.column(), 19, "{source}: {error}");
+    }
+}
+
+#[test]
+fn readonly_property_signatures_are_rejected() {
+    // No Nix meaning, and accepting it silently shifted a destructured field's
+    // reported column from the key to the `readonly` keyword.
+    let error = diagnostic("export default ({ a }: { readonly a: int }) => a;\n");
+    assert!(error.message().contains("`readonly` has no Nix equivalent"), "{error}");
+}
+
+#[test]
+fn float_literals_that_overflow_to_infinity_are_rejected() {
+    // `inf.0` is not Nix syntax, and it serializes into a JSON Schema as
+    // `null`. One check at the parse covers both positions.
+    for source in ["export default 1e999;\n", "export default (x: 1e999 | 2) => x;\n"] {
+        let error = diagnostic(source);
+        assert!(error.message().contains("overflows to infinity"), "{source}: {error}");
     }
 }
 

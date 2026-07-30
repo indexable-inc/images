@@ -14,7 +14,7 @@ use crate::nix::{
     Attr, BinaryOp, Binding, Expr, LetBinding, Module, Param, PatternField, StrPart, UnaryOp,
     is_bare_ident,
 };
-use crate::ty::{BUILTIN_TYPES, ModuleTypes, Parameter, Ty, TypeAlias};
+use crate::ty::{BUILTIN_TYPES, Field, ModuleTypes, Parameter, Ty, TypeAlias};
 
 /// The two products of the one mapping pass: the Nix module [`crate::render`]
 /// prints, and the type description [`crate::schema`] reads.
@@ -292,6 +292,16 @@ impl Mapper<'_> {
         let parsed = if let Some(radix) = radix {
             i64::from_str_radix(&digits[2..], radix).ok()
         } else if digits.contains(['.', 'e', 'E']) {
+            // `1e999` parses to infinity, which renders as `inf.0` -- not Nix
+            // syntax -- and serializes into a JSON Schema as `null`, with no
+            // error either way. Rejected here rather than at each output, so
+            // one check covers a value and a literal type alike.
+            if !lit.value.is_finite() {
+                return Err(self.err(
+                    lit.span,
+                    "float literal overflows to infinity; Nix has no infinite float",
+                ));
+            }
             return Ok(Number::Float(lit.value));
         } else {
             digits.parse().ok()
@@ -569,8 +579,16 @@ impl Mapper<'_> {
                 let ast::TSType::TSTypeLiteral(literal) = &annotation.type_annotation else {
                     return Err(self.err(
                         annotation.span,
+                        // Names both annotatable spellings, not just this one.
+                        // The cross product -- a destructured pattern with an
+                        // alias annotation -- is the shape that reads most
+                        // naturally and is the one that does not exist, so an
+                        // author who reaches for it needs to be pointed at the
+                        // alternative rather than only told this is wrong.
                         "a destructured parameter needs an inline object type \
-                         (`({ a }: { a: T })`); there is no binding for the whole set",
+                         (`({ a }: { a: T })`); there is no binding for the whole \
+                         set. To annotate with a `type` alias, take one named \
+                         parameter instead: `(params: Params)`",
                     ));
                 };
                 // Walks the members rather than calling `self.ty` on the whole
@@ -580,16 +598,13 @@ impl Mapper<'_> {
                 for member in &literal.members {
                     let field = self.field(member)?;
                     self.reject_duplicate_field(&fields, &field, member.span())?;
-                    // A pattern binds identifiers, so an unspellable field
-                    // name can never be `bound` and never reaches `Expr::Ident`
-                    // below.
-                    let bound = object.properties.iter().any(|bound| {
+                    let bound = object.properties.iter().find(|bound| {
                         matches!(
                             &bound.key,
                             ast::PropertyKey::StaticIdentifier(name) if name.name.as_str() == field.name
                         )
                     });
-                    if !bound {
+                    let Some(bound) = bound else {
                         return Err(self.err(
                             member.span(),
                             format!(
@@ -598,7 +613,15 @@ impl Mapper<'_> {
                                 field.name
                             ),
                         ));
-                    }
+                    };
+                    self.reject_unpaired_optional(&field, bound, member.span())?;
+                    // The check below reads the bound name as a bare Nix
+                    // identifier, which is only valid if it is spellable as
+                    // one. `object_param` rejects an unspellable binder too,
+                    // later, when it renders the pattern -- but a line's
+                    // justification belongs on that line, not in a backstop
+                    // three functions away.
+                    let binder = self.checked_name(bound.span, &field.name)?;
                     // An optional field's Nix default (conventionally `null`)
                     // binds when the caller omits it; `T | null` is the type
                     // the bound name actually has. The recorded field keeps
@@ -610,10 +633,14 @@ impl Mapper<'_> {
                         field.ty.clone()
                     };
                     checks.push(ParamCheck {
+                        // `member.span()` starts at the key, because
+                        // `readonly` -- the only modifier a property signature
+                        // can carry -- is rejected in `Mapper::field`. That is
+                        // what keeps the reported column the key's own.
                         loc: self
                             .check_loc(member.span(), &format!("argument field `{}`", field.name)),
                         ty: checked,
-                        value: Expr::Ident(field.name.clone()),
+                        value: Expr::Ident(binder),
                     });
                     fields.push(field);
                 }
@@ -623,6 +650,66 @@ impl Mapper<'_> {
                 other.span(),
                 "this parameter shape cannot carry a type annotation",
             )),
+        }
+    }
+
+    /// Requires a destructured field's `?` marker and its Nix default to agree.
+    ///
+    /// The check just above lowers `b?: T` to `nullable T`, and that lowering is
+    /// only correct if the pattern carries `b = null`: the whole reason a bound
+    /// optional field can be null is that its Nix default binds when the caller
+    /// omits it. The converter used to emit that check on the strength of the
+    /// assumption and never verify it, which is the actual defect here -- a
+    /// property of the pattern asserted in a comment with nothing enforcing it.
+    ///
+    /// Two symptoms followed. The generated schema read `required` off the `?`
+    /// and reported a field optional that `{ a, b }:` makes mandatory, so a
+    /// `params.json` omitting it validated and then died at eval with `called
+    /// without required argument 'b'`. And in the other direction, a `nullable`
+    /// check sat on a field that can never be absent, quietly accepting a `null`
+    /// the author never meant to allow.
+    ///
+    /// Rejecting is the fix rather than deriving the schema's `required` from
+    /// the pattern: that would stop the schema reporting the contradiction
+    /// while leaving it in the emitted checker, which fixes the instrument and
+    /// not the fault. The mirror spelling lies the same way anyway -- a pattern
+    /// default under a non-optional annotation lets Nix bind the default and
+    /// then fails the field's own check on it -- so deriving from either half
+    /// alone leaves the other decorative. With the two required to agree, both
+    /// the `nullable` lowering and the schema's `required` are justified by
+    /// something the converter has actually checked.
+    ///
+    /// What this gives up: `{ a, b }: { a: int; b?: string }` no longer
+    /// converts. The meaning it was reaching for -- present but possibly null
+    /// -- is `b: string | null`, which says so exactly and always worked.
+    fn reject_unpaired_optional(
+        &self,
+        field: &Field,
+        bound: &ast::BindingProperty<'_>,
+        span: Span,
+    ) -> Result<(), Error> {
+        let defaulted = matches!(&bound.value, ast::BindingPattern::AssignmentPattern(_));
+        match (field.optional, defaulted) {
+            (true, false) => Err(self.err(
+                span,
+                format!(
+                    "`{name}?` needs a default in the pattern (`{{ {name} = null }}`); \
+                     without one Nix requires the field whatever the annotation says. \
+                     For a field that is always passed but may be null, write \
+                     `{name}: T | null`",
+                    name = field.name
+                ),
+            )),
+            (false, true) => Err(self.err(
+                span,
+                format!(
+                    "`{name}` has a default in the pattern, so its type must be \
+                     optional (`{name}?: T`); otherwise the default binds and then \
+                     fails this field's own check",
+                    name = field.name
+                ),
+            )),
+            _ => Ok(()),
         }
     }
 
