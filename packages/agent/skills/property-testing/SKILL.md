@@ -40,6 +40,15 @@ In rough order of value per line:
   randomness; otherwise the property tests your generator, not the code.
   Two real generator traps from ix2nix: `${...}` interpolation only exists
   inside backtick templates, and `=> {}` is a block, not an object literal.
+- The generator, not the assertion, is where a property fails silently: one
+  that iterates a collected set passes when the set is always empty. Breaking
+  the code under test does not catch that, so invert a new property once,
+  watch it fail, then restore. ix2nix's `$ref`-resolution property passed with
+  `assert!(refs(&parsed).is_empty())` in place of its real assertion, proving
+  no generated schema ever carried a `$ref`. Two causes, one of them a
+  production bug: the generator's type vocabulary omitted the alias name, and
+  `export default ((a: int) => a)` recorded no parameters because the mapper
+  matched the arrow without peeling the parenthesis.
 - A composite generator is a function returning `impl Generator<T>` built
   from `.map` over `hegel::tuples!(...)`; `#[hegel::composite]` exists for
   the draw-style equivalent.
