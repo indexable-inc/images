@@ -263,6 +263,34 @@
     };
   }
   {
+    nixCheckoutLoop = {
+      topics = ["verification" "tooling"];
+      text = ''
+        Editing the nix fork's C++: `nix-dev-build` recompiles only what
+        changed, 8.6s for a one-file edit, where a whole-package `nix build`
+        recompiles the closure. The first run configures meson inside the
+        checkout's own dev shell; later runs are ninja. Driving that loop by
+        hand calls `meson setup` and `ninja` directly, because `configurePhase`
+        and `buildPhase` are stdenv shell functions that `nix develop --command
+        bash -c` leaves undefined, failing with `configurePhase: command not
+        found`. A checkout build's `--version` carries no revision, so identify
+        the binary you measured by path and revision, never by version string.
+      '';
+      reason = ''
+        On 2026-07-29 four sessions iterated on the evaluator through a
+        whole-package `nix build`, recompiling the closure for each one-line
+        edit, while the fork's own manual documents the ninja loop. Measured on
+        an 18 core Mac: 11.9s to configure, 51.3s for the first build of all 332
+        targets, 8.6s after touching src/libexpr/eval.cc, 0.1s for a no-op. The
+        configurePhase clause is here because a session lost time to it the same
+        night: the manual names the phases and does not say they are undefined
+        outside an interactive shell. The version clause is here because the
+        packaged nix-ix prints its revision and a checkout build does not, so
+        two builds of two branches read the same and neither says which it is.
+      '';
+    };
+  }
+  {
     provenanceLookup = {
       topics = ["verification" "tooling"];
       text = ''
