@@ -60,7 +60,11 @@ tree:
   to). A package with its own README leads the mirror with it verbatim --
   the skill already makes it open with an `assets/hero.svg` and a hook, and
   the assets ride along -- behind a banner naming the mirror a read-only
-  generated artifact (exact monorepo tree link, issues/PRs to the monorepo);
+  generated artifact (issues/PRs to the monorepo, and a tree link pinned to
+  the last monorepo commit that *changed the package*, not the monorepo HEAD:
+  a HEAD-derived sha lives inside the mirrored tree, so it rewrote every
+  mirror's README on every sync run and made "commit only on a real change"
+  vacuous);
   a derived Install section is appended only when the body has none
   (flake-exposed -> `nix run github:indexable-inc/index#<attr>`, binary ->
   `cargo install --git`, library -> a git-dependency snippet). A package
