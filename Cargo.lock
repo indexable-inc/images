@@ -4592,6 +4592,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-probe"
+version = "0.1.0"
+
+[[package]]
 name = "git2"
 version = "0.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5680,6 +5684,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "git-probe",
  "libc",
  "nix 0.31.3",
  "serde",
@@ -7487,6 +7492,7 @@ dependencies = [
  "anyhow",
  "clap",
  "error-chain",
+ "git-probe",
  "serde",
  "serde_json",
  "tempfile",
