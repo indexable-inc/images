@@ -44,9 +44,13 @@ know it.
   # legal DNS-label material. Checking it here rather than letting nixpkgs'
   # `networking.hostName` type reject the joined string is what makes the
   # error name the `instances` key that caused it, instead of an option two
-  # module layers down. index#4447 is what will let a template DECLARE this
-  # (`instance: nonEmptyStr`) and have the Rust CLI reject a bad `--set`
-  # before nix starts; until then this is the only place it is checked.
+  # module layers down. A template can now DECLARE this (`instance: nonEmptyStr`)
+  # and have the generated JSON Schema carry it -- index#4450 shipped the
+  # generator -- but only for a params record spelled as one named parameter: an
+  # alias cannot annotate a destructured pattern, and an inline annotation never
+  # reaches the schema document. So a CLI that rejects a bad `--set` before nix
+  # starts is possible and not yet built, and this stays the only place the
+  # instance id is checked.
   nameFragment = "[[:alnum:]][[:alnum:]_-]*";
 
   /**
@@ -120,8 +124,10 @@ know it.
   `{ a = false; }`), so an eval-side strict-params check would reject a
   template that legally accepts extra keys -- and nix already rejects an
   unexpected param naming it, and a missing required one likewise. The checked
-  version of this boundary is the CLI's, pre-eval, from generated schema:
-  index#4447.
+  version of this boundary is the CLI's, pre-eval, against the JSON Schema
+  ix2nix now generates from the same annotations (index#4450); the template in
+  `examples/templates/workers` carries none yet, and RFC 0042's Typed params
+  section states what an annotated one would and would not buy today.
   */
   renderInstance = {
     templates,

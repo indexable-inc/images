@@ -12,7 +12,7 @@ scores:
   impact: { value: 7, why: 'adding the fourth worker stops meaning editing a file and reviewing a diff' }
   effort: { value: 6, why: 'CLI verb, a server-side record, and reconciliation in apply' }
   risk: { value: 6, why: 'apply gains the power to re-render machines nobody declared' }
-  maturity: { value: 4, why: 'the declarative half ships: templates + instances exports, rendered by index.lib.templates, with a worked example and an eval gate. ix new, the instance record and reconciliation are unbuilt; the schema half is in flight' }
+  maturity: { value: 4, why: 'the declarative half ships: templates + instances exports, rendered by index.lib.templates, with a worked example and an eval gate. The schema generator ships too (index#4450). ix new, the instance record and reconciliation are unbuilt, and a template params type still cannot be both destructured and schema-reachable' }
   leverage: { value: 7, why: 'every template author gets --help and editor completion from annotations they already write' }
   taste: { value: 7, why: 'the imperative/declarative split is the whole design, and systemd already solved it' }
 supersedes: null
@@ -35,8 +35,9 @@ pick it up while keeping their own ports.
 
 Params are JSON, and typed: the params record carries ordinary `.ix` type
 annotations, and `ix new worker --help` plus a JSON Schema for `params.json`
-generate from those same annotations via
-[index#4447](https://github.com/indexable-inc/index/issues/4447).
+generate from those same annotations. The generator shipped in
+[index#4450](https://github.com/indexable-inc/index/pull/4450); see Typed params
+for the two gaps that remain, neither of which is introspection.
 
 ## Motivation
 
@@ -117,11 +118,15 @@ export default ({ index }) => {
       // injected by ix -- see "Two names for one instance" below for why the
       // template does not build the name itself. The annotation is what
       // `ix new worker --help` and params.json completion are generated from.
+      // `u32`, not nixpkgs' `ints.positive`: a qualified type name has no
+      // runtime lowering and ix2nix rejects it. The built-ins are int, float,
+      // u8/u16/u32/i8/i16/i32, port, path, nonEmptyStr, drv,
+      // Record<string, T>, and this module's own `type` aliases.
       worker: ({ instance, name, port = 8080, shards = 1 }: {
         instance: nonEmptyStr;
         name: nonEmptyStr;
         port: port;
-        shards: ints.positive;
+        shards: u32;
       }) =>
         index.lib.mkVm({
           name: name,
@@ -216,23 +221,89 @@ error arrives: deep in an eval trace, naming a module option rather than your
 param, after nix has started.
 
 **The params record carries ordinary `.ix` annotations, and the schema is
-generated from them.** `packages/ix2nix/src/ty.rs` already parses those
-annotations; it lowers them to a `__ixTy` checker and discards the type AST.
-[index#4447](https://github.com/indexable-inc/index/issues/4447) inserts a
-serializable type representation in between, so one annotation yields three
-consumers: the eval-time check that exists today, `--help` text, and a JSON
-Schema.
+generated from them. That generator now exists.**
+[index#4450](https://github.com/indexable-inc/index/pull/4450) made `ix-ty`
+introspectable: an annotation parses once into `ix2nix::ty::Ty`, plain data, and
+lowers twice from that one value — `src/checker.rs` emits the byte-identical
+`__ixTy` expression that already checked at eval time, and `src/schema.rs` emits
+a draft 2020-12 JSON Schema. Range refinements survive the trip, so `port`
+becomes `minimum: 0, maximum: 65535` rather than `integer`. index#4447 is closed.
 
 That buys, from a declaration the template author was going to write anyway:
 
-- `ix new worker --help`, rendered from the annotations;
+- editor completion and validation of `params.json`, from the generated schema —
+  **available now**, via `ix2nix --schema` or the `builtins.wasm` `schema` export;
 - boundary-time errors naming the param — *port must be 0 to 65535, got 99999* —
   raised by the CLI in milliseconds, before nix starts;
-- an unknown param as a hard error rather than a silently applied default;
-- editor completion and validation of `params.json` from the generated schema.
+- `ix new worker --help`, rendered from the same `Ty`;
+- an unknown param as a hard error rather than a silently applied default.
+
+The last three are CLI work, and they wait on `ix new` existing rather than on
+anything about types.
 
 A bare untyped function stays legal, with its schema reported as "any attrset"
-and flagged in `--help` as unchecked, so the quick case stays quick.
+and flagged in `--help` as unchecked, so the quick case stays quick. That is what
+the worked example above is: `examples/templates/workers` ships unannotated, and
+its params are still checked, only later — nix refuses an unexpected argument by
+name, and the module system types everything a param reaches.
+
+**Two gaps remain, and neither is about introspection.**
+
+First, `__ixTy` checks the position it annotates but not inside a composite: a
+value typed `listOf int` is checked to be a list, and its elements are not, so
+the eval-time check is currently weaker than the schema it generates.
+[index#4451](https://github.com/indexable-inc/index/issues/4451) closes that.
+
+Second, and specific to templates: **a template author has to choose between the
+readable params spelling and a schema-reachable one.** The schema document
+describes the argument of `export default`, which for a `default.ix` is
+`{ index }` — not the params of a function nested inside the returned attrset,
+which is exactly where a template's params live. What does reach the document is
+every `type` alias, whether the root refers to it or not. But an alias cannot
+annotate a destructured parameter:
+
+```console
+$ ix2nix < worker.ix
+error: a destructured parameter needs an inline object type (`({ a }: { a: T })`);
+       there is no binding for the whole set
+   --> 11:59
+   |
+11 |       worker: ({ instance, name, port = 8080, shards = 1 }: WorkerParams) =>
+   |                                                           ^
+```
+
+So `({ instance, name, port = 8080 }: { … })` — the form this document has used
+throughout, with a default per key — is checked at eval time and invisible to the
+schema, while `(params: WorkerParams)` is in `$defs` and gives up destructuring,
+so every default becomes `params.port or 8080` in the body. Measured on a
+two-template probe, one annotated each way:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "WorkerParams": {
+      "type": "object",
+      "properties": {
+        "instance": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "shards": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      },
+      "required": ["instance", "name"]
+    }
+  }
+}
+```
+
+The root is empty, the named alias is complete and correctly refined down to
+`port`'s bounds, and the inline-annotated template appears nowhere.
+
+`ix new worker --help` is therefore buildable today, against `#/$defs/<Name>` and
+a naming convention, for templates written the second way. Closing it properly
+wants two things from ix2nix: an alias usable on a destructured parameter, and an
+emitted mapping from template name to params schema, so that no consumer has to
+guess which `$defs` entry belongs to which template.
 
 **Why not the module system, which [RFC 0008](/plans/0008-module-typed-builders)
 established as this repo's typed schema language.** 0008 is right about Nix-side
@@ -247,8 +318,8 @@ maintained by hand.
 
 Nickel stays where the original design put it: an optional later contracts layer
 *above* JSON for external param files. It evaluates to the same JSON values, so
-adding it later breaks nothing, and once ix-ty is introspectable a Nickel
-contract export is a third consumer of the same representation rather than a
+adding it later breaks nothing, and now that ix-ty is introspectable a Nickel
+contract export is a third lowering of the same `Ty` rather than a
 second type system. Note that a curated Nickel config schema was already
 proposed and closed as `NOT_PLANNED`
 ([ix#8132](https://github.com/indexable-inc/ix/issues/8132), ENG-9345).
@@ -391,9 +462,11 @@ that era in the same change.
 - **Params are visible to anyone who can read the VM**, which is why secrets
   must not be params, and why that needs a mechanism rather than a sentence.
 - **Two ways to create a VM** for as long as `ix apply <oci-ref>` stays.
-- **The typed half depends on unshipped work.** Without index#4447, `ix new`
-  either ships untyped or grows its own schema surface, which is the outcome
-  this design exists to avoid.
+- **The typed half is half shipped.** The schema generator exists (index#4450),
+  so `ix new` no longer risks growing its own schema surface. What is left is
+  narrower, and stated under Typed params: deep checking of data positions
+  (index#4451), and a template's params reaching the generated document only if
+  the author gives up destructuring in order to name their type.
 
 ## Alternatives
 
@@ -448,12 +521,13 @@ that era in the same change.
 
 - **Instances of one template referencing instances of another.** Deliberately
   out of scope for v1; templates that need `nodes` from *fixed* VMs already work.
-- **A Nickel contract export** as a third consumer of the ix-ty type
-  representation, for external param files that want ranges and cross-field
+- **A Nickel contract export** as a third lowering of `Ty`, beside the checker
+  and the JSON Schema, for external param files that want ranges and cross-field
   checks.
-- **Ambient `.d.ts` declarations** generated from the same representation, so an
-  editor type-checks a `.ix` file without a nix evaluation. `src/ty.rs:5` names
-  this as tsc's job and notes those declarations do not exist.
+- **Ambient `.d.ts` declarations** generated from the same `Ty`, so an editor
+  type-checks a `.ix` file without a nix evaluation. `packages/ix2nix/src/ty.rs`
+  says of the static half that "tsc against ambient declarations still never runs
+  here".
 - **A `templates` flake output.** `flake.nix:535` reads `templates = {};` and
   RFC 0007 already reserved `templates.dev` for `ix dev init`. A starter
   template that scaffolds a `default.ix` *containing* templates is the other half

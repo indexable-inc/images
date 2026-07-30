@@ -44,9 +44,15 @@ Two things this version deliberately cannot do:
 - **Type its params.** `port` and `shards` are unchecked at the boundary. A
   misspelled param is still caught (nix refuses an unexpected argument by name,
   and the module system types everything a param reaches), just later and
-  further from the typo. Annotating the params record generates `--help` and a
-  JSON schema from the same declaration, and needs
-  [index#4447](https://github.com/indexable-inc/index/issues/4447).
+  further from the typo. Annotating them would check them at eval time and
+  generate a JSON Schema from the same declaration
+  ([index#4450](https://github.com/indexable-inc/index/pull/4450) shipped that
+  generator) — but the schema only carries a template's params when they are one
+  named parameter, because an alias cannot annotate a destructured pattern and an
+  inline annotation never reaches the document. Trading `port = 8080` for
+  `params.port or 8080` to buy editor completion is not obviously worth it, so
+  this example stays untyped until
+  [RFC 0042](https://ix.dev/plans/0042-vm-templates)'s Typed params gap closes.
 
 ## Two names for one instance
 

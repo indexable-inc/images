@@ -2323,8 +2323,9 @@
     # guard in lib/templates.nix raises. It does NOT catch nix's own
     # unexpected-argument error, which is why an unknown param is not asserted
     # here: `renderInstance` leaves that case to nix deliberately, since
-    # `builtins.functionArgs` cannot tell `{ a, ... }` from `{ a }`
-    # (index#4447 is the checked, pre-eval version).
+    # `builtins.functionArgs` cannot tell `{ a, ... }` from `{ a }`. The
+    # checked, pre-eval version is the CLI's, against the schema ix2nix
+    # generates from a template's annotations (index#4450).
     throws = expression: !(builtins.tryEval expression).success;
   };
 
