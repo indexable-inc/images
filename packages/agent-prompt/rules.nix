@@ -268,13 +268,16 @@
       text = ''
         Editing the nix fork's C++: `nix-dev-build` recompiles only what
         changed, 2 to 9s for a one-file edit, where a whole-package `nix build`
-        recompiles the closure. The first run configures meson inside the
-        checkout's own dev shell; later runs are ninja. Driving that loop by
-        hand calls `meson setup` and `ninja` directly, because `configurePhase`
-        and `buildPhase` are stdenv shell functions that `nix develop --command
-        bash -c` leaves undefined, failing with `configurePhase: command not
-        found`. A checkout build's `--version` carries no revision, so identify
-        the binary you measured by path and revision, never by version string.
+        recompiles the closure. That cost is set by the translation unit, not by
+        `-j`, since one file rebuilds serially; load is free until it passes the
+        core count and roughly doubles the wall clock past it. The first run
+        configures meson inside the checkout's own dev shell; later runs are
+        ninja. Driving that loop by hand calls `meson setup` and `ninja`
+        directly, because `configurePhase` and `buildPhase` are stdenv shell
+        functions that `nix develop --command bash -c` leaves undefined, failing
+        with `configurePhase: command not found`. A checkout build's `--version`
+        carries no revision, so identify the binary you measured by path and
+        revision, never by version string.
       '';
       reason = ''
         On 2026-07-29 four sessions iterated on the evaluator through a
@@ -284,7 +287,13 @@
         targets, 0.1s for a no-op, and for a one-file edit 7.1 to 7.9s over three
         runs on src/libexpr/eval.cc, 8.9s on primops.cc, 2.1s on nixexpr.cc. The
         range is in the text because the translation unit dominates: a single
-        number invites the reader to treat their own file as the same cost. The
+        number invites the reader to treat their own file as the same cost. Two
+        sessions disagreed over whether load explained that spread, and the
+        answer was a threshold: across load 13.2 to 18.4 on 18 cores the same
+        edit is flat at 6.36 to 6.80s with real over user at 1.05, and at load 25
+        it is 13.1 to 15.8s with the ratio at 1.5 to 1.6. `ninja -j1` costs
+        almost nothing over the default, which is why the flag is called out as
+        useless here and why load below the core count is free. The
         configurePhase clause is here because a session lost time to it the same
         night: the manual names the phases and does not say they are undefined
         outside an interactive shell. The version clause is here because the
