@@ -267,7 +267,7 @@
       topics = ["verification" "tooling"];
       text = ''
         Editing the nix fork's C++: `nix-dev-build` recompiles only what
-        changed, 8.6s for a one-file edit, where a whole-package `nix build`
+        changed, 2 to 9s for a one-file edit, where a whole-package `nix build`
         recompiles the closure. The first run configures meson inside the
         checkout's own dev shell; later runs are ninja. Driving that loop by
         hand calls `meson setup` and `ninja` directly, because `configurePhase`
@@ -281,7 +281,10 @@
         whole-package `nix build`, recompiling the closure for each one-line
         edit, while the fork's own manual documents the ninja loop. Measured on
         an 18 core Mac: 11.9s to configure, 51.3s for the first build of all 332
-        targets, 8.6s after touching src/libexpr/eval.cc, 0.1s for a no-op. The
+        targets, 0.1s for a no-op, and for a one-file edit 7.1 to 7.9s over three
+        runs on src/libexpr/eval.cc, 8.9s on primops.cc, 2.1s on nixexpr.cc. The
+        range is in the text because the translation unit dominates: a single
+        number invites the reader to treat their own file as the same cost. The
         configurePhase clause is here because a session lost time to it the same
         night: the manual names the phases and does not say they are undefined
         outside an interactive shell. The version clause is here because the
