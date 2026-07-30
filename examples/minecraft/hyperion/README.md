@@ -570,6 +570,37 @@ resolved DNS workaround changed no existing node's system at all -- re-applying
 switches and restarts nothing, and the only new closure is the third proxy.
 Worth doing before any apply that claims to be a no-op.
 
+Compare `drvPath`, and only `drvPath`. Everything in this fleet is a
+content-addressed derivation, which breaks the two comparisons you would reach
+for first:
+
+- **`outPath` is a placeholder, not a path.** `nix eval .#...smash.outPath`
+  returns `/0rr9ly5rvixfvxzdrphms8722jikwmqq5m12rwvhk62d517ql1bk`. It is not a
+  store path, it does not exist, and it is the same shape for every CA
+  derivation, so two different builds compare equal.
+- **`nix path-info --deriver` returns the *resolved* drv, not the evaluated
+  one.** A CA build rewrites its input placeholders into real paths and records
+  that resolved derivation as the deriver. So the deriver of a running binary
+  legitimately differs from the `drvPath` your eval just produced, and the
+  difference is not drift.
+
+Both failures look exactly like a stale pin, which is the problem: they are
+loudest when nothing is wrong. To tie a running artifact to a revision, resolve
+the realisation of the evaluated derivation and compare store paths:
+
+    $ nix eval --raw --impure --expr '(builtins.getFlake
+        "path:/path/to/index/examples/minecraft/hyperion").inputs.hyperion.packages.x86_64-linux.smash.drvPath'
+    /nix/store/3y6c24fgz20s2s4iwjiya010mz71ifyk-smash-0.1.0.drv
+
+    $ nix path-info --json '/nix/store/3y6c24fgz20s2s4iwjiya010mz71ifyk-smash-0.1.0.drv^out'
+    {"/nix/store/nvm38n41rsipjak0gbzjxvfxz8ddm66n-smash-0.1.0": ...}
+
+    $ ix shell hyperion-game -- sh -c 'systemctl cat hyperion-game-server.service' | grep ExecStart
+    ExecStart=/nix/store/nvm38n41rsipjak0gbzjxvfxz8ddm66n-smash-0.1.0/bin/smash ...
+
+The `drv^out` suffix is the whole trick: it asks the realisation, which is the
+only thing that knows which output a CA derivation actually produced.
+
 The same trick checks that the replicas really are interchangeable rather than
 merely evaluating. `nix derivation show` on two of them differs in 2 of 17 input
 derivations, `etc` and `activate`, and in exactly two attributes, `name` and the
