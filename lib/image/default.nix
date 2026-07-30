@@ -157,6 +157,11 @@
           # issuing its own jobs over (ENG-11080). Its own file because
           # the VM test that proves it cannot import platform.nix.
           (paths.modules + "/system/dbus-survives-mount-removal")
+          # Restores /tmp to 1777 on every activation. The image root has it
+          # 0555 and ix's injected PID 1 mounts a tmpfs over it, so the mode
+          # is only exposed when that mount is retired -- which is the switch
+          # the module above made survivable (ENG-11080).
+          (paths.modules + "/system/tmp-stays-writable")
           ./oci-layer.nix
           ./cas-layer.nix
           # Home Manager as a NixOS module. Per-tool XDG config (Nushell,

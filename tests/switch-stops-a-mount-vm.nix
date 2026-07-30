@@ -50,7 +50,10 @@ pkgs.testers.runNixOSTest {
     # The fix under test, imported rather than restated. It is its own module
     # precisely so this test and `lib/image/default.nix` can share one copy;
     # a test carrying its own version of the fix would guard nothing.
-    imports = [(paths.modules + "/system/dbus-survives-mount-removal")];
+    imports = [
+      (paths.modules + "/system/dbus-survives-mount-removal")
+      (paths.modules + "/system/tmp-stays-writable")
+    ];
 
     # Generation A declares the tmpfs and generation B does not. Expressed as
     # an option rather than as two `systemd.mounts` lists, because taking an
@@ -186,6 +189,31 @@ pkgs.testers.runNixOSTest {
     #
     # Overmounting rather than unmounting on purpose: it needs no cooperation
     # from a busy /tmp, which under this driver never comes.
+    # THE THIRD HALF, and it is not hypothetical: on hyperion-game this exact
+    # switch left /tmp at 0555 and it had to be repaired by hand.
+    #
+    # An ix guest's image root has /tmp at 0555, invisible under the tmpfs ix's
+    # injected PID 1 mounts over it, and exposed only when that mount is
+    # retired. `modules/system/tmp-stays-writable` restores the mode from an
+    # activation snippet, which runs on every switch.
+    #
+    # What is checked here is the snippet's behaviour, not the exposure: this
+    # harness cannot unmount /tmp, so /tmp at activation time is the tmpfs
+    # rather than the directory a guest would be standing on, and asserting the
+    # mode after the switch would read 1777 whether or not the snippet exists.
+    # So the mode is broken deliberately and activation is run again. That the
+    # switch runs activation at all is already held above.
+    machine.succeed("chmod 0555 /tmp")
+    machine.succeed("test 0555 = \"0$(stat -c %a /tmp)\"")
+    activate_out = machine.succeed("/run/current-system/activate 2>&1 | tail -40")
+    print("=== activation after breaking the mode ===")
+    print(activate_out)
+    machine.succeed("test 1777 = \"$(stat -c %a /tmp)\"")
+    assert "restoring 1777" in activate_out, (
+        "the mode came back but the snippet did not say it did it, so something"
+        f" else restored it and this assertion is testing that instead\n{activate_out}"
+    )
+
     machine.succeed("mount --bind /var/tmp /tmp")
     machine.succeed("systemctl reload dbus-broker.service")
     machine.succeed("busctl --system --no-pager status >/dev/null")
