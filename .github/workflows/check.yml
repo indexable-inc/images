@@ -194,7 +194,7 @@ jobs:
       # Was a committed bash script until it tripped the shell fence (#3823);
       # the jq/yq provisioning step went with it, since the Rust port parses
       # the workflow YAML and the lock JSON in-process.
-      - name: Test direct submodule sync
+      - name: Test the submodule sync step
         run: nix run .#submodule-sync-test -- "$GITHUB_WORKSPACE"
 
       # Build the gate's network tracer (#4031) from main's flake ref, outside

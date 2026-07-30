@@ -40,12 +40,14 @@ in
     # it -- the point of baking them is that `nix run .#submodule-sync-test`
     # now depends on nothing outside its own closure.
     #
-    # Not baked, deliberately: `gh` is reached only on the `DIRECT_PUSH != true`
-    # branch and the harness sets DIRECT_PUSH=true, and `awk` is named in the
-    # step only in a comment explaining that it avoids awk (the runner lacks
-    # it). `nix` is shadowed by the harness's own no-op stub. If the step ever
-    # starts using one of those, it fails loudly with "command not found"
-    # rather than silently skipping a check.
+    # Not baked, deliberately: `awk` is named in the step only in a comment
+    # explaining that it avoids awk (the runner lacks it). If the step ever
+    # starts using it, it fails loudly with "command not found" rather than
+    # silently skipping a check. `nix` and `gh` are shadowed by the harness's
+    # own stubs, so the real ones would never be reached anyway: the `nix` stub
+    # is a no-op, and the `gh` stub models `pr list` / `pr create` / `pr edit`
+    # and exits 1 on anything else, which is how the rolling-PR path is
+    # exercised without a network or a token.
     postBuild = ''
       # shell
       wrapProgram $out/bin/submodule-sync-test \
