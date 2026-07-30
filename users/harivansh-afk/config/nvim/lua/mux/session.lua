@@ -222,7 +222,7 @@ function M.load_session()
     if vim.api.nvim_tabpage_is_valid(tp) and spec then
       if spec.restore then
         vim.api.nvim_set_current_tabpage(tp)
-        engine.materialize(view, true)
+        engine.materialize(view)
       elseif spec.kind ~= "editor" then
         drop[tp] = true
       end

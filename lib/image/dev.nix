@@ -21,10 +21,18 @@ a probe eval to plan the fleet, then builds each node with the same module:
 - `ix.dev.selfSource` materializes `/ix` (the dev source) on every node, on
   the volume when one exists, else a local writable copy.
 
-Curried `mkDevFor hostSystem { module, src }` so flake/example evaluation can
-build the wrapper derivations for the requested system, mirroring `mkFleetFor`.
-`src` is the flake `self`, threaded in by the template's `flake.nix`; it is
-what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
+Curried `mkDevFor hostSystem { module, src, deployment }` so flake/example
+evaluation can build the wrapper derivations for the requested system,
+mirroring `mkFleetFor`. `src` is the flake `self`, threaded in by the
+template's `flake.nix`; it is what gets materialized at `/ix`. The user's
+`ix.nix` never mentions it.
+
+`deployment` is passed through to `mkFleet` unchanged and applies to every
+node. It is how a dev environment declares the account secrets it expects at
+runtime (`deployment.secrets.<key> = { file = ...; }`), which the per-node
+`ix.dev.fleet` submodule cannot express: its options are the topology
+(`replicas`/`dependsOn`/`groups`/`modules`), and secrets are a property of
+the whole environment rather than of one node in it.
 */
 {
   lib,
@@ -59,6 +67,7 @@ what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
   mkDevFor = hostSystem: {
     module,
     src ? null,
+    deployment ? {},
   }: let
     # Read `ix.dev` without forcing the per-node environment. Reuses the real
     # eval path so the topology is read the same way it will later be built.
@@ -163,7 +172,7 @@ what gets materialized at `/ix`. The user's `ix.nix` never mentions it.
 
     nodes = workloadNodes // lib.optionalAttrs enable serverSpec;
   in
-    (mkFleetFor hostSystem) {inherit defaults nodes;};
+    (mkFleetFor hostSystem) {inherit defaults nodes deployment;};
 in {
   inherit mkDevFor;
 }

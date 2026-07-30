@@ -68,7 +68,7 @@ function M.setup_globals()
       ["<CR>"] = "actions.select",
       ["<C-v>"] = { callback = "actions.select", opts = { vertical = true } },
       ["<C-x>"] = { callback = "actions.select", opts = { horizontal = true } },
-      ["<C-p>"] = "actions.preview",
+      ["<C-p>"] = false, -- keep global <c-p> (pr: pick PR); preview via g? actions
       ["<C-c>"] = { callback = "actions.close", mode = "n" },
       ["-"] = { callback = "actions.parent", mode = "n" },
       ["g."] = { callback = "actions.toggle_hidden", mode = "n" },

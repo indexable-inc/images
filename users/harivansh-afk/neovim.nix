@@ -26,6 +26,11 @@ in {
       pkgs.bat
       pkgs.clang
       pkgs.clang-tools
+      # `pr.nvim` (lua/pr) renders every diff hunk through delta, and `:CI`
+      # shells out to `tea` for the Forgejo half of the PR list. Only the
+      # binaries: tea logins stay out, as the home module's header says.
+      pkgs.delta
+      pkgs.tea
       pkgs.fd
       pkgs.fzf
       pkgs.gh

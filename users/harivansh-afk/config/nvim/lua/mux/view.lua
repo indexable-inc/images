@@ -117,8 +117,7 @@ function M.on_terminal_exit(win, buf)
 end
 
 ---@param name string
----@param restoring boolean true when re-opening from a saved session
-function M.materialize(name, restoring)
+function M.materialize(name)
   local spec = views[name]
   local cwd = vim.fn.getcwd()
   if spec.kind == "editor" then
@@ -138,7 +137,7 @@ local function create_view(name, enter)
   local tp = vim.api.nvim_open_tabpage(buf, enter, {})
   tag(tp, name)
   local win = vim.api.nvim_tabpage_get_win(tp)
-  vim.api.nvim_win_call(win, function() M.materialize(name, false) end)
+  vim.api.nvim_win_call(win, function() M.materialize(name) end)
   return tp
 end
 
