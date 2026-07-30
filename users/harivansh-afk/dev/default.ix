@@ -1,0 +1,23 @@
+// Hari's dev VM, handed to `mkDev` (RFC 0007). `./dev.nix` is the
+// environment; this file is the platform-facing half: what the VM is called,
+// what source lands at /ix, and which account secrets it expects at runtime.
+//
+// `deployment.secrets` names keys in the ix account secret store, not values.
+// Store them once per account and every `ix apply` of this flake picks them
+// up:
+//
+//   ix secret set github_token
+//
+// A fine-grained GitHub PAT scoped to the repos he actually pushes is the
+// right credential here. `dev.nix` reads it through a git credential helper,
+// so it never enters the environment or the store.
+export default ({ index, src = __dir }) =>
+  index.lib.mkDev({
+    module: import("./dev.nix"),
+    src: src,
+    deployment: {
+      secrets: {
+        github_token: { file: "github/token", owner: "hari", mode: "0400" },
+      },
+    },
+  });

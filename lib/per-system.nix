@@ -1826,6 +1826,21 @@
 
   exampleFleets = ix.exampleFleetsFor {hostSystem = system;};
 
+  # `users/harivansh-afk/dev` names its environment here rather than being
+  # discovered. `exampleFleetsFor` only walks `paths.examples`, and that is a
+  # separate `flake = false` subtree, so an example cannot import the
+  # `users/harivansh-afk/home.nix` module this environment exists to reuse.
+  # Naming it explicitly is what puts its closure in `cachePushRoots` below,
+  # which is the difference between `ix apply` substituting a built system and
+  # compiling a neovim/Go/Elixir toolchain per VM.
+  #
+  # `src` is deliberately not passed: it only controls the `/ix` copy for
+  # in-guest recursion, and threading the flake source in here would make the
+  # cached closure change on every commit to the repo.
+  harivanshDevFleet = (ix.mkDevFor system) {
+    module = paths.users + "/harivansh-afk/dev/dev.nix";
+  };
+
   # Same fleets with "health-check-" prepended to every external name, so the
   # lifecycle scripts that force-delete VMs by name can never clobber an
   # unrelated production VM that happens to share the example's node name
@@ -2052,7 +2067,15 @@
         nodejs
         ;
     }
-    // lib.optionalAttrs (system == "x86_64-linux") {inherit check;}
+    // lib.optionalAttrs (system == "x86_64-linux") {
+      inherit check;
+      # Guarded to the Linux lane with the rest of the NixOS closures: a
+      # `system.build.toplevel` only evaluates there. Landing in `packageSet`
+      # is what carries it into `cachePushRoots` (via `imagesAsClosures`,
+      # which passes a non-image derivation through unchanged), so merges to
+      # main build it once and push it to cache.ix.dev.
+      harivansh-dev-system = harivanshDevFleet.systemPackages.dev-system;
+    }
     // repoFlakePackages
     // crossPackages;
   securityRootRegistry = let
