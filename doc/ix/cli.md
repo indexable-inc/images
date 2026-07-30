@@ -88,13 +88,11 @@ actions show as `verb <action>`.
 | Access | `shell <vm>` | Interactive shell in the guest; create or `--attach` a session. |
 | | `console <vm>` | Attach to the workload console for live stdin (REPL, installer). |
 | | `serial <vm>` | Host-terminated serial console: the rescue line when `ix shell` / the agent is dead. |
-| | `port-forward <vm> <l:r>` | Private dev tunnel from your laptop to a VM port; not public ingress. |
 | | `logs <vm>` | Read captured streams: `workload` (default), `kernel`, `diagnostic`, `platform`. |
 | Images / source | `image <ls\|push\|rm>` | Manage registry images; bare push refs land under `registry.ix.dev/<you>/`. |
 | | `source <ls\|rm>` | List or remove CAS-backed uploaded source trees. |
 | Networking | `group <create\|rm\|ls\|add\|rm-member\|members>` | East-west groups: decide which VMs reach each other privately. |
 | | `net up <group>` | Bring up the Linux overlay for a group (TUN device, `<name>.ix.internal` DNS). Needs sudo / `CAP_NET_ADMIN`. |
-| | `share <vm> <port>` | Publish a guest port on a public or email-gated (`--to`) share hostname. |
 | Secrets | `secret <set\|check\|ls\|rm>` | Store write-only secrets; `set` reads the value from a prompt/stdin/file, never the command line. |
 | Account | `login` | Sign in through the ix website; also switches profiles. |
 | | `billing <status\|top-up\|usage>` | View balance, add funds, inspect usage. |
@@ -121,6 +119,6 @@ current flag list on any verb. Four global flags apply everywhere:
 
 - [fleet.md](fleet.md): the deprecated multi-VM `ix-fleet` tool (indexable-inc/ix#8306).
 - [lifecycle.md](lifecycle.md): provision -> run -> stop -> snapshot -> rm.
-- [networking.md](networking.md): groups, the overlay, and shares.
+- [networking.md](networking.md): groups, the overlay, and public reachability.
 - [secrets.md](secrets.md): the write-only secret store and default attachment.
 - [overview.md](overview.md): where `ix` sits in the platform.

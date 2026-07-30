@@ -51,17 +51,15 @@ Public reachability is per VM and is a plain on/off, set at creation or changed 
 - `ix.networking.ipv4 = true` in the image declares that the VM is allocated a public IPv4 address when it is created. This is what `ix apply .#web` reads; `--ipv4` is refused on a flake target for the same reason `--group` is. The address costs one out of the region's IPv4 ingress block, and only a region that has such a block configured can serve one (today that is `us-west-1`).
 - `ix apply --ipv4` allocates a public IPv4 address on an **image** target (default is IPv6/proxy-based ingress).
 - An address is allocated once, at create. Turning `ix.networking.ipv4` on for a VM that already exists is refused with the recreate spelled out, because no operation adds an address to a live VM; turning it back off never revokes one, so use `ix rm` and re-apply to drop it.
-- `ix apply --l7-proxy-port <PORT>` publishes an application port through the HTTP/TLS proxy; repeat for several ports.
-- `ix share <vm> <port>` publishes a guest TCP port on a public share hostname. Use `--public` for an open hostname or `--to <email>` (repeatable) for an email-gated one. Bare `ix share` lists existing shares.
+- `ix apply --l7-proxy-port <PORT>` publishes an application port through the HTTP/TLS proxy on an **image** target; repeat for several ports. A flake target has no equivalent: there is no `ix.networking` option for it yet, so a flake VM cannot get L7 proxy ports at all.
 - `ix vm set --internet-ingress on|off` and `--internet-egress on|off` toggle inbound and outbound internet for an existing VM. East-west group traffic and the control plane keep working regardless.
 
-There is deliberately no per-port grammar on these toggles: finer filtering belongs in the image's `networking.firewall.*`. Run `ix vm set --help`, `ix apply --help`, and `ix share --help` for the full flag set. See [lifecycle.md](lifecycle.md) for when these take effect across create/replace/switch.
+`ix share`, which published a guest port on a public share hostname, is withdrawn (ENG-11138). It was imperative, so the hostname it created was state the target's configuration did not know about, and the configuration and reality drifted with nothing able to tell "converged" from "never applied". Its replacement is a hostname declared alongside `ix.networking.ipv4` and re-asserted on every apply. That replacement is designed but not built, so today there is no way to put a VM on a public hostname.
+
+There is deliberately no per-port grammar on these toggles: finer filtering belongs in the image's `networking.firewall.*`. Run `ix vm set --help` and `ix apply --help` for the full flag set. See [lifecycle.md](lifecycle.md) for when these take effect across create/replace/switch.
 
 ## Reach a VM from your laptop
 
-Two ways, depending on whether you want the whole group or one port:
+`ix net up <group>` joins a group's private overlay from your machine (Linux only). It creates a TUN device, routes the group's private address range through it, and serves `<host>.ix.internal` from a local DNS stub, so every member VM is reachable by name on any port with nothing public. It runs in the foreground (Ctrl-C disconnects) and requires `CAP_NET_ADMIN` (run under sudo) and systemd-resolved. Run `ix net --help` for flags.
 
-- `ix net up <group>` joins a group's private overlay from your machine (Linux only). It creates a TUN device, routes the group's private address range through it, and serves `<host>.ix.internal` from a local DNS stub, so every member VM is reachable by name on any port with nothing public. It runs in the foreground (Ctrl-C disconnects) and requires `CAP_NET_ADMIN` (run under sudo) and systemd-resolved.
-- `ix port-forward <vm> <local:remote>` opens a private debug tunnel from a local port to a port inside the VM (for example `ix port-forward web 8080:80`). This is for private debugging only; it does not publish the service as public ingress.
-
-Run `ix net --help` and `ix port-forward --help` for flags.
+`ix port-forward <vm> <local:remote>`, a tunnel from a local port to a port inside the VM, is withdrawn (ENG-11138). A tunnel makes an unreachable service look reachable: it answers on `localhost` for the one person who opened it while the actual path into the VM stays broken, and it is the operator running the tunnel who is least likely to notice. Reach the VM the way its users do — over the group overlay if it is private, over a public address if it is not.
