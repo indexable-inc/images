@@ -11,7 +11,7 @@
 //! is committed shell and generated-shell call sites; executing the workflow's
 //! own body is the thing being tested and cannot be ported away from here.
 //!
-//! Four behaviours are pinned, one function each at the bottom of this file:
+//! Five behaviours are pinned, one function each at the bottom of this file:
 //!
 //! 1. Stale pins advance every gitlink and every `flake.lock` node to the
 //!    matching remote main together, and the commit message names every input
@@ -22,7 +22,11 @@
 //! 3. A bump that moves a gitlink while the lock already records the new
 //!    revision says in words that no input moved. An empty list would be
 //!    indistinguishable from a reporter that silently produces nothing.
-//! 4. A push that loses a race against an unrelated `ix/main` commit retries
+//! 4. The rolling-PR path, which is the one ix runs now that its direct-push
+//!    bypass is gone, writes the same report into the pull request body: it
+//!    opens a PR when none is open and refreshes the body of one that is,
+//!    because the branch is force-pushed under an open PR on every run.
+//! 5. A push that loses a race against an unrelated `ix/main` commit retries
 //!    onto the new tip and preserves the other commit rather than clobbering
 //!    it, without disturbing the sources it had no reason to move.
 
@@ -114,6 +118,27 @@ fn bump_submodules_script(workflow: &Path) -> Result<String> {
         .and_then(|r| r.as_str())
         .map(str::to_owned)
         .ok_or_else(|| eyre!("no 'Bump submodules' step with a run: body"))
+}
+
+/// Fail unless `text` lists exactly these moves, in order, one line each.
+///
+/// Exactly is the point twice over. An input that moved and is missing is the
+/// ENG-11408 failure itself: the bump commit that advanced ix's evaluator pin
+/// named only the submodule. An input that did not move and is listed anyway is
+/// the mirror failure, and it is the one a text diff of the lock produces,
+/// because a reformat or a node renumbering rewrites lines that pin nothing new.
+fn assert_lists(text: &str, moves: &[(&str, &str, &str)], what: &str) -> Result<()> {
+    let listed: Vec<&str> = text.lines().filter(|line| line.starts_with("- ")).collect();
+    let expected: Vec<String> = moves
+        .iter()
+        .map(|(input, old, new)| format!("- {input}: {old} -> {new}"))
+        .collect();
+    if listed != expected {
+        bail!(
+            "{what} does not name the moved inputs\nlisted:   {listed:#?}\nexpected: {expected:#?}\nfull text:\n{text}"
+        );
+    }
+    Ok(())
 }
 
 /// One gitlink-pinned source the caller tracks.
@@ -323,6 +348,26 @@ impl Fixture {
     fn stage_worker(&self, workflow: &Path) -> Result<()> {
         fs::create_dir_all(&self.fake_bin)?;
         write_exec(&self.fake_bin.join("nix"), "#!/usr/bin/env bash\nexit 0\n")?;
+        // `gh` for the rolling-PR path: it records every call, answers
+        // `pr list` with whatever the run wants an open PR to look like, and
+        // FAILS on any other subcommand. A stub that exited 0 for everything
+        // would swallow the next call the step learns to make, which is the
+        // failure this file exists to prevent.
+        //
+        // Braces are avoided in the body for the same reason as the git shim
+        // below: clippy reads a braced parameter expansion in a Rust literal as
+        // a stray format argument.
+        write_exec(
+            &self.fake_bin.join("gh"),
+            "#!/usr/bin/env bash\n\
+             set -euo pipefail\n\
+             printf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n\
+             case \"$1 $2\" in\n\
+             'pr list') printf '%s' \"$GH_OPEN_PR\" ;;\n\
+             'pr create' | 'pr edit') ;;\n\
+             *) echo \"submodule-sync-test: unmodelled gh call: $*\" >&2; exit 1 ;;\n\
+             esac\n",
+        )?;
 
         fs::write(&self.worker_sh, bump_submodules_script(workflow)?)?;
         let syntax = Command::new("bash")
@@ -451,31 +496,9 @@ impl Fixture {
         ])
     }
 
-    /// Fail unless the message lists exactly the given moves, in order, one
-    /// line each.
-    ///
-    /// Exactly is the point twice over. An input that moved and is missing is
-    /// the ENG-11408 failure itself: the bump commit that advanced ix's
-    /// evaluator pin named only the submodule. An input that did not move and
-    /// is listed anyway is the mirror failure, and it is the one a text diff of
-    /// the lock produces, because a reformat or a node renumbering rewrites
-    /// lines that pin nothing new.
+    /// Fail unless `ix/main`'s tip message lists exactly the given moves.
     fn assert_message_lists(&self, moves: &[(&str, &str, &str)]) -> Result<()> {
-        let message = self.head_message()?;
-        let listed: Vec<&str> = message
-            .lines()
-            .filter(|line| line.starts_with("- "))
-            .collect();
-        let expected: Vec<String> = moves
-            .iter()
-            .map(|(input, old, new)| format!("- {input}: {old} -> {new}"))
-            .collect();
-        if listed != expected {
-            bail!(
-                "commit message does not name the moved inputs\nlisted:   {listed:#?}\nexpected: {expected:#?}\nfull message:\n{message}"
-            );
-        }
-        Ok(())
+        assert_lists(&self.head_message()?, moves, "commit message")
     }
 
     /// Fail unless the message says, in words, that nothing moved.
@@ -491,6 +514,37 @@ impl Fixture {
             bail!("message neither lists a move nor says none happened:\n{message}");
         }
         Ok(())
+    }
+
+    /// Run the rolling-PR path rather than the direct push, and return every
+    /// `gh` call it made alongside the body it handed to `gh`.
+    ///
+    /// `open_pr` is what `gh pr list` answers with: empty for no open PR.
+    ///
+    /// The body is read from the path in the recorded `--body-file` argument,
+    /// not from a filename this test knows, so the argument is checked by being
+    /// used. Nothing here touches `ix/main`: this path pushes the rolling
+    /// branch, which is why it makes no claim about the pins on main.
+    fn run_pr_path(&self, open_pr: &str) -> Result<(Vec<String>, String)> {
+        let log = self.tmp.join("gh-calls");
+        fs::write(&log, "")?;
+        self.run_worker(&[
+            ("DIRECT_PUSH", "false"),
+            ("GH_CALLS", utf8(&log)?),
+            ("GH_OPEN_PR", open_pr),
+        ])?;
+        let calls: Vec<String> = fs::read_to_string(&log)?
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let body_file = calls
+            .iter()
+            .filter_map(|call| call.split(" --body-file ").nth(1))
+            .filter_map(|rest| rest.split(' ').next())
+            .next()
+            .ok_or_else(|| eyre!("no gh call passed --body-file; calls were {calls:#?}"))?;
+        let body = fs::read_to_string(body_file)?;
+        Ok((calls, body))
     }
 
     /// Rewrite `ix/main`'s lock so one source's node already records `rev`,
@@ -614,6 +668,32 @@ fn current_pins_are_a_noop(fx: &Fixture) -> Result<()> {
     Ok(())
 }
 
+/// The rolling-PR path reports into the pull request body, both when it opens
+/// one and when one is already open.
+///
+/// The refresh is the half that is easy to leave out and easy to miss: the
+/// branch is force-pushed on every run, so a body written when the PR opened
+/// describes a commit that is no longer on it.
+fn pr_path_reports_into_the_pull_request(fx: &mut Fixture) -> Result<()> {
+    fx.advance_source("index", "pr-path")?;
+    let old = fx.pinned("index")?.lock;
+    let tip = fx.tip_of("index")?;
+    let moves = [("index", old.as_str(), tip.as_str())];
+
+    let (calls, body) = fx.run_pr_path("")?;
+    assert_lists(&body, &moves, "pull request body")?;
+    if !calls.iter().any(|call| call.starts_with("pr create ")) {
+        bail!("no open PR, yet the run opened none; gh calls were {calls:#?}");
+    }
+
+    let (calls, body) = fx.run_pr_path("7")?;
+    assert_lists(&body, &moves, "refreshed pull request body")?;
+    if !calls.iter().any(|call| call.starts_with("pr edit 7 ")) {
+        bail!("PR 7 was open, yet its body was never refreshed; gh calls were {calls:#?}");
+    }
+    Ok(())
+}
+
 /// A push that loses a race against an unrelated `ix/main` commit retries onto
 /// the new tip, keeping the other commit rather than clobbering it, and leaves
 /// the source it had no reason to move exactly where it was.
@@ -688,6 +768,7 @@ fn main() -> Result<()> {
     stale_pins_advance_together(&fx)?;
     current_pins_are_a_noop(&fx)?;
     no_input_move_is_said_out_loud(&mut fx)?;
+    pr_path_reports_into_the_pull_request(&mut fx)?;
     // Last: see the note on this one.
     lost_race_retries_onto_new_tip(&mut fx)?;
 
