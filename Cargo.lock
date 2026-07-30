@@ -7093,6 +7093,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "memories"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "chrono",
+ "clap",
+ "dirs 6.0.0",
+ "file-search",
+ "glob",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "snafu",
+ "source-meta",
+ "tempfile",
+]
+
+[[package]]
 name = "miette"
 version = "7.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

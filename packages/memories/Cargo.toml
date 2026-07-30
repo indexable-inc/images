@@ -1,0 +1,38 @@
+[package]
+name = "memories"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Ranked, lintable per-repo `.memories` markdown notes"
+
+[lints]
+workspace = true
+
+[lib]
+name = "memories"
+path = "src/lib.rs"
+
+[[bin]]
+name = "memories"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+# `clock` for `Utc::now`, `alloc` for RFC 3339 parsing/formatting. The workspace
+# pins chrono with `default-features = false`.
+chrono = { workspace = true, features = ["alloc", "clock", "std"] }
+clap = { workspace = true, features = ["derive"] }
+dirs.workspace = true
+file-search.workspace = true
+glob.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_norway.workspace = true
+snafu.workspace = true
+# The fleet's redaction table, for `memory-secret`. Reused rather than copied so
+# a pattern added there is caught here too.
+source-meta.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

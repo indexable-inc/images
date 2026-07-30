@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 185" role="img"
+     font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <title>Three .memories directories are read, ranked, and returned as hits with stale evidence flagged</title>
+  <style>
+    svg { color: #e6edf3; }
+    .muted       { fill: #8b949e; }
+    .accent      { fill: #a371f7; }
+    .box         { stroke: currentColor; fill: none; }
+    .box-accent  { stroke: #a371f7; fill: none; }
+    .head        { fill: currentColor; }
+    .head-muted  { fill: #8b949e; }
+    .edge        { stroke: currentColor; fill: none; marker-end: url(#arrow); }
+    .edge-muted  { stroke: #8b949e; fill: none; stroke-dasharray: 4 3;
+                   marker-end: url(#arrow-muted); }
+    text         { fill: currentColor; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" class="head-muted"/>
+    </marker>
+  </defs>
+
+  <!-- the search roots, nearest first -->
+  <rect class="box" x="16" y="24" width="150" height="34" rx="4"/>
+  <text x="28" y="46" font-size="13">repo/.memories</text>
+  <rect class="box" x="16" y="70" width="150" height="34" rx="4"/>
+  <text x="28" y="92" font-size="13">submodule/.memories</text>
+  <rect class="box" x="16" y="116" width="150" height="34" rx="4"/>
+  <text x="28" y="138" font-size="13">~/.memories</text>
+  <text class="muted" x="16" y="172" font-size="12">one markdown file per lesson</text>
+
+  <!-- read -->
+  <path class="edge" d="M172,87 L246,87"/>
+  <text class="muted" x="182" y="79" font-size="12">read</text>
+
+  <!-- ranking -->
+  <rect class="box-accent" x="252" y="52" width="196" height="70" rx="4"/>
+  <text class="accent" x="266" y="78" font-size="13">bm25 x prior x age</text>
+  <text class="accent" x="266" y="98" font-size="13">x genre x confirmations</text>
+  <text class="muted" x="252" y="140" font-size="12">field boosts: tldr, handle, topic</text>
+
+  <!-- ranked -->
+  <path class="edge" d="M454,87 L528,87"/>
+  <text class="muted" x="464" y="79" font-size="12">ranks</text>
+
+  <rect class="box" x="534" y="52" width="170" height="70" rx="4"/>
+  <text x="548" y="78" font-size="13">hits</text>
+  <text class="muted" x="548" y="98" font-size="12">stale ones flagged</text>
+
+  <!-- evidence check -->
+  <rect class="box" x="252" y="6" width="196" height="30" rx="4"/>
+  <text class="muted" x="266" y="26" font-size="12">based_on: path + blake3</text>
+  <path class="edge-muted" d="M448,21 L590,21 L590,48"/>
+  <text class="muted" x="470" y="16" font-size="12">flags, never hides</text>
+</svg>
+
