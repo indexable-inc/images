@@ -195,12 +195,17 @@ defmodule IxMcp.MCP.Tools do
                                             replaces the default roots (a list, never a bare
                                             string), Memories.roots() resolves them with no
                                             query
-      Memories.remember("slug", "one-line tldr", body: md, based_on: ["path"])
+      Memories.remember("slug", "tldr", body: md, by: "claude-opus-5", how: "the command")
                                             save what you learned, got wrong, or decided
-                                            against; Memories.validate(slug, by:, how:)
-                                            records the command that proves it and clears
-                                            staleness, supersedes: replaces a wrong memory
-                                            instead of editing it
+                                            against. by:/how: are required for the default
+                                            genre: :memory and become its first `validated`
+                                            receipt, so one call writes a lint-clean file; a
+                                            genre: :living page needs neither. based_on:
+                                            ["path"] is what makes staleness detectable,
+                                            supersedes: replaces a wrong memory instead of
+                                            editing it, scope: "user:<name>" keeps one
+                                            private. Memories.validate(slug, by:, how:)
+                                            records a later re-check and clears staleness
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
                                             spawn a real agent CLI as an async depth-1
                                             subagent (Fable 5 card sec 8.15.3, #3700);

@@ -218,7 +218,9 @@ defmodule IxMcp.MemoriesTest do
                prior: 0.8,
                related: ["nix-eval-before-deploy"],
                based_on: ["packages/nix-dag/src/rank.rs"],
-               scope: "user:andrew"
+               scope: "user:andrew",
+               by: "claude-opus-5",
+               how: "nix-dag .#hil-compute-2"
              )
 
     assert mock_events(log) == [
@@ -226,16 +228,43 @@ defmodule IxMcp.MemoriesTest do
                "--topic nix --topic builds --handle nix-dag --handle drvPath " <>
                "--prior 0.8 --related nix-eval-before-deploy " <>
                "--based-on packages/nix-dag/src/rank.rs --scope user:andrew " <>
+               "--by claude-opus-5 --how nix-dag .#hil-compute-2 " <>
                "-- nix-rebuild-cascade",
              "body why:\\nthe evidence\\n"
            ]
   end
 
   test "a body-less remember still reaches the CLI with empty stdin", %{log: log} do
-    assert :ok = Memories.remember("loops", "while loops are tricky")
+    assert :ok = Memories.remember("loops", "while loops are tricky", genre: :living)
 
     assert mock_events(log) == [
-             "remember --tldr while loops are tricky -- loops",
+             "remember --tldr while loops are tricky --genre living -- loops",
+             "body "
+           ]
+  end
+
+  test "a memory-genre write demands the proof that will be its first receipt", %{log: log} do
+    # The CLI exits 2 without --by/--how for `--genre memory`; refusing here
+    # names both options and the genre, which a subprocess usage error cannot.
+    assert_raise ArgumentError, ~r/by: and how: are required for genre: :memory/, fn ->
+      Memories.remember("nix-rebuild-cascade", "an env var holding a store path")
+    end
+
+    assert_raise ArgumentError, ~r/how: is required/, fn ->
+      Memories.remember("slug", "tldr", by: "claude-opus-5")
+    end
+
+    # Explicit :memory is the same as the default.
+    assert_raise ArgumentError, ~r/required for genre: :memory/, fn ->
+      Memories.remember("slug", "tldr", genre: :memory, by: "claude-opus-5")
+    end
+
+    # Every other genre is exempt, the way the CLI has it.
+    assert :ok = Memories.remember("hil-bench", "a page kept current by hand", genre: :historical)
+
+    # Refused before the spawn: only the exempt write reached the CLI.
+    assert mock_events(log) == [
+             "remember --tldr a page kept current by hand --genre historical -- hil-bench",
              "body "
            ]
   end

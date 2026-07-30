@@ -24,7 +24,8 @@ Memories.lint()                                           # %{diagnostics:, erro
 
 Memories.remember("nix-rebuild-cascade", "one-line tldr",
   body: markdown, topic: [:nix], handle: ~w(nix-dag),
-  based_on: ["packages/nix-dag/src/rank.rs"])
+  based_on: ["packages/nix-dag/src/rank.rs"],
+  by: "claude-opus-5", how: "nix-dag .#hil-compute-2")   # by:/how: required for genre: :memory
 Memories.validate("nix-rebuild-cascade", by: "claude-opus-5", how: "the command")
 Memories.refute("nix-rebuild-cascade", by: "claude-opus-5", how: "...", instead: "new-slug")
 ```
@@ -62,6 +63,19 @@ those and inherits nothing, because "adds to" would return results from
 directories nobody named. It is a list even when it names one directory, and
 a bare string raises (`memories.ex:594-614`) -- one spelling means the plural
 path is the tested path.
+
+## A durable memory is born with its proof
+
+`remember/3` requires `by:` and `how:` for the default `genre: :memory`, and
+the CLI writes them as the file's first `validated` entry, so one call
+produces a memory that already passes `lint` instead of one that fails
+`memory-unchecked` from birth. A `:living`, `:recipe`, `:historical` or
+`:frozen` page needs neither.
+
+This module refuses the memory-genre call without them (`proof!/1`) rather
+than letting the CLI exit 2, because the raise can name both options and the
+genre while a subprocess usage error cannot. Quote a `how:` that contains a
+colon -- see the lint section.
 
 ## Ranked once, never twice
 

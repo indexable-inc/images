@@ -427,6 +427,14 @@ defmodule IxMcp.Memories do
   tldr", body: markdown, topic: [:nix], handle: ~w(nix-dag),
   based_on: ["packages/nix-dag/src/rank.rs"], validated: ...)`.
 
+  `by:` and `how:` are required for the default `genre: :memory` and the CLI
+  writes them as the memory's first `validated` entry, so one call produces a
+  file that already passes `lint`. A durable lesson with no re-runnable proof
+  is a date, and requiring the proof at birth is what stops that from being
+  the common case. A `:living`, `:recipe`, `:historical` or `:frozen` page
+  needs neither, and this module refuses the memory-genre call without them
+  rather than letting the CLI exit 2.
+
   `tldr` is the whole memory a reader gets for free, so it states the
   finding, not the topic. `based_on:` paths are hashed now and re-hashed
   by `validate/2`, which is what makes staleness detectable at all;
@@ -453,9 +461,13 @@ defmodule IxMcp.Memories do
         related: [],
         based_on: [],
         scope: nil,
+        by: nil,
+        how: nil,
         dirs: [],
         cd: nil
       )
+
+    proof!(opts)
 
     flags =
       option("--tldr", tldr) ++
@@ -465,7 +477,9 @@ defmodule IxMcp.Memories do
         option("--prior", opts[:prior]) ++
         options("--related", opts[:related]) ++
         options("--based-on", opts[:based_on]) ++
-        option("--scope", opts[:scope])
+        option("--scope", opts[:scope]) ++
+        option("--by", opts[:by]) ++
+        option("--how", opts[:how])
 
     write!("remember", flags, [slug], opts)
   end
@@ -517,6 +531,36 @@ defmodule IxMcp.Memories do
     System.get_env("MEMORIES_BIN") || System.find_executable("memories") ||
       raise "memories binary not found: install memories on PATH or set MEMORIES_BIN " <>
               "(build it with `nix build .#memories`)"
+  end
+
+  # A `genre: memory` write carries its own first proof: the CLI requires
+  # --by/--how there and exits 2 without them. Refusing here instead names
+  # the two options and the genre, which a usage error from a subprocess
+  # cannot do as well. Every other genre is exempt, the way the CLI has it.
+  @spec proof!(keyword()) :: :ok
+  defp proof!(opts) do
+    memory_genre? = to_string(opts[:genre] || "memory") == "memory"
+    missing = for key <- [:by, :how], is_nil(opts[key]), do: key
+
+    if memory_genre? and missing != [] do
+      raise ArgumentError, missing_proof(missing)
+    end
+
+    :ok
+  end
+
+  @spec missing_proof([atom()]) :: String.t()
+  defp missing_proof(missing) do
+    verb =
+      case missing do
+        [_one] -> "is"
+        _both -> "are"
+      end
+
+    "remember: #{Enum.map_join(missing, " and ", &"#{&1}:")} #{verb} required " <>
+      "for genre: :memory -- a durable lesson needs the command that proves it, " <>
+      "which the CLI writes as its first validated entry. Pass by: and how:, or " <>
+      "use genre: :living for a page kept current by hand"
   end
 
   @spec grow([Hit.t()], non_neg_integer(), String.t() | nil) :: [Hit.t()]
