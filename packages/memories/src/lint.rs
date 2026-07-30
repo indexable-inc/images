@@ -60,6 +60,21 @@ impl Diagnostic {
         }
     }
 
+    /// A finding at the line of a frontmatter key.
+    ///
+    /// This and [`Self::at_file`] replaced the five-line `Diagnostic::new(path,
+    /// key_line(memory, KEY), RULE, format!(..))` block that every single-value
+    /// rule wrote out. One call site each means the `path` and line lookup are
+    /// stated once, so a change to either is one edit rather than eight.
+    fn at_key(memory: &Memory, key: &str, rule: &'static str, message: String) -> Self {
+        Self::new(memory.path.as_path(), key_line(memory, key), rule, message)
+    }
+
+    /// A finding about the file as a whole, with no line to point at.
+    fn at_file(memory: &Memory, rule: &'static str, message: String) -> Self {
+        Self::new(memory.path.as_path(), None, rule, message)
+    }
+
     /// Human-readable single line: `path:line rule: message`.
     #[must_use]
     pub fn render(&self) -> String {
@@ -133,6 +148,60 @@ pub fn lint(corpus: &Corpus, now: DateTime<Utc>) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
+/// One list-shaped rule: the frontmatter key whose line a finding points at, and
+/// the rule it is reported under.
+struct ListRule {
+    key: &'static str,
+    rule: &'static str,
+}
+
+const TOPIC_UNKNOWN: ListRule = ListRule {
+    key: "topic",
+    rule: "memory-topic-unknown",
+};
+const RELATED_UNRESOLVED: ListRule = ListRule {
+    key: "related",
+    rule: "memory-related-unresolved",
+};
+const SUPERSEDES_UNRESOLVED: ListRule = ListRule {
+    key: "supersedes",
+    rule: "memory-supersedes-unresolved",
+};
+const BASED_ON_MISSING: ListRule = ListRule {
+    key: "based_on",
+    rule: "memory-based-on-missing",
+};
+
+/// Report every entry of one frontmatter list that fails `holds`.
+///
+/// This replaced four near-identical loops (`topic`, `related`, `supersedes`,
+/// `based_on`) that differed only in the key they read, the rule they named and
+/// the sentence they wrote. One function beats four copies for the ordinary
+/// reason: the next list-shaped rule is a call rather than a paste, and a wrong
+/// line number or a changed `Diagnostic` shape is one edit instead of four. The
+/// predicate is fallible because `based_on` has to touch the filesystem, and
+/// splitting on that would have kept two of the four.
+fn check_list<T>(
+    memory: &Memory,
+    rule: &ListRule,
+    values: &[T],
+    holds: impl Fn(&T) -> Result<bool>,
+    message: impl Fn(&T) -> String,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<()> {
+    for value in values {
+        if !holds(value)? {
+            diagnostics.push(Diagnostic::new(
+                memory.path.as_path(),
+                key_line(memory, rule.key),
+                rule.rule,
+                message(value),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn check_memory(
     corpus: &Corpus,
     scan: &Scan,
@@ -140,159 +209,104 @@ fn check_memory(
     now: DateTime<Utc>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<()> {
-    check_tldr(memory, diagnostics);
-    check_budget(memory, diagnostics);
-    check_slug(memory, diagnostics);
-    check_topics(scan, memory, diagnostics);
-    check_references(corpus, memory, diagnostics);
-    check_evidence(memory, diagnostics)?;
-    check_freshness(memory, now, diagnostics);
-    Ok(())
-}
+    check_values(memory, now, diagnostics);
 
-fn check_tldr(memory: &Memory, diagnostics: &mut Vec<Diagnostic>) {
-    let path = memory.path.as_path();
-
-    if memory.tldr.trim().is_empty() {
-        diagnostics.push(Diagnostic::new(
-            path,
-            key_line(memory, "tldr"),
-            "memory-tldr",
-            "`tldr` is empty; it is the line a reader decides on".to_owned(),
-        ));
-    } else {
-        let chars = memory.tldr.chars().count();
-        if chars > TLDR_MAX_CHARS {
-            diagnostics.push(Diagnostic::new(
-                path,
-                key_line(memory, "tldr"),
-                "memory-tldr",
-                format!("`tldr` is {chars} chars, over the {TLDR_MAX_CHARS}-char ceiling"),
-            ));
-        }
-    }
-}
-
-/// Only `genre: memory` carries the body budget. A `living` page or a `recipe`
-/// is expected to be long; a memory is meant to be read whole.
-fn check_budget(memory: &Memory, diagnostics: &mut Vec<Diagnostic>) {
-    let path = memory.path.as_path();
-    if memory.genre == crate::model::Genre::Memory {
-        let estimated_tokens = memory.body.len() / BYTES_PER_TOKEN;
-        if estimated_tokens > BODY_TOKEN_BUDGET {
-            diagnostics.push(Diagnostic::new(
-                path,
-                None,
-                "memory-body-budget",
-                format!(
-                    "body is ~{estimated_tokens} estimated tokens, over the \
-                     {BODY_TOKEN_BUDGET}-token budget for `genre: memory`"
-                ),
-            ));
-        }
-    }
-}
-
-fn check_slug(memory: &Memory, diagnostics: &mut Vec<Diagnostic>) {
-    let path = memory.path.as_path();
-
-    if !crate::model::is_kebab_case(&memory.slug) {
-        diagnostics.push(Diagnostic::new(
-            path,
-            None,
-            "memory-slug",
-            format!("file stem {slug:?} is not kebab-case", slug = memory.slug),
-        ));
-    }
-    if let Some(written) = &memory.frontmatter_slug {
-        diagnostics.push(Diagnostic::new(
-            path,
-            key_line(memory, "slug"),
-            "memory-slug",
-            format!(
-                "frontmatter writes `slug: {written}`; the slug is the file stem and is never \
-                 written in the frontmatter"
-            ),
-        ));
-    }
-}
-
-fn check_topics(scan: &Scan, memory: &Memory, diagnostics: &mut Vec<Diagnostic>) {
-    let path = memory.path.as_path();
-
+    // Absent `topics.txt` means any topic is allowed, so there is nothing to
+    // check rather than nothing that passes.
     if let Some(closed_set) = &scan.topics {
-        for topic in &memory.topic {
-            if !closed_set.contains(topic) {
-                diagnostics.push(Diagnostic::new(
-                    path,
-                    key_line(memory, "topic"),
-                    "memory-topic-unknown",
-                    format!("topic {topic:?} is not in the closed set"),
-                ));
-            }
-        }
-    }
-}
-
-fn check_references(corpus: &Corpus, memory: &Memory, diagnostics: &mut Vec<Diagnostic>) {
-    let path = memory.path.as_path();
-
-    for slug in &memory.related {
-        if !corpus.resolves(slug) {
-            diagnostics.push(Diagnostic::new(
-                path,
-                key_line(memory, "related"),
-                "memory-related-unresolved",
-                format!("`related` names {slug:?}, which is not a memory in any root"),
-            ));
-        }
+        check_list(
+            memory,
+            &TOPIC_UNKNOWN,
+            &memory.topic,
+            |topic| Ok(closed_set.contains(topic)),
+            |topic| format!("topic {topic:?} is not in the closed set"),
+            diagnostics,
+        )?;
     }
 
-    for slug in &memory.supersedes {
-        if !corpus.resolves(slug) {
-            diagnostics.push(Diagnostic::new(
-                path,
-                key_line(memory, "supersedes"),
-                "memory-supersedes-unresolved",
-                format!("`supersedes` names {slug:?}, which is not a memory in any root"),
-            ));
-        }
-    }
-}
-
-fn check_evidence(memory: &Memory, diagnostics: &mut Vec<Diagnostic>) -> Result<()> {
-    let path = memory.path.as_path();
-
-    for entry in &memory.based_on {
-        if !stale::resolves(&memory.root, entry)? {
-            diagnostics.push(Diagnostic::new(
-                path,
-                key_line(memory, "based_on"),
-                "memory-based-on-missing",
+    // `related` and `supersedes` are the same rule over two lists: a slug that
+    // names nothing. Driven from a pair rather than written twice, so the sentence
+    // exists once and the rule's own key names the list it read.
+    for (rule, slugs) in [
+        (&RELATED_UNRESOLVED, &memory.related),
+        (&SUPERSEDES_UNRESOLVED, &memory.supersedes),
+    ] {
+        check_list(
+            memory,
+            rule,
+            slugs,
+            |slug| Ok(corpus.resolves(slug)),
+            |slug| {
                 format!(
-                    "`based_on` path {target:?} does not exist under {root}",
-                    target = entry.path,
-                    root = memory.root.display(),
-                ),
-            ));
-        }
+                    "`{key}` names {slug:?}, which is not a memory in any root",
+                    key = rule.key
+                )
+            },
+            diagnostics,
+        )?;
     }
+
+    check_list(
+        memory,
+        &BASED_ON_MISSING,
+        &memory.based_on,
+        |entry| stale::resolves(&memory.root, entry),
+        |entry| {
+            format!(
+                "`based_on` path {target:?} does not exist under {root}",
+                target = entry.path,
+                root = memory.root.display(),
+            )
+        },
+        diagnostics,
+    )?;
+
     Ok(())
 }
 
-/// A memory that nobody has confirmed lately.
+/// Every single-value rule as a pure "what is wrong, if anything".
 ///
-/// `genre: memory` only, the same scoping as the body budget: a reference page is
-/// supposed to be long and a 180-day validation clock on one produces a wall of
-/// errors that says nothing. That scoping is what removes the need for an
-/// `evergreen` escape hatch, which is why the format has no such field: an
-/// exception you have to remember to set is a field that gets forgotten.
-fn check_freshness(memory: &Memory, now: DateTime<Utc>, diagnostics: &mut Vec<Diagnostic>) {
-    if memory.genre != crate::model::Genre::Memory {
-        return;
+/// Splitting the fault from the reporting is the same move [`check_list`] makes
+/// for the list rules, for the same reason: each rule became a five-line
+/// push-a-`Diagnostic` block that differed only in the sentence, so the reporting
+/// is written once per rule as a single line and the judgement is a function that
+/// can be read, and tested, on its own.
+fn tldr_fault(memory: &Memory) -> Option<String> {
+    if memory.tldr.trim().is_empty() {
+        return Some("`tldr` is empty; it is the line a reader decides on".to_owned());
     }
+    let chars = memory.tldr.chars().count();
+    (chars > TLDR_MAX_CHARS)
+        .then(|| format!("`tldr` is {chars} chars, over the {TLDR_MAX_CHARS}-char ceiling"))
+}
 
-    let unchecked_reason = memory.newest_validation().map_or_else(
+fn body_budget_fault(memory: &Memory) -> Option<String> {
+    let estimated_tokens = memory.body.len() / BYTES_PER_TOKEN;
+    (estimated_tokens > BODY_TOKEN_BUDGET).then(|| {
+        format!(
+            "body is ~{estimated_tokens} estimated tokens, over the \
+             {BODY_TOKEN_BUDGET}-token budget for `genre: memory`"
+        )
+    })
+}
+
+fn stem_fault(memory: &Memory) -> Option<String> {
+    (!crate::model::is_kebab_case(&memory.slug))
+        .then(|| format!("file stem {slug:?} is not kebab-case", slug = memory.slug))
+}
+
+fn written_slug_fault(memory: &Memory) -> Option<String> {
+    memory.frontmatter_slug.as_ref().map(|written| {
+        format!(
+            "frontmatter writes `slug: {written}`; the slug is the file stem and is never \
+             written in the frontmatter"
+        )
+    })
+}
+
+/// Why nobody can vouch for this memory, if nobody can.
+fn unchecked_fault(memory: &Memory, now: DateTime<Utc>) -> Option<String> {
+    let reason = memory.newest_validation().map_or_else(
         || Some("has no `validated` entry".to_owned()),
         |newest| {
             let age_days = rank::days_between(newest.at_time, now);
@@ -300,18 +314,77 @@ fn check_freshness(memory: &Memory, now: DateTime<Utc>, diagnostics: &mut Vec<Di
                 format!("was last validated {age_days:.0} days ago, over {UNCHECKED_MAX_DAYS:.0}")
             })
         },
+    )?;
+    Some(format!(
+        "{reason}; re-run its proof and record it with `memories validate`, or let it be a \
+         `living` or `historical` page"
+    ))
+}
+
+/// Report every single-value rule: the ones that hold for any memory, then the
+/// two that hold for `genre: memory` only.
+///
+/// The genre guard is written once rather than at the top of each rule, which is
+/// what removes the need for an `evergreen` escape hatch: a reference page is
+/// supposed to be long and nobody re-proves it, so both the body budget and the
+/// validation clock are about memories specifically, and an exception you have to
+/// remember to set is a field that gets forgotten.
+fn check_values(memory: &Memory, now: DateTime<Utc>, diagnostics: &mut Vec<Diagnostic>) {
+    push_at_key(
+        memory,
+        "tldr",
+        "memory-tldr",
+        tldr_fault(memory),
+        diagnostics,
+    );
+    push_at_file(memory, "memory-slug", stem_fault(memory), diagnostics);
+    push_at_key(
+        memory,
+        "slug",
+        "memory-slug",
+        written_slug_fault(memory),
+        diagnostics,
     );
 
-    if let Some(reason) = unchecked_reason {
-        diagnostics.push(Diagnostic::new(
-            memory.path.as_path(),
-            None,
-            "memory-unchecked",
-            format!(
-                "{reason}; re-run its proof and record it with `memories validate`, or let it \
-                 be a `living` or `historical` page"
-            ),
-        ));
+    if memory.genre != crate::model::Genre::Memory {
+        return;
+    }
+    push_at_file(
+        memory,
+        "memory-body-budget",
+        body_budget_fault(memory),
+        diagnostics,
+    );
+    push_at_file(
+        memory,
+        "memory-unchecked",
+        unchecked_fault(memory, now),
+        diagnostics,
+    );
+}
+
+/// Record a fault, if there is one, at the line of a frontmatter key.
+fn push_at_key(
+    memory: &Memory,
+    key: &str,
+    rule: &'static str,
+    fault: Option<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(message) = fault {
+        diagnostics.push(Diagnostic::at_key(memory, key, rule, message));
+    }
+}
+
+/// Record a fault, if there is one, against the file as a whole.
+fn push_at_file(
+    memory: &Memory,
+    rule: &'static str,
+    fault: Option<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(message) = fault {
+        diagnostics.push(Diagnostic::at_file(memory, rule, message));
     }
 }
 
@@ -340,9 +413,8 @@ fn check_directory(corpus: &Corpus, scan: &Scan, diagnostics: &mut Vec<Diagnosti
             None => {
                 seen.insert(memory.slug.as_str(), memory);
             }
-            Some(first) => diagnostics.push(Diagnostic::new(
-                &memory.path,
-                None,
+            Some(first) => diagnostics.push(Diagnostic::at_file(
+                memory,
                 "memory-stem-collision",
                 format!(
                     "same stem as {other}, and the slug is the stem rather than the path",
@@ -369,9 +441,9 @@ fn check_duplicate_tldrs(corpus: &Corpus, diagnostics: &mut Vec<Diagnostic>) {
             None => {
                 seen.insert(key, memory);
             }
-            Some(first) => diagnostics.push(Diagnostic::new(
-                &memory.path,
-                key_line(memory, "tldr"),
+            Some(first) => diagnostics.push(Diagnostic::at_key(
+                memory,
+                "tldr",
                 "memory-duplicate-tldr",
                 format!("same `tldr` as {other}", other = first.path.display()),
             )),
@@ -380,14 +452,10 @@ fn check_duplicate_tldrs(corpus: &Corpus, diagnostics: &mut Vec<Diagnostic>) {
 }
 
 /// File line of a top-level frontmatter key, so a diagnostic points at the
-/// offending line rather than at the file.
+/// offending line rather than at the file. The calculation itself lives in
+/// [`crate::model::key_line`], which the parser needs too.
 fn key_line(memory: &Memory, key: &str) -> Option<usize> {
-    let prefix = format!("{key}:");
-    memory
-        .yaml
-        .lines()
-        .position(|line| line.starts_with(&prefix))
-        .map(|offset| offset + memory.yaml_start_line)
+    crate::model::key_line(&memory.yaml, memory.yaml_start_line, key)
 }
 
 #[cfg(test)]
@@ -401,6 +469,29 @@ mod tests {
 
     fn lint_repo(repo: &Repo) -> Vec<Diagnostic> {
         lint(&repo.load(), fixed_now()).expect("linting a fixture corpus")
+    }
+
+    /// Lint the fixture and assert exactly these rules fired, in order.
+    ///
+    /// One helper rather than the same three-line lint-then-assert-then-format
+    /// block in every test: the assertion shape is stated once, so a change to
+    /// what a failure prints is one edit. Returns the diagnostics so a test can
+    /// go on to check a message.
+    fn expect_rules(repo: &Repo, expected: &[&str]) -> Vec<Diagnostic> {
+        let diagnostics = lint_repo(repo);
+        assert_eq!(rules(&diagnostics), expected, "{diagnostics:?}");
+        diagnostics
+    }
+
+    /// Assert the first diagnostic's message names `needle`, which is what makes
+    /// a rule actionable rather than merely correct.
+    fn expect_message(diagnostics: &[Diagnostic], needle: &str) {
+        assert!(
+            diagnostics
+                .first()
+                .is_some_and(|diagnostic| diagnostic.message.contains(needle)),
+            "expected a message naming {needle:?}: {diagnostics:?}"
+        );
     }
 
     #[test]
@@ -420,12 +511,7 @@ mod tests {
         repo.raw("no-fence.md", "Just a body.\n");
         repo.raw("unterminated.md", "---\ntldr: A line\n");
         repo.raw("empty-frontmatter.md", "---\n---\nBody.\n");
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-frontmatter"; 3],
-            "got {diagnostics:?}"
-        );
+        expect_rules(&repo, &["memory-frontmatter"; 3]);
     }
 
     #[test]
@@ -440,12 +526,7 @@ mod tests {
             "long-tldr.md",
             &format!("---\ntldr: {long}\ngenre: living\n---\nBody.\n"),
         );
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-tldr", "memory-tldr"],
-            "{diagnostics:?}"
-        );
+        expect_rules(&repo, &["memory-tldr", "memory-tldr"]);
     }
 
     #[test]
@@ -454,13 +535,11 @@ mod tests {
         let long_body = "x".repeat((BODY_TOKEN_BUDGET + 1) * BYTES_PER_TOKEN);
         repo.memory("long-memory", "validated_today", &long_body);
         repo.memory("long-living", "genre: living\nvalidated_today", &long_body);
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-body-budget"],
+        let diagnostics = expect_rules(&repo, &["memory-body-budget"]);
+        assert!(
+            diagnostics[0].path.ends_with("long-memory.md"),
             "only `genre: memory` carries the budget: {diagnostics:?}"
         );
-        assert!(diagnostics[0].path.ends_with("long-memory.md"));
     }
 
     #[test]
@@ -468,12 +547,7 @@ mod tests {
         let repo = Repo::new();
         repo.memory("Not_Kebab", "validated_today", "Body.\n");
         repo.memory("has-slug", "slug: elsewhere\nvalidated_today", "Body.\n");
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-slug", "memory-slug"],
-            "{diagnostics:?}"
-        );
+        expect_rules(&repo, &["memory-slug", "memory-slug"]);
     }
 
     #[test]
@@ -486,13 +560,8 @@ mod tests {
         );
 
         repo.topics(&["nix", "builds"]);
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-topic-unknown"],
-            "{diagnostics:?}"
-        );
-        assert!(diagnostics[0].message.contains("nixos"), "{diagnostics:?}");
+        let diagnostics = expect_rules(&repo, &["memory-topic-unknown"]);
+        expect_message(&diagnostics, "nixos");
     }
 
     #[test]
@@ -503,11 +572,9 @@ mod tests {
             "related: [gone]\nsupersedes: [also-gone]\nvalidated_today",
             "Body.\n",
         );
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-related-unresolved", "memory-supersedes-unresolved"],
-            "{diagnostics:?}"
+        expect_rules(
+            &repo,
+            &["memory-related-unresolved", "memory-supersedes-unresolved"],
         );
     }
 
@@ -519,16 +586,8 @@ mod tests {
             "based_on:\n  - path: src/gone.rs\nvalidated_today",
             "Body.\n",
         );
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-based-on-missing"],
-            "{diagnostics:?}"
-        );
-        assert!(
-            diagnostics[0].message.contains("src/gone.rs"),
-            "{diagnostics:?}"
-        );
+        let diagnostics = expect_rules(&repo, &["memory-based-on-missing"]);
+        expect_message(&diagnostics, "src/gone.rs");
     }
 
     #[test]
@@ -542,12 +601,7 @@ mod tests {
             "second.md",
             "---\ntldr: The very same line\ngenre: living\n---\nOther body.\n",
         );
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-duplicate-tldr"],
-            "{diagnostics:?}"
-        );
+        let diagnostics = expect_rules(&repo, &["memory-duplicate-tldr"]);
         assert!(
             diagnostics[0].path.ends_with("second.md"),
             "{diagnostics:?}"
@@ -568,12 +622,7 @@ mod tests {
             "Body.\n",
         );
         repo.memory("a-living-page", "genre: living\n", "Body.\n");
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-unchecked", "memory-unchecked"],
-            "only `genre: memory` carries the clock: {diagnostics:?}"
-        );
+        expect_rules(&repo, &["memory-unchecked", "memory-unchecked"]);
     }
 
     /// `always:` is not a field of this format, and the rule that says so is the
@@ -582,13 +631,8 @@ mod tests {
     fn a_retired_key_is_an_unknown_key_rather_than_an_ignored_line() {
         let repo = Repo::new();
         repo.memory("was-always", "always: true\ngenre: living\n", "Body.\n");
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-unknown-key"],
-            "{diagnostics:?}"
-        );
-        assert!(diagnostics[0].message.contains("always"), "{diagnostics:?}");
+        let diagnostics = expect_rules(&repo, &["memory-unknown-key"]);
+        expect_message(&diagnostics, "always");
     }
 
     #[test]
@@ -668,12 +712,7 @@ mod tests {
                 "Body.\n",
             );
         }
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(
-            rules(&diagnostics),
-            ["memory-directory-budget"],
-            "{diagnostics:?}"
-        );
+        let diagnostics = expect_rules(&repo, &["memory-directory-budget"]);
         assert!(
             diagnostics[0].path.ends_with("docs"),
             "the budget belongs to the leaf directory: {diagnostics:?}"
@@ -708,11 +747,7 @@ mod tests {
     fn a_file_buried_below_one_level_is_reported_rather_than_dropped() {
         let repo = Repo::new();
         repo.buried_memory("docs/deeper", "too-deep", "genre: living\n", "Body.\n");
-        let diagnostics = lint_repo(&repo);
-        assert_eq!(rules(&diagnostics), ["memory-slug"], "{diagnostics:?}");
-        assert!(
-            diagnostics[0].message.contains("one level"),
-            "{diagnostics:?}"
-        );
+        let diagnostics = expect_rules(&repo, &["memory-slug"]);
+        expect_message(&diagnostics, "one level");
     }
 }

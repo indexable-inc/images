@@ -71,13 +71,13 @@ pub fn remember(root: &Root, spec: &RememberSpec<'_>) -> Result<PathBuf> {
     // format's key order, and a line list keeps that order readable.
     let mut lines: Vec<String> = vec![
         "---".to_owned(),
-        format!("tldr: {}", model::yaml_scalar(spec.tldr.trim())),
-        format!("genre: {}", genre_name(spec.genre)),
+        format!("tldr: {}", model::yaml_scalar(spec.tldr.trim())?),
+        format!("genre: {}", spec.genre.rendered()?),
     ];
-    push_flow_list(&mut lines, "topic", spec.topic);
-    push_flow_list(&mut lines, "handle", spec.handle);
+    push_flow_list(&mut lines, "topic", spec.topic)?;
+    push_flow_list(&mut lines, "handle", spec.handle)?;
     lines.push(format!("prior: {}", format_prior(spec.prior)));
-    push_flow_list(&mut lines, "related", spec.related);
+    push_flow_list(&mut lines, "related", spec.related)?;
 
     if !spec.based_on.is_empty() {
         lines.push("based_on:".to_owned());
@@ -93,7 +93,7 @@ pub fn remember(root: &Root, spec: &RememberSpec<'_>) -> Result<PathBuf> {
                 }
                 .fail();
             }
-            lines.push(format!("  - path: {}", model::yaml_scalar(target)));
+            lines.push(format!("  - path: {}", model::yaml_scalar(target)?));
             // A glob stands for a set of files, so there is no single content
             // to hash and the format omits the key.
             if !entry.is_glob()
@@ -109,7 +109,7 @@ pub fn remember(root: &Root, spec: &RememberSpec<'_>) -> Result<PathBuf> {
         // The rendered entry carries its own line breaks, so push it as a block
         // and let the join below leave it alone.
         lines.push(
-            render_validation(entry, "\n")
+            render_validation(entry, "\n")?
                 .trim_end_matches('\n')
                 .to_owned(),
         );
@@ -120,7 +120,7 @@ pub fn remember(root: &Root, spec: &RememberSpec<'_>) -> Result<PathBuf> {
     if spec.scope != Scope::Shared {
         lines.push(format!(
             "scope: {}",
-            model::yaml_scalar(&spec.scope.rendered())
+            model::yaml_scalar(&spec.scope.rendered())?
         ));
     }
     lines.push("---".to_owned());
@@ -155,7 +155,7 @@ pub fn append_validation(memory: &Memory, entry: &Validated) -> Result<Vec<Strin
     })?;
 
     let mut notes = refresh_hashes(&mut file, memory)?;
-    insert_validation(&mut file, entry);
+    insert_validation(&mut file, entry)?;
     notes.push(format!(
         "appended a `validated` entry dated {at}",
         at = entry.at
@@ -186,7 +186,7 @@ pub fn add_supersedes(memory: &Memory, slug: &str) -> Result<Vec<String>> {
 
     let mut supersedes = memory.supersedes.clone();
     supersedes.push(slug.to_owned());
-    replace_key_with_flow_list(&mut file, "supersedes", &supersedes);
+    replace_key_with_flow_list(&mut file, "supersedes", &supersedes)?;
 
     write(&memory.path, &file.render())?;
     Ok(vec![format!(
@@ -218,7 +218,7 @@ pub fn fix(memory: &Memory) -> Result<Vec<String>> {
         // Only touch an out-of-order list. Rewriting a sorted one would restyle
         // a block list into a flow list for no reason.
         if sorted != *values {
-            replace_key_with_flow_list(&mut file, key, &sorted);
+            replace_key_with_flow_list(&mut file, key, &sorted)?;
             notes.push(format!("sorted `{key}`"));
         }
     }
@@ -248,16 +248,6 @@ pub fn validation(by: &str, how: &str, ok: bool, at: chrono::DateTime<chrono::Ut
     }
 }
 
-const fn genre_name(genre: Genre) -> &'static str {
-    match genre {
-        Genre::Memory => "memory",
-        Genre::Living => "living",
-        Genre::Recipe => "recipe",
-        Genre::Historical => "historical",
-        Genre::Frozen => "frozen",
-    }
-}
-
 /// `prior` with a decimal point even when it is whole, so `1` cannot be read
 /// back as an integer by a stricter parser than the one that wrote it.
 fn format_prior(prior: f64) -> String {
@@ -268,19 +258,19 @@ fn format_prior(prior: f64) -> String {
     }
 }
 
-fn push_flow_list(lines: &mut Vec<String>, key: &str, values: &[String]) {
-    if values.is_empty() {
-        return;
+fn push_flow_list(lines: &mut Vec<String>, key: &str, values: &[String]) -> Result<()> {
+    if !values.is_empty() {
+        lines.push(flow_list_line(key, values)?);
     }
-    lines.push(flow_list_line(key, values));
+    Ok(())
 }
 
-fn flow_list_line(key: &str, values: &[String]) -> String {
+fn flow_list_line(key: &str, values: &[String]) -> Result<String> {
     let rendered: Vec<String> = values
         .iter()
         .map(|value| model::yaml_flow_scalar(value))
-        .collect();
-    format!("{key}: [{}]", rendered.join(", "))
+        .collect::<Result<_>>()?;
+    Ok(format!("{key}: [{}]", rendered.join(", ")))
 }
 
 /// A memory file split into its exact pieces. `render` is the identity for a
@@ -343,9 +333,9 @@ fn split_file(contents: &str) -> Option<FrontmatterFile> {
 /// Insert a `validated` entry after the last line of the existing block, or
 /// append the block when there is none. Appending rather than replacing is the
 /// whole point: the history is the evidence.
-fn insert_validation(file: &mut FrontmatterFile, entry: &Validated) {
+fn insert_validation(file: &mut FrontmatterFile, entry: &Validated) -> Result<()> {
     let newline = file.newline;
-    let rendered = render_validation(entry, newline);
+    let rendered = render_validation(entry, newline)?;
 
     let lines = split_lines(&file.yaml);
     if let Some(block) = key_block(&lines, "validated") {
@@ -365,18 +355,19 @@ fn insert_validation(file: &mut FrontmatterFile, entry: &Validated) {
         file.yaml.push_str(newline);
         file.yaml.push_str(&rendered);
     }
+    Ok(())
 }
 
 /// One `validated:` sequence entry, indented the way the format writes it. One
 /// function so a birth entry and an appended one cannot drift apart.
-fn render_validation(entry: &Validated, newline: &str) -> String {
-    format!(
+fn render_validation(entry: &Validated, newline: &str) -> Result<String> {
+    Ok(format!(
         "  - at: {at}{newline}    by: {by}{newline}    how: {how}{newline}    ok: {ok}{newline}",
-        at = model::yaml_scalar(&entry.at),
-        by = model::yaml_scalar(&entry.by),
-        how = model::yaml_scalar(&entry.how),
+        at = model::yaml_scalar(&entry.at)?,
+        by = model::yaml_scalar(&entry.by)?,
+        how = model::yaml_scalar(&entry.how)?,
         ok = entry.ok,
-    )
+    ))
 }
 
 /// Recompute every `based_on` hash and write the current value, adding the key
@@ -476,9 +467,13 @@ struct CurrentEntry {
 /// Replace a top-level key's whole block with a single flow-list line, or add
 /// the key when it is absent. Restyling a block list to a flow list is a real
 /// change to the file, which is why callers only do it when the values changed.
-fn replace_key_with_flow_list(file: &mut FrontmatterFile, key: &str, values: &[String]) {
+fn replace_key_with_flow_list(
+    file: &mut FrontmatterFile,
+    key: &str,
+    values: &[String],
+) -> Result<()> {
     let newline = file.newline;
-    let replacement = format!("{}{newline}", flow_list_line(key, values));
+    let replacement = format!("{}{newline}", flow_list_line(key, values)?);
     let lines = split_lines(&file.yaml);
 
     if let Some(block) = key_block(&lines, key) {
@@ -497,6 +492,7 @@ fn replace_key_with_flow_list(file: &mut FrontmatterFile, key: &str, values: &[S
         }
         file.yaml.push_str(&replacement);
     }
+    Ok(())
 }
 
 /// Lines with their terminators, so rebuilding is byte-exact.

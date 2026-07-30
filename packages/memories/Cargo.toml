@@ -23,6 +23,7 @@ blake3.workspace = true
 # pins chrono with `default-features = false`.
 chrono = { workspace = true, features = ["alloc", "clock", "std"] }
 clap = { workspace = true, features = ["derive"] }
+cli-entry.workspace = true
 dirs.workspace = true
 file-search.workspace = true
 glob.workspace = true

@@ -134,14 +134,7 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(&cli) {
-        Ok(code) => code,
-        Err(error) => {
-            eprintln!("memories: {error:#}");
-            ExitCode::FAILURE
-        }
-    }
+    cli_entry::run("memories", |cli: Cli| run(&cli))
 }
 
 fn run(cli: &Cli) -> Result<ExitCode> {
@@ -226,19 +219,9 @@ fn run_roots(cli: &Cli) -> Result<ExitCode> {
     let corpus = load_roots(requested.clone())?;
     let rows = report::root_rows(&requested, &corpus);
 
-    if cli.json {
-        print_json(&report::RootsOutput { roots: rows })?;
-    } else {
-        for row in &rows {
-            println!(
-                "{path}  exists={exists}  memories={memories}",
-                path = row.path,
-                exists = row.exists,
-                memories = row.memories
-            );
-        }
-    }
-    Ok(ExitCode::SUCCESS)
+    // Collected before the payload takes ownership of the rows.
+    let lines: Vec<String> = rows.iter().map(report::Columns::line).collect();
+    emit(cli, &report::RootsOutput { roots: rows }, lines)
 }
 
 fn run_search(
@@ -534,18 +517,27 @@ fn run_validate(
 }
 
 fn emit_rows(cli: &Cli, rows: Vec<report::Row>) -> Result<ExitCode> {
+    let mut lines: Vec<String> = rows.iter().map(report::Columns::line).collect();
+    lines.push(format!("{count} rows", count = rows.len()));
+    emit(cli, &report::RowsOutput { rows }, lines)
+}
+
+/// Print `payload` as JSON, or `lines` for a terminal.
+///
+/// One function rather than the same `if cli.json { … } else { for … } }` branch
+/// in every handler: the two outputs are one decision, and writing it twice is
+/// how a subcommand ends up printing human text into a JSON pipe.
+fn emit<T: serde::Serialize>(
+    cli: &Cli,
+    payload: &T,
+    lines: impl IntoIterator<Item = String>,
+) -> Result<ExitCode> {
     if cli.json {
-        print_json(&report::RowsOutput { rows })?;
+        print_json(payload)?;
     } else {
-        for row in &rows {
-            println!(
-                "{slug}  {reason}  {tldr}",
-                slug = row.slug,
-                reason = row.reason,
-                tldr = row.tldr
-            );
+        for line in lines {
+            println!("{line}");
         }
-        println!("{count} rows", count = rows.len());
     }
     Ok(ExitCode::SUCCESS)
 }

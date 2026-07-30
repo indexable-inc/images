@@ -16,6 +16,20 @@ use crate::{
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+/// A row as a terminal line: its columns, joined by two spaces.
+///
+/// Terminal rendering lives with the row rather than in the CLI, and the joining
+/// lives here rather than in each row, so "how a row looks" is one sentence of
+/// code and each row only says which columns it has.
+pub trait Columns {
+    fn columns(&self) -> Vec<String>;
+
+    /// The row as one line.
+    fn line(&self) -> String {
+        self.columns().join("  ")
+    }
+}
+
 /// The two ranking numbers, present on a `search` hit and absent on a `show`.
 #[derive(Clone, Copy, Debug)]
 pub struct Scores {
@@ -73,6 +87,16 @@ pub struct RootRow {
     pub memories: usize,
 }
 
+impl Columns for RootRow {
+    fn columns(&self) -> Vec<String> {
+        vec![
+            self.path.clone(),
+            format!("exists={exists}", exists = self.exists),
+            format!("memories={memories}", memories = self.memories),
+        ]
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct SearchOutput {
     pub query: String,
@@ -110,6 +134,12 @@ pub struct Row {
     pub path: String,
     pub tldr: String,
     pub reason: String,
+}
+
+impl Columns for Row {
+    fn columns(&self) -> Vec<String> {
+        vec![self.slug.clone(), self.reason.clone(), self.tldr.clone()]
+    }
 }
 
 #[derive(Debug, Serialize)]

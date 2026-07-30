@@ -60,6 +60,7 @@ members = [
   "packages/astlog/cli",
   "packages/astlog/core",
   "packages/astlog/py",
+  "packages/cli-entry",
   "packages/clone-detect/cli",
   "packages/clone-detect/detect",
   "packages/clone-detect/hash",
@@ -286,6 +287,7 @@ clone-detect = { path = "packages/clone-detect/detect" }
 clone-hash = { path = "packages/clone-detect/hash" }
 clone-pragma = { path = "packages/clone-detect/pragma" }
 clone-scanner = { path = "packages/clone-detect/scanner" }
+cli-entry = { path = "packages/cli-entry" }
 clone-test-support = { path = "packages/clone-detect/test-support" }
 complexity-metric = { path = "packages/complexity/metric" }
 error-chain = { path = "packages/error-chain" }

@@ -92,6 +92,9 @@ pub enum Error {
     #[snafu(display("Path {path} is not valid UTF-8, so it cannot be matched as a glob", path = path.display()))]
     NonUtf8Path { path: PathBuf },
 
+    #[snafu(display("Failed to render a YAML scalar: {source}"))]
+    YamlScalar { source: serde_norway::Error },
+
     #[snafu(display("Failed to render JSON: {source}"))]
     Json { source: serde_json::Error },
 

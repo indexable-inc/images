@@ -142,6 +142,20 @@ pub const KNOWN_KEYS: [&str; 11] = [
     "slug",
 ];
 
+impl Genre {
+    /// The genre's wire name, rendered by the same serde rename the parser reads.
+    ///
+    /// Replaced a hand-written `match` in the writer: one source of truth means a
+    /// genre added to the enum cannot be forgotten in the file it writes.
+    ///
+    /// # Errors
+    ///
+    /// As [`yaml_scalar`].
+    pub fn rendered(self) -> Result<String> {
+        yaml_scalar(&self)
+    }
+}
+
 /// One `validated:` entry. `at` is kept as written so JSON output and rewrites
 /// reproduce the file byte for byte; `at_time` is the same instant parsed.
 #[derive(Clone, Debug, Serialize)]
@@ -413,7 +427,7 @@ pub fn parse_memory(
     if !(0.0..=1.0).contains(&prior) {
         return Err(ParseError::new(
             "memory-frontmatter",
-            key_line(&sections, "prior"),
+            section_key_line(&sections, "prior"),
             format!("`prior` is {prior}, outside the 0..1 range"),
         ));
     }
@@ -426,7 +440,7 @@ pub fn parse_memory(
         Some(written) => Scope::parse(written).map_err(|bad| {
             ParseError::new(
                 "memory-frontmatter",
-                key_line(&sections, "scope"),
+                section_key_line(&sections, "scope"),
                 format!("`scope` is {bad:?}, not `shared` or `user:<name>`"),
             )
         })?,
@@ -504,7 +518,7 @@ fn check_known_keys(
         if !KNOWN_KEYS.contains(&name) {
             return Err(ParseError::new(
                 "memory-unknown-key",
-                key_line(sections, name),
+                section_key_line(sections, name),
                 format!(
                     "`{name}` is not a frontmatter key of this format; the keys are {known}",
                     known = KNOWN_KEYS.join(", ")
@@ -525,7 +539,7 @@ fn parse_validations(
             .map_err(|time_error| {
                 ParseError::new(
                     "memory-frontmatter",
-                    key_line(sections, "validated"),
+                    section_key_line(sections, "validated"),
                     format!(
                         "`validated[{position}].at` is {at:?}, not an RFC 3339 timestamp: \
                          {time_error}",
@@ -558,7 +572,7 @@ fn parse_based_on(
         {
             return Err(ParseError::new(
                 "memory-frontmatter",
-                key_line(sections, "based_on"),
+                section_key_line(sections, "based_on"),
                 format!("`based_on` hash {hash:?} is not lowercase hex"),
             ));
         }
@@ -595,13 +609,22 @@ fn yaml_line(yaml_error: &serde_norway::Error, yaml_start_line: usize) -> Option
 
 /// File line of a top-level frontmatter key, for a diagnostic that points at
 /// the offending line rather than the top of the block.
-fn key_line(sections: &Sections<'_>, key: &str) -> Option<usize> {
+///
+/// Takes the YAML block and its start line rather than a [`Sections`] or a
+/// [`Memory`], because both exist and both need this: the parser has only the
+/// sections, the linter has only the parsed memory, and two copies of one line
+/// calculation is two places to fix it when it is off by one.
+#[must_use]
+pub fn key_line(yaml: &str, yaml_start_line: usize, key: &str) -> Option<usize> {
     let prefix = format!("{key}:");
-    sections
-        .yaml
-        .lines()
+    yaml.lines()
         .position(|line| line.starts_with(&prefix))
-        .map(|offset| offset + sections.yaml_start_line)
+        .map(|offset| offset + yaml_start_line)
+}
+
+/// [`key_line`] for the sections the parser is holding.
+fn section_key_line(sections: &Sections<'_>, key: &str) -> Option<usize> {
+    key_line(sections.yaml, sections.yaml_start_line, key)
 }
 
 fn is_lowercase_hex(value: &str) -> bool {
@@ -632,78 +655,49 @@ pub fn format_timestamp(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// Render `value` as a YAML scalar, quoting only when it has to be quoted.
+/// Render `value` as a one-line YAML scalar, quoted exactly as much as YAML
+/// requires.
 ///
-/// A plain scalar is quoted when it would be read back as something else (a
-/// number, a boolean, a nested mapping). The alternative, quoting everything, is
-/// safe but makes every `tldr` in every diff read as a quoted blob; this keeps
-/// the common case plain and pays for it with the round-trip test in this
-/// module.
-#[must_use]
-pub fn yaml_scalar(value: &str) -> String {
-    if needs_quoting(value) {
-        quote(value)
-    } else {
-        value.to_owned()
+/// The library that parses these files renders them, so the writer and the
+/// reader cannot disagree about quoting. This replaced a hand-rolled quoter with
+/// its own `needs_quoting` table: YAML's rules have cases hand-rolling misses,
+/// and these are files our own linter has to parse, so a writer-only bug becomes
+/// a corpus that will not load.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::YamlScalar`] when the value cannot be rendered, and
+/// [`crate::Error::Json`] when a value needing a one-line form cannot be
+/// rendered as a JSON string.
+pub fn yaml_scalar<T: Serialize + ?Sized>(value: &T) -> Result<String> {
+    let rendered = serde_norway::to_string(value)
+        .context(error::YamlScalarSnafu)?
+        .trim_end_matches('\n')
+        .to_owned();
+
+    // Frontmatter is written a line at a time, so a scalar that renders across
+    // several lines (a block scalar for embedded newlines) cannot be spliced
+    // into one. A JSON string is a valid YAML double-quoted scalar and is always
+    // one line, so serde does that escaping too.
+    if rendered.contains('\n') {
+        return serde_json::to_string(value).context(error::JsonSnafu);
     }
+    Ok(rendered)
 }
 
-/// Render `value` as a YAML scalar inside a flow sequence (`[a, b]`), where the
-/// separators are part of the syntax and a value containing one has to be
-/// quoted even though it would be a fine block scalar.
-#[must_use]
-pub fn yaml_flow_scalar(value: &str) -> String {
-    if value.contains([',', '[', ']', '{', '}']) {
-        quote(value)
-    } else {
-        yaml_scalar(value)
+/// Render `value` as a YAML scalar inside a flow sequence (`[a, b]`).
+///
+/// # Errors
+///
+/// As [`yaml_scalar`].
+pub fn yaml_flow_scalar(value: &str) -> Result<String> {
+    let rendered = yaml_scalar(value)?;
+    // In a flow sequence the separators are syntax, so a value carrying one has
+    // to be quoted even though it is a fine block scalar.
+    if rendered.contains([',', '[', ']', '{', '}']) {
+        return serde_json::to_string(value).context(error::JsonSnafu);
     }
-}
-
-fn quote(value: &str) -> String {
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => quoted.push_str("\\\""),
-            '\\' => quoted.push_str("\\\\"),
-            '\n' => quoted.push_str("\\n"),
-            '\r' => quoted.push_str("\\r"),
-            '\t' => quoted.push_str("\\t"),
-            other => quoted.push(other),
-        }
-    }
-    quoted.push('"');
-    quoted
-}
-
-/// YAML indicator characters that change a scalar's meaning when they lead it.
-const LEADING_INDICATORS: [char; 15] = [
-    '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '%',
-];
-
-fn needs_quoting(value: &str) -> bool {
-    if value.is_empty() || value.trim() != value {
-        return true;
-    }
-    if value.starts_with(LEADING_INDICATORS) || value.starts_with('\'') || value.starts_with('"') {
-        return true;
-    }
-    if value.contains(": ") || value.ends_with(':') || value.contains(" #") {
-        return true;
-    }
-    if value.contains(['\n', '\r', '\t']) {
-        return true;
-    }
-    // A plain scalar that reads as a number, boolean, or null would come back
-    // as that type rather than as a string.
-    if value.parse::<f64>().is_ok() || value.parse::<i64>().is_ok() {
-        return true;
-    }
-    matches!(
-        value.to_ascii_lowercase().as_str(),
-        "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~"
-    )
+    Ok(rendered)
 }
 
 #[cfg(test)]
@@ -878,6 +872,26 @@ mod tests {
         assert_eq!(memory.body, "Body with a --- inside\n\nand a blank line.\n");
     }
 
+    /// The genre written into a file is the genre read back out. The writer used
+    /// to carry its own `match` over the variants, so this is the test that makes
+    /// deleting it safe: a variant added to the enum cannot be forgotten.
+    #[test]
+    fn every_genre_round_trips_through_its_rendered_name() {
+        for genre in [
+            Genre::Memory,
+            Genre::Living,
+            Genre::Recipe,
+            Genre::Historical,
+            Genre::Frozen,
+        ] {
+            let rendered = genre.rendered().expect("a genre always renders");
+            let contents = format!("---\ntldr: A line\ngenre: {rendered}\n---\nBody.\n");
+            let parsed = parse(&contents)
+                .unwrap_or_else(|error| panic!("`genre: {rendered}` must parse: {error:?}"));
+            assert_eq!(parsed.genre, genre, "rendered as {rendered:?}");
+        }
+    }
+
     #[test]
     fn kebab_case_check_rejects_the_shapes_a_slug_cannot_take() {
         assert!(is_kebab_case("nix-rebuild-cascade"));
@@ -913,9 +927,19 @@ mod tests {
             "{braces}",
             "[brackets]",
             "",
+            // Embedded newlines: the writer splices a scalar into one
+            // frontmatter line, so the rendering has to stay on one line.
+            "two\nlines",
+            "trailing newline\n",
+            "tab\tseparated",
         ];
         for value in nasty {
-            let document = format!("tldr: {}\n", yaml_scalar(value));
+            let rendered = yaml_scalar(value).expect("a string always renders");
+            assert!(
+                !rendered.contains('\n'),
+                "a scalar spliced into a line must render on one line, got {rendered:?}"
+            );
+            let document = format!("tldr: {rendered}\n");
             let parsed: std::collections::BTreeMap<String, String> =
                 serde_norway::from_str(&document)
                     .unwrap_or_else(|error| panic!("{document:?} must parse: {error}"));
