@@ -111,9 +111,129 @@ fn grep_walks_tree(stage: &str) -> bool {
     false
 }
 
+/// Diff-producing git subcommands whose output is rendered by `diff.external`.
+///
+/// `log` is here only because `git log -p` emits a patch; a plain `git log`
+/// runs no diff driver and is filtered by the patch-flag check below.
+const DIFF_SUBCOMMANDS: &[&str] = &[
+    "diff",
+    "show",
+    "log",
+    "range-diff",
+    "diff-tree",
+    "whatchanged",
+];
+
+/// Output shapes git computes itself, never handing the blobs to a driver.
+/// `--quiet`/`--exit-code` are here because the caller wants the exit status,
+/// which stays correct under an external diff.
+const DIFF_SHAPES_WITHOUT_A_DRIVER: &[&str] = &[
+    "--quiet",
+    "--exit-code",
+    "--name-only",
+    "--name-status",
+    "--numstat",
+    "--shortstat",
+    "--summary",
+    "--compact-summary",
+    "--raw",
+    "--check",
+    "--no-patch",
+    "-s",
+];
+
+/// Whether one git invocation's output will be produced by a `diff.external`
+/// driver instead of by git.
+///
+/// The rule is deliberately shape-based and not "is the output being parsed":
+/// a driver's rendering is worse for an agent either way (difftastic emits
+/// columnar side-by-side text with no `+`/`-` prefixes, no `@@` hunk headers
+/// and no `a/`,`b/` paths, truncated to a width), so requiring the flag on
+/// every patch-producing call is both simpler and right.
+fn renders_through_a_diff_driver(sub: &str, args: &[String]) -> bool {
+    if !DIFF_SUBCOMMANDS.contains(&sub) {
+        return false;
+    }
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    if flag("--no-ext-diff") {
+        return false;
+    }
+    // `git log`/`git show -s` only diff when asked to.
+    let patch = flag("-p") || flag("-u") || flag("--patch") || flag("--cc") || flag("-c");
+    if (sub == "log" || sub == "whatchanged" || sub == "diff-tree") && !patch {
+        return false;
+    }
+    if args
+        .iter()
+        .any(|a| DIFF_SHAPES_WITHOUT_A_DRIVER.contains(&a.as_str()) || a.starts_with("--stat"))
+    {
+        return false;
+    }
+    // `git show -s --format=...` prints the commit header only.
+    if sub == "show" && flag("-s") {
+        return false;
+    }
+    true
+}
+
+/// The `diff.external` value in effect, if any. `None` means git is producing
+/// its own patches and the guard has nothing to say.
+///
+/// Read from git rather than hardcoded: the guard must go quiet on a machine
+/// that has no driver configured, or it is noise rather than a guard.
+fn configured_diff_driver(cwd: Option<&str>) -> Option<String> {
+    // `IX_GIT` from the wrapper, else PATH -- the same resolution the git and
+    // write guards use, so this one still works in the sandbox where the
+    // install-check runs and there is no `git` on PATH.
+    let git = std::env::var("IX_GIT").unwrap_or_else(|_| "git".to_owned());
+    let mut cmd = std::process::Command::new(git);
+    if let Some(dir) = cwd {
+        cmd.args(["-C", dir]);
+    }
+    let out = cmd
+        .args(["config", "--get", "diff.external"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status.success().then_some(())?;
+    let value = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+/// The git call in `cmd`, if any, whose output a `diff.external` driver would
+/// render. Returns the subcommand for the deny message.
+fn ext_diff_offender(cmd: &str) -> Option<String> {
+    for stmt in expanded_statements(cmd) {
+        let Some(run) = invocation(&stmt) else {
+            continue;
+        };
+        if run.head != "git" && std::path::Path::new(run.head).file_name() != Some("git".as_ref()) {
+            continue;
+        }
+        let Some(call) = parse_git_call(run.args, std::path::Path::new(".")) else {
+            continue;
+        };
+        // An explicit `-c diff.external=` on the command line already neutralizes
+        // the driver, so the call is safe whatever the config says.
+        if run
+            .args
+            .iter()
+            .any(|a| a.starts_with("diff.external=") || a.starts_with("core.pager="))
+        {
+            continue;
+        }
+        if renders_through_a_diff_driver(&call.sub, &call.args) {
+            return Some(call.sub);
+        }
+    }
+    None
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
-/// recursive `grep -r`, `--no-verify`). Quote/escape-aware so a literal mention
-/// inside a commit message or `echo` is not a false positive.
+/// recursive `grep -r`, `--no-verify`, a patch rendered by `diff.external`).
+/// Quote/escape-aware so a literal mention inside a commit message or `echo` is
+/// not a false positive.
 pub fn bash_habits_guard() {
     let Some(payload) = payload() else { return };
     if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
@@ -128,7 +248,7 @@ pub fn bash_habits_guard() {
     let strip = |re: &str, s: String| {
         regex::Regex::new(re).map_or_else(|_| s.clone(), |r| r.replace_all(&s, " ").into_owned())
     };
-    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw)));
+    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw.clone())));
 
     // 1. stderr-to-null / all-to-null / the `>/dev/null 2>&1` idiom.
     let to_null = [
@@ -175,6 +295,29 @@ pub fn bash_habits_guard() {
              yourself outside the agent. (bash-habits-guard hook)"
                 .to_owned(),
         );
+        return;
+    }
+
+    // 4. A patch rendered by `diff.external` instead of produced by git.
+    //
+    //    Parsed from `raw`, not the quote-stripped `cmd`: the statement splitter
+    //    is quote-aware on its own and stripping first would eat quoted paths.
+    //
+    //    Ordered last because it shells out to `git config`; the three checks
+    //    above are pure and must not pay for it.
+    if let Some(sub) = ext_diff_offender(&raw) {
+        let cwd = payload.get("cwd").and_then(Value::as_str);
+        if let Some(driver) = configured_diff_driver(cwd) {
+            deny(format!(
+                "`git {sub}` here renders through `diff.external = {driver}`, not git. You get \
+                 columnar side-by-side text with no `+`/`-` prefixes, no `@@` headers and no \
+                 `a/`,`b/` paths -- so a sweep for added lines silently matches nothing, and the \
+                 output is not a patch you can apply. Add `--no-ext-diff` (and `--no-textconv` \
+                 if you are hashing or applying the result). Exit-status and shape flags \
+                 (`--quiet`, `--name-only`, `--stat`, `--numstat`) are unaffected and allowed \
+                 as-is. (bash-habits-guard hook)"
+            ));
+        }
     }
 }
 
@@ -1608,9 +1751,9 @@ mod tests {
 
     use super::{
         GitGuardEnv, WriteGuardEnv, discards_worktree, edits_in_place, expanded_statements,
-        git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag, mutates_checkout,
-        operands, parse_git_call, reads_other_revision, redirect_targets, statements,
-        write_guard_decision,
+        ext_diff_offender, git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag,
+        mutates_checkout, operands, parse_git_call, reads_other_revision, redirect_targets,
+        statements, write_guard_decision,
     };
 
     fn toks(v: &[&str]) -> Vec<String> {
@@ -2462,6 +2605,64 @@ mod tests {
         // The JSON that never parses at all never reaches the decision: the
         // hook's `payload()` returns None and `git_guard` returns silently.
         assert!(serde_json::from_str::<Value>("{not json").is_err());
+    }
+
+    /// The shapes that must be caught: anything that hands blobs to the driver.
+    #[test]
+    fn ext_diff_offender_catches_patch_producing_calls() {
+        for cmd in [
+            "git diff",
+            "git diff --staged",
+            "git diff main...HEAD",
+            "git show HEAD",
+            "git log -p -3",
+            "git diff --binary HEAD",
+            "git -C \"/Users/a b/ix\" diff",
+            "sudo git diff",
+            "bash -c 'git diff > /tmp/x.patch'",
+            "cd /tmp && git diff --cached",
+            // The exact call that started this: an added-lines sweep that
+            // matched nothing because difftastic writes no `+` prefixes.
+            "git diff | grep '^+'",
+        ] {
+            assert!(
+                ext_diff_offender(cmd).is_some(),
+                "must flag a driver-rendered patch: {cmd}"
+            );
+        }
+    }
+
+    /// The shapes that must NOT be flagged, or the guard is noise. git computes
+    /// these itself and never invokes the driver.
+    #[test]
+    fn ext_diff_offender_leaves_driver_free_shapes_alone() {
+        for cmd in [
+            "git diff --no-ext-diff",
+            "git -c diff.external= diff",
+            "git diff --quiet",
+            "git diff --exit-code",
+            "git diff --name-only",
+            "git diff --name-status -z",
+            "git diff --stat",
+            "git diff --stat=200",
+            "git diff --numstat",
+            "git diff --shortstat",
+            "git diff --raw",
+            "git log --oneline -10",
+            "git log --format=%H",
+            "git show -s --format=%cI HEAD",
+            "git status",
+            "git rev-parse HEAD",
+            // `gh pr diff` fetches the patch over the API; git config is not
+            // involved, so demanding the flag there would be wrong.
+            "gh pr diff 123",
+        ] {
+            assert_eq!(
+                ext_diff_offender(cmd),
+                None,
+                "must not flag a call git renders itself: {cmd}"
+            );
+        }
     }
 
     #[test]

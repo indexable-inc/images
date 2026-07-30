@@ -23,8 +23,14 @@ value with no logic). Say so in one line and stop.
 
 1. Find the change context: `cwd` = repo root via `git rev-parse --show-toplevel`
    (fall back to the current directory if not in a git tree). The review targets
-   `git diff` plus `git diff --staged`; if both are empty because the change was
-   already committed, the finders fall back to `git show HEAD`.
+   `git diff --no-ext-diff` plus `git diff --no-ext-diff --staged`; if both are
+   empty because the change was already committed, the finders fall back to
+   `git show --no-ext-diff HEAD`.
+
+   `--no-ext-diff` is not optional. This fleet sets `diff.external = difft`
+   globally, so a bare `git diff` returns difftastic's columnar rendering: no
+   `+`/`-` prefixes, no `@@` headers, no `a/`,`b/` paths, truncated to a width.
+   A finder sweeping that for added lines finds none and reports clean.
 
 2. Call the **Workflow** tool with the committed review script (do not inline a
    script of your own):
@@ -46,8 +52,9 @@ value with no logic). Say so in one line and stop.
    a `Workflow` tool. If the call fails because the tool does not exist, do not
    stall or improvise a different review: run the same shape manually. Spawn one
    `code-reviewer` agent per dimension — correctness, security, performance,
-   maintainability — over the same diff (`git diff` + `git diff --staged`,
-   falling back to `git show HEAD`), all in a single message so they run
+   maintainability — over the same diff (`git diff --no-ext-diff` + `git diff
+   --no-ext-diff --staged`, falling back to `git show --no-ext-diff HEAD`), all
+   in a single message so they run
    concurrently, each restricted to its one dimension. Then adversarially verify
    each finding yourself (try to refute it against the actual code) before
    reporting, and keep the same ranking: Correctness and Security are blockers.

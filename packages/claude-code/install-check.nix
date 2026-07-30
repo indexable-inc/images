@@ -526,6 +526,40 @@
     pre_guard bash-habits-guard "quoted mention not a false positive" allow \
       "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo '2>/dev/null'\"}}"
 
+    # Rule 4 fires only where a `diff.external` driver is configured, so it
+    # needs a repo that has one and a directory that does not. Both halves are
+    # the check: a guard that stays silent under a driver is useless, and one
+    # that fires without a driver is noise.
+    extdiff="$checktop/extdiff"
+    ${lib.getExe git} init -q "$extdiff"
+    ${lib.getExe git} -C "$extdiff" config diff.external /bin/echo
+    habits_payload() {
+      ${lib.getExe jq} -nc --arg c "$1" --arg k "$2" \
+        '{tool_name:"Bash",cwd:$c,tool_input:{command:$k}}'
+    }
+    ext_guard() {
+      local desc="$1" expect="$2" got verdict
+      got="$(habits_payload "$3" "$4" \
+        | IX_GIT=${lib.getExe git} ${hookRunner}/bin/claude-hooks bash-habits-guard)"
+      case "$got" in
+      ''') verdict=allow ;;
+      *'"permissionDecision":"deny"'*) verdict=deny ;;
+      *) verdict="unparsed: $got" ;;
+      esac
+      if [ "$verdict" != "$expect" ]; then
+        printf 'bash-habits-guard ext-diff check failed (%s): expected %s, got %s\n' \
+          "$desc" "$expect" "$verdict" >&2
+        exit 1
+      fi
+    }
+    ext_guard "patch under a diff.external driver"  deny  "$extdiff" "git diff"
+    ext_guard "git show under a driver"             deny  "$extdiff" "git show HEAD"
+    ext_guard "--no-ext-diff is the way out"        allow "$extdiff" "git diff --no-ext-diff"
+    ext_guard "--name-only never reaches a driver"  allow "$extdiff" "git diff --name-only"
+    ext_guard "--stat never reaches a driver"       allow "$extdiff" "git diff --stat"
+    ext_guard "plain log runs no diff"              allow "$extdiff" "git log --oneline -5"
+    ext_guard "no driver configured, stays silent"  allow "$primary" "git diff"
+
     pre_guard search-guard "Search tool denied" deny '{"tool_name":"Search"}'
     pre_guard search-guard "WebSearch not denied" allow '{"tool_name":"WebSearch"}'
 

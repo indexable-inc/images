@@ -107,8 +107,10 @@
         From your input, pick the target (in this order):
 
         - **PR number / URL** → `gh pr view <n> --repo <owner/repo> --json title,body,baseRefName,headRefName,additions,deletions,changedFiles` then `gh pr diff <n> --repo <owner/repo>`.
-        - **branch** → `git diff <base>...HEAD` (base = the branch's merge base with the default branch).
-        - **a path / "the current change"** with no PR → `git diff` and `git diff --staged`; if both empty, `git show HEAD`.
+        - **branch** → `git diff --no-ext-diff <base>...HEAD` (base = the branch's merge base with the default branch).
+        - **a path / "the current change"** with no PR → `git diff --no-ext-diff` and `git diff --no-ext-diff --staged`; if both empty, `git show --no-ext-diff HEAD`.
+
+        `--no-ext-diff` on every one of those: this fleet sets `diff.external = difft` globally, and difftastic prints columnar side-by-side text with no `+`/`-` prefixes, no `@@` headers and no `a/`,`b/` paths. A sweep over that output for added lines matches nothing and reads as a clean result. `gh pr diff` fetches the patch over the API and needs no flag.
 
         Then read the **full files** around each hunk, not just the diff — a diff hides the context a bug lives in. Read the repo's `CLAUDE.md` / `AGENTS.md` / `CONTRIBUTING.md` and nearby code so findings match the project's real conventions, not generic best practice. For unfamiliar APIs, dependencies, or CVE-prone areas, use Exa (`mcp__exa__web_search_exa`, then `mcp__exa__web_fetch_exa` when needed) to verify behavior rather than guessing.
 
