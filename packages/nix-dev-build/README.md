@@ -36,52 +36,72 @@ quote one number. A body-only edit recompiles that unit, relinks
 `libnixexpr.2.34.7.dylib` and regenerates its symbol file, 3 of 10 edges, and
 does not relink `src/nix/nix` at all; the change arrives through dynamic linking.
 
-## The rebuild is serial, so load only matters once the cores run out
+## The rebuild is serial, and contention doubles it. Load average will not tell you
 
-Timing `ninja` for the same `eval.cc` edit across a load sweep, with `real` over
-`user` as the contention signal. This machine reports `hw.ncpu = 18`:
+Ten timings of the same `eval.cc` edit, taken across an evening on a shared
+machine, sorted by `real` over `user`:
 
-| load | real | real / user |
+| real / user | real | reported 1 minute load |
 | --- | --- | --- |
-| 13.2 to 18.4, eight runs | 6.36 to 6.80s | 1.04 to 1.05 |
-| about 25, two runs | 13.06s, 15.78s | 1.52, 1.62 |
+| 1.04 to 1.11, six runs | 6.36 to 9.38s | 13.18 to 40.76 |
+| 1.49 to 1.62, four runs | 12.33 to 15.78s | 24.90 to 37.21 |
 
-Below `hw.ncpu` the wall clock is flat and the process is barely waiting. Above
-it the same work takes 2.4x longer and the ratio jumps, because the rebuild needs
-exactly one core: forcing `ninja -j1` costs almost nothing, 7.03s and 7.34s
-against 6.36 to 6.80s at the default. So a jobs flag earns nothing on a
-single-file edit and only pays on a cold or wide rebuild. The threshold is stated
-against `hw.ncpu` rather than against 18 because the mechanism is a core count,
-not a fact about this Mac.
+The ratio separates the fast runs from the slow ones exactly. Load average does
+not: the two load ranges overlap almost completely, and the single fastest run,
+7.39s, was taken at a reported load of 39.24 while a 15.78s run was taken at
+24.90.
 
-`user` inflates above the threshold too, 6.15s to 9.76s, so the same compile
-costs more processor time and not only more wall clock. **Why it does is not
-established.** Two candidates, neither tested against the other:
+That is a property of the instrument rather than a surprise about the machine.
+Load average is a decaying one minute mean and this rebuild is a seven second
+event, so the number describes the minute that just ended rather than the seconds
+being measured. A burst of other work keeps it inflated for a minute after the
+burst is over.
 
-- Contention for cache and memory bandwidth, so the same instructions take more
-  cycles on the same core.
-- Displacement onto a slower core. `hw.perflevel0` is 6 cores named `Super` and
-  `hw.perflevel1` is 12 named `Performance`, with no efficiency tier on this
-  part, so a displaced compile moves between two grades of performance core
-  rather than off them.
+What holds up is the mechanism. The rebuild needs exactly one core: forcing
+`ninja -j1` costs almost nothing, 7.03s and 7.34s against 6.36 to 6.80s at the
+default. So a jobs flag earns nothing on a single-file edit and only pays on a
+cold or wide rebuild. When the process gets that core promptly, `real` is within
+11% of `user` and the edit costs about 6.4 to 7.5s. When it does not, `real` runs
+about 1.5x `user` and the edit roughly doubles.
 
-The available bound does not separate them. Forcing the lowest tier with
-`taskpolicy -b` at low load costs 2.5x in `user`, 15.8s and 17.0s against 6.4s
-and 8.1s, so full displacement would over-explain the 1.59x actually observed
-while partial displacement would fit it, and so would contention. That flag also
-changes scheduling priority, not only tier, so 2.5x is an upper bound on the tier
-effect and not a measurement of it.
+`user` also inflates when contended, 6.10s to 9.76s, so the same compile costs
+more processor time and not only more wall clock. Why is not established. Two
+candidates survive: contention for cache and memory bandwidth, or displacement
+onto a slower core. Forcing the lowest core tier with `taskpolicy -b` costs 2.5x
+in `user`, 15.8s and 17.0s against 6.4s and 8.1s, which bounds displacement
+without isolating it, and that flag moves scheduling priority as well as tier.
+The topology defeats the obvious guess in any case: `hw.perflevel0` is 6 cores
+named `Super` and `hw.perflevel1` is 12 named `Performance`, with no efficiency
+tier on this part.
 
-The clean test pins the compile to the top tier and re-runs above the threshold,
-which needs a box deliberately driven past `hw.ncpu`. That is not something to do
-on a shared machine with other people's timings on it, so it is left undone here
-rather than answered badly.
-
-Two consequences for anyone quoting a number from this tool. Report load beside
-it, since the same edit is 6.5s or 16s depending on which side of `hw.ncpu` the
-box is. And discard the first run: another session measured a 34% first-run
+So when quoting a number from this loop, report `real` and `user` together rather
+than load. And discard the first run: another session measured a 34% first-run
 penalty, 9.06s against 6.77s steady, from cold page cache on the object and the
 dylib.
+
+An earlier revision of this file claimed the slowdown had a threshold at
+`hw.ncpu`, 18 here. That was two samples and a coincidence with the core count.
+Four later samples at a reported load of 37 to 41 came in at 7.39 to 12.33s,
+which breaks any monotonic story about load, so the claim is withdrawn rather
+than rescued.
+
+## Asserting the exit code is not optional here
+
+Every timing above was re-taken with `ninja`'s exit status checked per run, and
+all four re-runs reported `rc=0`. The first versions of these measurement loops
+parsed `real` out of `/usr/bin/time` without looking at the status, which is a
+hole: a build that failed early still prints a plausible `real`, and it prints a
+fast one, so a broken run enters the table looking like a good result.
+
+The tool itself does check. `build.rs` matches on the exit status and treats
+anything but zero as an error, including death by signal, which is what a
+segfaulting compiler produces:
+
+```
+$ nix-dev-build --checkout <worktree> --target src/nix/does-not-exist
+ninja: error: unknown target 'src/nix/does-not-exist'
+nix-dev-build: ninja exited 1
+```
 
 ## The dev shell is where the dependencies come from
 
