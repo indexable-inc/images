@@ -227,15 +227,19 @@ impl Report {
             Some(revision) => println!("  tree     {}", revision.short),
             None => println!("  tree     not a git checkout"),
         }
-        if let Some(ambient) = &self.ambient_nix
-            && ambient.same_version_string
-        {
-            println!();
-            println!(
-                "  {} reports that same version string, so --version cannot tell\n  \
-                 the two apart. Run the path above to use what you just built.",
-                ambient.path.display()
-            );
+        // Printed whether or not the two collide. The contrast is the thing that
+        // stops a measurement being taken with the wrong evaluator, and it is
+        // invisible to the reader if only the build is named.
+        if let Some(ambient) = &self.ambient_nix {
+            let version = ambient.version.as_deref().unwrap_or("will not run");
+            println!("  on PATH  {}, {version}", ambient.path.display());
+            if ambient.same_version_string {
+                println!();
+                println!(
+                    "  Both report that version string, so only the path separates them.\n  \
+                     Invoke the binary above rather than a bare nix."
+                );
+            }
         }
     }
 }

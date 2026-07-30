@@ -71,13 +71,16 @@ built src/nix/nix in 8.6s
   binary   /tmp/worktree/indexable-inc/nix/fastloop/build/src/nix/nix
   version  nix (Nix) 2.34.7
   tree     b20ed84bb
+  on PATH  /run/current-system/sw/bin/nix, nix (Nix) 2.34.7+ix.g8db4d3805919.h6eeae576
 ```
+
+Both binaries are printed whether or not they collide. The contrast is what
+stops a measurement being taken with the wrong evaluator, and it is invisible if
+only the build is named. When the two report the same string, the report says so
+outright, because at that point only the path tells them apart.
 
 The revision is reported rather than compiled in on purpose: writing `.version`
 in the checkout would modify a tracked file in someone's working tree.
-
-When the `nix` on PATH happens to report the same string as the build, the
-report says so outright, because at that point only the path tells them apart.
 
 `--json` emits one document on stdout with the same facts and both version
 strings; build progress goes to stderr.
