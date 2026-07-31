@@ -1340,9 +1340,22 @@
       # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
       # over the roots the post-merge cache-push linux lane publishes, darwin
       # cross closure included -- the set #2690 broke while flake-check stayed
-      # green (packages are eval-gated only). --skip-cached keeps it
-      # O(changed): on the warm-store pool only drvs new relative to main's
-      # already-built closure realise.
+      # green, back when packages were eval-gated only.
+      #
+      # That last clause is history, not the current state, and it read as
+      # current for long enough to mislead: `main required` above builds
+      # `requiredGateRoots`, which carries the package closures, so a linux
+      # package IS built on every pull request. Believing otherwise argues for
+      # holding a pin bump that the required gate already covers.
+      #
+      # What this lane still uniquely covers is darwin. The required gate is
+      # `x86_64-linux` only and this workflow is `workflow_dispatch:`, so no
+      # automatically triggered run builds a darwin closure. A flake-input bump
+      # therefore gets linux assurance from its own pull request and darwin
+      # assurance from nobody unless someone dispatches this.
+      #
+      # --skip-cached keeps it O(changed): on the warm-store pool only drvs new
+      # relative to main's already-built closure realise.
       def "main closure" [] {
         build-gate ".#cachePushRoots.x86_64-linux"
       }
