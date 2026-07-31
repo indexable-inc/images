@@ -203,17 +203,17 @@
     "home-manager-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1784724659,
-        "narHash": "sha256-eCwzFQYWJ5vW3nODZHPiaTuiRq9Z00S6jE5tfPtZe3s=",
+        "lastModified": 1785530609,
+        "narHash": "sha256-85GQQa8fT6mMGISL22IaZ99uDSHtRefSiy/Fae5rv90=",
         "owner": "indexable-inc",
         "repo": "home-manager",
-        "rev": "d27be2a29e5feb86a9196838b1bb0fdc44119cb8",
+        "rev": "7d29fa5cbf4b468b7d9692cfb500cb89291fb519",
         "type": "github"
       },
       "original": {
         "owner": "indexable-inc",
         "repo": "home-manager",
-        "rev": "d27be2a29e5feb86a9196838b1bb0fdc44119cb8",
+        "rev": "7d29fa5cbf4b468b7d9692cfb500cb89291fb519",
         "type": "github"
       }
     },

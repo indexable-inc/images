@@ -212,32 +212,26 @@
       # Home Manager is consumed as a FLAKE by workstation config repos, not
       # as a package built here, so the series' consumer is the maintained
       # fork repo: a config repo points its `home-manager` flake input at
-      # indexable-inc/home-manager's `ix-patched` bookmark. Pinned by rev
+      # indexable-inc/home-manager's `ix-patched` branch. Pinned by rev
       # (autoUpdate = false): there is no `.#home-manager.updateScript` for
-      # the fork-sync cron to drive, so bump by hand with the steps
-      # .github/workflows/fork-sync.yml runs. Clone the fork colocated (`jj
-      # git clone --colocate`), `jj rebase` the series onto the upstream tip,
-      # push nothing if a commit came out conflicted, then move the bookmark
-      # and mint the pin ref in ONE push (`git push --force origin
-      # "$sha:refs/heads/ix-patched" "$sha:refs/pins/<date>-<sha12>"`), in the
-      # same change that bumps flake.lock. The pin ref keeps the previously
-      # locked megamerge fetchable after jj rewrites history.
+      # the fork-sync cron to drive, so bump by hand. Clone the fork, merge
+      # `upstream/master` into `ix-patched` as an ordinary two-parent merge
+      # (never rebase: the branch is published history every flake.lock
+      # pins), resolve conflicts in the merge commit, build the module's own
+      # tests before pushing, then fast-forward the branch and bump
+      # flake.lock in one change. No pin ref is needed, because nothing
+      # rewrites a rev that was ever pinned.
+      #
+      # The fork has no CI on this branch: upstream's test.yml triggers on
+      # `pull_request` and a nightly cron, and the push-triggered workflows
+      # are all limited to `master`, so a push to `ix-patched` is gated only
+      # by whatever the pusher ran locally. ENG-11663.
       name = "home-manager";
       input = "home-manager-src";
       upstreamUrl = "https://github.com/nix-community/home-manager.git";
       forkRepo = "indexable-inc/home-manager";
       bookmark = "ix-patched";
       autoUpdate = false;
-      # One commit each way off a shared base (compare/d27be2a29e5f...ix-patched
-      # answers `diverged`, 1 ahead / 1 behind, merge base f4d01c1d87c7): the
-      # shape of a series amended and pushed while the lock stayed on the
-      # pre-amend megamerge, so the activation patch that ships is a different
-      # revision from the one on the branch. Which one is right is a question for
-      # whoever amended it, so the pin is not moved here. ENG-11646.
-      pinDivergence = {
-        rev = "d27be2a29e5feb86a9196838b1bb0fdc44119cb8";
-        reason = "ENG-11646: the branch and the pin each hold one revision of the activation patch; repin or re-push once someone says which is the reviewed one.";
-      };
       upstreamPolicy = {
         prsWelcome = true;
         # The contributing manual (guidelines, getting-started) has no
