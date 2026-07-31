@@ -14,21 +14,23 @@
 # this launch is forwarded to the existing instance and the flag is dropped,
 # so quit Dia first to get the CDP listener.
 {
+  formats,
   ix,
   lib,
-  pkgs,
+  makeBinaryWrapper,
   runCommandLocal,
   writeText,
 }: let
   port = 9222;
-  launcher = ix.writeNushellApplication pkgs {
-    name = "dia-cdp";
-    text = ''
-      # nu
-      def main [] {
-        exec "/Applications/Dia.app/Contents/MacOS/Dia" --remote-debugging-port=${toString port}
-      }
-    '';
+  dia = "/Applications/Dia.app/Contents/MacOS/Dia";
+  # Dia is outside the store and absent during the build, so wrapping it
+  # directly is not an option: makeBinaryWrapper asserts its target is an
+  # executable file and would fail in the sandbox. config-launch
+  # (packages/config-launch) reads its target from this spec at run time, so
+  # the bundle still gets a compiled launcher rather than a generated script.
+  launchSpec = (formats.json {}).generate "dia-cdp-launch-spec.json" {
+    target = dia;
+    flags = ["--remote-debugging-port=${toString port}"];
   };
   infoPlist = writeText "dia-cdp-info-plist" (lib.generators.toPlist {escape = true;} {
     CFBundleDisplayName = "Dia CDP";
@@ -39,6 +41,7 @@
   });
 in
   runCommandLocal "dia-cdp" {
+    nativeBuildInputs = [makeBinaryWrapper];
     meta = {
       description = "Dia CDP.app: launch the installed Dia with --remote-debugging-port=${toString port}";
       platforms = ["aarch64-darwin"];
@@ -47,7 +50,14 @@ in
     contents="$out/Applications/Dia CDP.app/Contents"
     mkdir -p "$contents/MacOS"
     cp ${infoPlist} "$contents/Info.plist"
-    # Copied, not symlinked: CFBundleExecutable must be a regular executable
-    # for LaunchServices to accept the bundle.
-    cp ${lib.getExe launcher} "$contents/MacOS/dia-cdp"
+    # Compiled in place, not symlinked: CFBundleExecutable must be a regular
+    # executable for LaunchServices to accept the bundle, and makeBinaryWrapper
+    # emits exactly that. `--argv0` because config-launch passes its own argv0
+    # through to the target; without it Dia runs under the launcher's store
+    # path. Chromium locates its bundle from the executable path rather than
+    # argv0, so that is the name in `ps`, not the profile it loads.
+    makeBinaryWrapper ${ix.rustWorkspace.units.binaries.config-launch}/bin/config-launch \
+      "$contents/MacOS/dia-cdp" \
+      --argv0 ${dia} \
+      --set IX_LAUNCH_SPEC ${launchSpec}
   ''
