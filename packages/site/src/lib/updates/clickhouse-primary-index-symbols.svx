@@ -1,0 +1,105 @@
+---
+id: clickhouse-primary-index-symbols
+postedAt: 2026-07-30T18:00:00-07:00
+title: a 6.7 MB Rust symbol name filled the fleet ClickHouse and stopped every log query
+links:
+  - label: "ix#9285"
+    href: https://github.com/indexable-inc/ix/pull/9285
+  - label: "ENG-11572"
+    href: https://linear.app/indexable/issue/ENG-11572
+tags:
+  - observability
+  - clickhouse
+  - profiling
+---
+
+For several hours on 2026-07-30 the fleet ClickHouse on hil-compute-2 refused
+every log and metric query with `code 241 MEMORY_LIMIT_EXCEEDED`, while the host
+it runs on had 263 GiB of 503 GiB free. Nothing in the fleet was unhealthy. The
+instrument that watches the fleet was full.
+
+`profiles.function_samples` was holding **92.08 GiB of primary index resident in
+memory** to index **2.16 GiB of data on disk**, which is 94% of that server's
+entire 98.32 GiB budget.
+
+## why one table's index outgrew the server
+
+`function` is a plain `String` holding demangled Rust symbols, and it was part of
+that table's primary key. ClickHouse keeps the primary index of every active part
+in RAM for as long as the part is active, storing each mark's full key, so every
+one of those symbols was resident.
+
+Rust writes the whole generic type into a symbol name, and a `tracing_subscriber`
+layer stack nests: each `.with(...)` wraps the entire previous type inside a new
+one, so the name grows by nesting rather than by adding. Measured across a
+2,000,000-row sample of the live table:
+
+| `function` length | bytes |
+| --- | --- |
+| median | 28 |
+| p99 | 286 |
+| mean | 2,113 |
+| max | 6,712,193 |
+
+A mean 75x above the median is the signature of a few enormous values rather
+than broad growth. Adaptive granularity then compounded it: a mark ends after
+8192 rows *or* 10 MiB of data, whichever comes first, so multi-megabyte rows
+produced a mark every few rows instead of every 8192, and each mark stored its
+full key. The rows most expensive to index were indexed most often.
+
+The comparison across tables is the argument. `otel.otel_traces` holds 3.51 TiB
+and 67.13 billion rows, 1,600x more data, and indexes it in 52.68 MiB.
+
+## the part worth carrying away: the fix had already merged
+
+This exact fault was diagnosed and fixed 20 hours before it recurred. Commit
+`aab17057e1` added `PRIMARY KEY (service, profile_type, timestamp)` to
+`profiles-schema.sql`, and its message quotes the same 19.86 GiB part and the
+same 48x inversion. It merged to main. It deployed: the generated config on the
+host carried the new line.
+
+It could never take effect. The statement is `CREATE TABLE IF NOT EXISTS`, the
+table existed, so the whole thing was skipped, and ClickHouse has no `ALTER` that
+changes a primary key. A correct, merged, deployed fix sat inert while the fault
+it fixed grew back worse, from 89.14 GiB over 84 parts to 92.08 GiB over 213.
+
+Nothing anywhere compared the schema a host declares against the table the host
+actually has. A drift gate that closes that gap is in progress.
+
+## what changed
+
+The table was rebuilt so the committed key takes effect, keeping all 81.28
+million rows. The order was swap-first: an empty fixed table was exchanged into
+the live name so inserts landed in it immediately, then the history was copied
+out of the old table, which by then had no writer. Copying a partition at a time
+failed on a single 6.59 GiB allocation, because opening a part loads that part's
+index and these were the pathological ones. One part at a time, unloading
+between each, held memory flat at about 10 GiB for all 638 parts.
+
+| | before | after |
+| --- | --- | --- |
+| resident primary index | 92.08 GiB | 830.53 KiB |
+| index as a share of the data it indexes | 4,262% | 0.06% |
+| MemoryTracking | 97.29 GiB | 8.66 GiB |
+
+Row counts could not verify that copy, and checking them is how a lossy one would
+have passed: `SummingMergeTree` collapses rows sharing a sorting key, so the new
+table holds 249,847 *fewer* rows than the old and is still complete. The measure
+columns are the invariant, since summing is associative, and all four came across
+whole plus the profiler's live writes during the copy.
+
+`ix#9285` caps the demangled name at the producer, 1 KiB, which is 3.5x the
+measured p99. Truncation appends a stable digest of the full name rather than
+just cutting, because a plain prefix would collapse two different generic
+monsters into one string and `SummingMergeTree` would then silently inflate one
+row's counts with another's.
+
+## what is still open
+
+The profiler is still emitting multi-megabyte names until `ix#9285` lands; they
+no longer reach the resident index, but they still cost disk and merge time.
+`LimitNOFILE=262144` on the ClickHouse unit was pinned during recovery and is
+currently raised only on the running process ([ENG-11573](https://linear.app/indexable/issue/ENG-11573)).
+And `system.metric_log` is disabled on the fleet's own observability store, so
+none of the accumulation curve behind this incident can be reconstructed
+([ENG-11574](https://linear.app/indexable/issue/ENG-11574)).
