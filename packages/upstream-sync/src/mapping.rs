@@ -26,7 +26,17 @@ pub const FORK_PACKAGES_ENV: &str = "UPSTREAM_SYNC_FORK_PACKAGES";
 #[serde(rename_all = "camelCase")]
 pub struct Fork {
     pub name: String,
-    pub input: String,
+    /// The flake input pinning the megamerge, for a fork fetched by rev.
+    /// `None` for a vendored fork. Read it through [`Fork::source`] rather
+    /// than directly: the invariant is the PAIR, and a caller that reaches for
+    /// one field alone is the caller that forgets a vendored fork has no lock
+    /// entry to look up.
+    #[serde(default)]
+    pub input: Option<String>,
+    /// Repo-relative path of the in-tree derived view, for a fork carried in
+    /// this repository rather than fetched. `None` for a rev-pinned fork.
+    #[serde(default)]
+    pub vendored: Option<String>,
     /// GitHub `owner/name` of the maintained fork repo.
     pub fork_repo: String,
     /// Fork-repo branch holding the megamerge commit.
@@ -58,6 +68,60 @@ pub struct Fork {
 
 fn default_bookmark() -> String {
     "ix-patched".to_owned()
+}
+
+/// Where a fork's tree comes from.
+///
+/// The two cases are exclusive and [`Fork::source`] is the only way to read
+/// them, so nothing downstream can treat a vendored fork as a pinned one whose
+/// lock entry happens to be missing. That distinction is the whole point: a
+/// missing lock entry is a broken registry and FAILS the pin gate, while a
+/// vendored fork has no pin by construction and must not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source<'a> {
+    /// Fetched by rev: the named flake input pins the megamerge commit.
+    Pinned(&'a str),
+    /// Carried in this repository at this path, as a jj-views derived view of
+    /// the fork repo. There is no rev, so there is nothing to drift from one.
+    Vendored(&'a str),
+}
+
+impl Fork {
+    /// Which of the two source shapes this entry declares.
+    ///
+    /// # Errors
+    /// Fails when the entry declares both or neither. Neither default is safe:
+    /// defaulting to pinned invents a lock lookup that cannot succeed, and
+    /// defaulting to vendored exempts the entry from the pin gate, which is the
+    /// silent-green failure [`crate::pin`] exists to refuse.
+    pub fn source(&self) -> Result<Source<'_>> {
+        match (self.input.as_deref(), self.vendored.as_deref()) {
+            (Some(input), None) => Ok(Source::Pinned(input)),
+            (None, Some(path)) => Ok(Source::Vendored(path)),
+            (None, None) => Err(eyre!(
+                "upstream-sync: fork {}: declares neither `input` nor `vendored`, so there is no \
+                 way to know where its tree comes from",
+                self.name
+            )),
+            (Some(input), Some(path)) => Err(eyre!(
+                "upstream-sync: fork {}: declares both `input` ({input}) and `vendored` ({path}). \
+                 A fork is fetched by rev or carried in tree, never both; two sources means two \
+                 trees and nothing says which one ships.",
+                self.name
+            )),
+        }
+    }
+
+    /// How to name this fork's source in a report cell.
+    ///
+    /// # Errors
+    /// Fails for the reasons [`Fork::source`] does.
+    pub fn source_label(&self) -> Result<String> {
+        Ok(match self.source()? {
+            Source::Pinned(input) => input.to_owned(),
+            Source::Vendored(path) => format!("vendored:{path}"),
+        })
+    }
 }
 
 /// A recorded, deliberate exception to the pin-on-bookmark rule
@@ -399,6 +463,55 @@ mod tests {
                 "patches":{patches},"upstreamPolicy":{policy}}}"#
         ))
         .unwrap()
+    }
+
+    fn fork_json(fields: &str) -> Fork {
+        serde_json::from_str(&format!(
+            r#"{{"name":"fake",{fields},"forkRepo":"indexable-inc/fakerepo",
+                "upstreamUrl":"https://github.com/fakeorg/fakerepo.git",
+                "upstreamPolicy":null}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn source_reads_a_rev_pinned_fork_as_pinned() {
+        let fork = fork_json(r#""input":"fake-src""#);
+        assert_eq!(fork.source().unwrap(), Source::Pinned("fake-src"));
+        assert_eq!(fork.source_label().unwrap(), "fake-src");
+    }
+
+    #[test]
+    fn source_reads_a_vendored_fork_as_vendored() {
+        let fork = fork_json(r#""vendored":"vendor/fake""#);
+        assert_eq!(fork.source().unwrap(), Source::Vendored("vendor/fake"));
+        assert_eq!(fork.source_label().unwrap(), "vendored:vendor/fake");
+    }
+
+    // The two failures below are the point of the enum. Either default would be
+    // silently wrong in a different direction, so both have to be refused, and
+    // the message has to name which fork so the reader is not left grepping a
+    // fourteen-entry registry.
+    #[test]
+    fn source_refuses_an_entry_declaring_neither() {
+        let fork = fork_json(r#""bookmark":"ix-patched""#);
+        let err = fork.source().unwrap_err().to_string();
+        assert!(err.contains("fake"), "must name the fork, said: {err}");
+        assert!(
+            err.contains("neither"),
+            "must say what is missing, said: {err}"
+        );
+    }
+
+    #[test]
+    fn source_refuses_an_entry_declaring_both() {
+        let fork = fork_json(r#""input":"fake-src","vendored":"vendor/fake""#);
+        let err = fork.source().unwrap_err().to_string();
+        assert!(err.contains("fake-src"), "must name the input, said: {err}");
+        assert!(
+            err.contains("vendor/fake"),
+            "must name the path, said: {err}"
+        );
     }
 
     const GOOD_POLICY: &str =

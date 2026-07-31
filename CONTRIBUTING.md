@@ -143,19 +143,31 @@ To run the same check CI runs, build the per-unit clippy derivation for the
 crate you are editing:
 
 ```sh
-nix build .#ciChecks.x86_64-linux.rust-<crate-name>.clippy
+nix build .#ciChecks.x86_64-linux.<unit>.clippy
 ```
 
-Replace `<crate-name>` with the kebab-case package name, e.g.:
+`<unit>` is usually `rust-<crate-name>` in kebab case, e.g.:
 
 ```sh
 nix build .#ciChecks.x86_64-linux.rust-git-log-pretty.clippy
 ```
 
-To list every available clippy derivation:
+But it is the unit's `passthruTests.prefix`, not the crate name, and a package
+may set that to something else. `upstream-sync` and `unibind-gen` both do, so
+theirs are `.upstream-sync.clippy` and `.unibind-gen.clippy`. Guessing
+`rust-upstream-sync` gets you `does not provide attribute`, and pointing
+`nix build` at the bare unit gets you `expected ... to be a derivation or path
+but found a set`, because the unit is an attrset carrying `.clippy` alongside a
+`.<test-name>` per test case.
+
+To list every available clippy derivation, look one level in. Do not filter the
+top-level names on `clippy`: no unit is NAMED that, so the only hit is
+`patched-src-clippy`, which is the clippy fork's patched-source check and not a
+clippy derivation at all. One confident false positive and 134 misses.
 
 ```sh
-nix eval --json .#ciChecks.x86_64-linux --apply 'cs: builtins.attrNames cs' | jq '.[] | select(test("clippy"))'
+nix eval --json .#ciChecks.x86_64-linux \
+  --apply 'cs: builtins.filter (n: cs.${n} ? clippy) (builtins.attrNames cs)'
 ```
 
 ## Coding standards

@@ -29,7 +29,23 @@
 # Fields:
 #   name        : package id.
 #   input       : flake input pinning the megamerge (flake.lock `locked.rev`;
-#                 branch-loose for autoUpdate forks).
+#                 branch-loose for autoUpdate forks). Exactly one of `input`
+#                 and `vendored` per entry; declaring both or neither is an
+#                 error, not a default, in every consumer.
+#   vendored    : repo-relative path of an in-tree jj-views DERIVED VIEW of the
+#                 fork repo, for a fork carried here instead of fetched. That
+#                 path filters back out into the fork repo's exact commit
+#                 hashes, so editing the fork is an ordinary in-tree diff and
+#                 publishing it is an ordinary non-forced push, and there is no
+#                 rev that can drift. Consume it as a `builtins.path` slice of
+#                 just that directory (see lib/default.nix): a bare path
+#                 literal or a `path:./...` flake input both resolve against
+#                 the WHOLE flake source, so any commit anywhere in the repo
+#                 would rebuild the fork.
+#                 A vendored entry has no pin, so `upstream-sync pin-drift`
+#                 reports it `vendored` rather than failing it unknown, and
+#                 `drift` cannot measure its upstream distance at all until
+#                 ENG-11685 lands. Both say so per row.
 #   upstreamUrl : upstream git URL rebases target.
 #   upstreamRef : optional upstream branch the fork's base sits on.
 #                 upstream-sync anchors the series base on it (merge-base
@@ -1263,13 +1279,17 @@
     {
       # nix-derivation is the Haskell .drv parser nix-output-monitor links;
       # packages/nix-output-monitor feeds this patched source into a
-      # haskellPackages.extend override. The base is upstream main while its
-      # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
-      # plus the bound-relaxation cabal revisions hackage layers on top), so
-      # it must not free-float: repin when nixpkgs moves past 1.1.3, then
-      # jj-rebasing indexable-inc/Haskell-Nix-Derivation-Library.
+      # haskellPackages.extend override. The first fork carried here as a
+      # derived view rather than fetched by rev: `vendor/nix-derivation`
+      # derives back to indexable-inc/Haskell-Nix-Derivation-Library's own
+      # hashes, and the fork repo's `derived-from-index` branch is that
+      # derivation published. The base is upstream main while its cabal version
+      # still reads 1.1.3 (the hackage release nixpkgs builds, plus the
+      # bound-relaxation cabal revisions hackage layers on top), so the tree
+      # here must not advance past that; packages/nix-output-monitor asserts
+      # the version and fails the build if nixpkgs moves first.
       name = "nix-derivation";
-      input = "nix-derivation-src";
+      vendored = "vendor/nix-derivation";
       upstreamUrl = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
       forkRepo = "indexable-inc/Haskell-Nix-Derivation-Library";
       bookmark = "ix-patched";

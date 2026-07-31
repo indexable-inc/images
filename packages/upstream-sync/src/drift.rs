@@ -242,19 +242,32 @@ fn stance_counts(fork: &Fork) -> StanceCounts {
 
 fn row(fork: &Fork) -> Result<Row> {
     let slug = Slug::parse(&fork.upstream_url)?;
-    let rev = lock_rev(&fork.input)?;
-    if rev.is_none() {
-        eprintln!(
-            "{}",
-            paint(
-                YELLOW,
-                &format!(
-                    "upstream-sync: drift: {}: input {} has no locked rev in flake.lock",
-                    fork.name, fork.input
-                )
-            )
-        );
-    }
+    // A vendored fork has no pinned base to measure upstream distance FROM, so
+    // this lane cannot answer its question for one. Its cells stay unknown and
+    // its `input` cell says `vendored:<path>`, rather than an empty row that
+    // reads as no drift. Getting the answer back means deriving the view
+    // locally to find the base it sits on, which this network-only lane does
+    // not do; ENG-11685 owns that.
+    let rev = match fork.source()? {
+        mapping::Source::Pinned(input) => {
+            let rev = lock_rev(input)?;
+            if rev.is_none() {
+                eprintln!(
+                    "{}",
+                    paint(
+                        YELLOW,
+                        &format!(
+                            "upstream-sync: drift: {}: input {input} has no locked rev in \
+                             flake.lock",
+                            fork.name
+                        )
+                    )
+                );
+            }
+            rev
+        }
+        mapping::Source::Vendored(_) => None,
+    };
     let forge = if mapping::is_github(&fork.upstream_url) {
         "github"
     } else if mapping::is_gitlab(&fork.upstream_url) {
@@ -304,7 +317,7 @@ fn row(fork: &Fork) -> Result<Row> {
     Ok(Row {
         name: fork.name.clone(),
         forge: forge.to_owned(),
-        input: fork.input.clone(),
+        input: fork.source_label()?,
         rev,
         behind,
         base_date,
