@@ -111,7 +111,7 @@ fn git_command(dir: &Path) -> Command {
 /// Run `git` in `dir`, returning stdout on a zero exit or a precise error
 /// otherwise (never a silent fallback: the diff gate must fail loudly when git
 /// cannot answer).
-pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, DiffError> {
+pub fn git(dir: &Path, args: &[&str]) -> Result<String, DiffError> {
     let display = args.join(" ");
     let output = git_command(dir)
         .args(args)
@@ -229,7 +229,7 @@ pub fn changed_lines(dir: &Path, base: &str) -> Result<RepoDiff, DiffError> {
 
 /// The repository's top-level directory (canonicalized), the anchor for git's
 /// repo-relative diff paths.
-pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
+pub fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
     let out = git(dir, &["rev-parse", "--show-toplevel"])?;
     Ok(PathBuf::from(out.trim()))
 }
@@ -237,7 +237,7 @@ pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
 /// Join a repo-relative path onto the repo root and canonicalize it. Falls back
 /// to the plain join if canonicalization fails (e.g. the file was since
 /// deleted), which still matches a fragment path canonicalized the same way.
-pub(crate) fn absolutize(root: &Path, rel: &Path) -> PathBuf {
+pub fn absolutize(root: &Path, rel: &Path) -> PathBuf {
     let joined = root.join(rel);
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
