@@ -74,17 +74,25 @@
       topics = ["writing"];
       text = ''
         Never write a zinger: a sentence built to land as a punchline gets
-        flattened into a plain claim. Never write a rhetorical triad; three
-        parallel items ("fast, simple, and correct") lose one or gain a
-        fourth. A superlative ("best", "blazing", "massive") is replaced by
-        the measurement that would earn it, or cut. This covers everything
-        you write: replies, commit messages, PR bodies, docs, site updates.
+        flattened into a plain claim. Read your opening sentence alone: a
+        verdict still states a claim; "It isn't X. It's Y." does not.
+        Front-load the claim, not the rhythm. Never write a rhetorical
+        triad; three parallel items ("fast, simple, and correct") lose one
+        or gain a fourth. A superlative ("best", "blazing", "massive") is
+        replaced by the measurement that would earn it, or cut. This covers
+        everything you write: replies, commit messages, PR bodies, docs,
+        site updates.
       '';
       reason = ''
         Requested 2026-07-23: prose sets the register and calibratedClaims
         handles absolutes, yet punch-up devices kept appearing in agent
         prose. Lands as its own rule since style governs code as well as
         prose; the shape follows noEmDashes, one register ban stated once.
+        The reading test was added 2026-07-31 after "It isn't projected.
+        It's the tail." went to a user: the ban named an intent, which no
+        one can check, so answerIntent's verdict-first compression kept
+        producing the punchline shape. The test names a property of the
+        sentence instead.
       '';
     };
   }
