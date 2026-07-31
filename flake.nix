@@ -21,13 +21,29 @@
     # `accept-flake-config` runs, a local `nix flake check`, `nix build
     # .#checks.<sys>.<name>`) picks it up from one source of truth.
     #
-    # `wasm-builtin`: `.ix` modules convert in-eval through `builtins.wasm`
+    # `wasm-builtin` is DOCUMENTED here, not enabled here, and the difference
+    # is load-bearing. `.ix` modules convert in-eval through `builtins.wasm`
     # over the `ix2nix-wasm` package output (IFD as of 2026-07-25, replacing
-    # the committed `lib/ix2nix.wasm` of #4136);
-    # the nix-ix client gates that builtin behind this feature. A client
-    # without the feature warns "unknown experimental feature" and then
-    # throws an actionable error only if the eval actually imports a `.ix`
-    # file (packages/ix2nix/import-ix.nix).
+    # the committed `lib/ix2nix.wasm` of #4136), and the nix-ix client gates
+    # that builtin behind this feature.
+    #
+    # Unlike `ca-derivations` above, a flake cannot turn this one on for its
+    # own evaluation: nix builds the builtins table when it constructs the
+    # evaluator, before it reads and applies a flake's `nixConfig`, so
+    # `builtins.wasm` is already absent by the time this line is seen.
+    # `accept-flake-config` does not change that. Measured both ways against
+    # one attribute under a client whose `experimental-features` omitted it:
+    # with this declaration and `accept-flake-config = true` the eval still
+    # threw `importIx: this evaluator has no builtins.wasm`; naming the
+    # feature on the client's own `experimental-features` line evaluated
+    # (indexable-inc/ix#9288, ENG-11586).
+    #
+    # So a client needs it in its own nix.conf or NIX_CONFIG. index's CI gets
+    # it from .github/actions/bootstrap-patched-nix. The entry stays because
+    # it states the requirement in one place; it is not the mechanism.
+    # Without the feature a client warns "unknown experimental feature" and
+    # then throws an actionable error only if the eval actually imports a
+    # `.ix` file (packages/ix2nix/import-ix.nix).
     extra-experimental-features = [
       "ca-derivations"
       "wasm-builtin"
