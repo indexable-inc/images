@@ -163,13 +163,18 @@
     };
 
     # jj megamerge fork of jj-vcs/jj. Pinned BY REV, never branch-loose: the
-    # series is large and touches working-copy internals, so a rebase onto
-    # upstream main conflicts easily, and a conflicted jj commit must never
-    # reach the bookmark (git-based readers cannot parse jj's conflict
-    # encoding). The rev therefore moves only under a deliberate rebase a
-    # human resolves, never under the scheduled fork-sync (autoUpdate = false
-    # in lib/fork-packages.nix). Bump it by hand: jj-rebase indexable-inc/jj,
-    # push bookmark + pin ref, repin here, then build `.#jj`.
+    # series is large and touches working-copy internals, and a conflicted jj
+    # commit must never reach the bookmark (git-based readers cannot parse
+    # jj's conflict encoding). The rev therefore moves only when a human
+    # deliberately repins, never under the scheduled fork-sync
+    # (autoUpdate = false in lib/fork-packages.nix).
+    #
+    # `ix-patched` is published history that flake.locks pin, so it is never
+    # rebased: work lands as ordinary commits on top, and upstream arrives as a
+    # two-parent merge. Bump it by hand: push the commits, wait for that
+    # branch's own push-triggered CI to go green (f561bc016 is what makes a
+    # pushed tip get its own verdict), mint the pin ref, repin here, then build
+    # `.#jj`.
     jj-src = {
       url = "github:indexable-inc/jj/13b0c7120ff86d66da9a86aa43be475a47c82f17";
       flake = false;
