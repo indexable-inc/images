@@ -739,10 +739,32 @@
           extraLibraries = {};
         }
       else {};
+    # `policy.clippy.packages = null` gates every package; a list gates only
+    # those. See the option in policy.nix for why the boundary lives there.
+    clippyPackages = args.policy.clippy.packages;
+    # An allowlist entry that matches no package is a silent no-op, and the
+    # thing it silently disables is the gate the allowlist exists to guarantee.
+    # A rename or a typo would otherwise turn a lint gate off without turning
+    # anything red. Listing the real names matters as much as naming the
+    # offender, because two spellings are in play: this attrset is keyed by
+    # cargo PACKAGE name (`jj-views`), while the unit keys next door carry the
+    # lib TARGET name (`jj_views-0.43.0-<hash>`). "jj_views is not a package"
+    # is useless without the list that shows the hyphen.
+    unknownClippyPackages =
+      lib.subtractLists (attrNames clippyUnits.clippyByPackage)
+      (lib.optionals (clippyPackages != null) clippyPackages);
+    gatedClippyByPackage = assert lib.assertMsg (unknownClippyPackages == []) ''
+      cargoUnit.buildWorkspace: policy.clippy.packages names ${toString (length unknownClippyPackages)} package(s) this workspace does not build: ${lib.concatStringsSep ", " unknownClippyPackages}
+      available: ${lib.concatStringsSep ", " (attrNames clippyUnits.clippyByPackage)}
+    '';
+      if clippyPackages == null
+      then clippyUnits.clippyByPackage
+      else lib.filterAttrs (name: _: elem name clippyPackages) clippyUnits.clippyByPackage;
+
     workspaceUnits =
       units
       // lib.optionalAttrs perUnitClippyEnabled {
-        inherit (clippyUnits) clippyByPackage;
+        clippyByPackage = gatedClippyByPackage;
       };
 
     targetSetNames = let
