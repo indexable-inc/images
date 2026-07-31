@@ -673,7 +673,7 @@ class RenderingTests(unittest.TestCase):
         # The sticky comment quotes the repository's own measured routine tier,
         # not the catalog default: a comment that names someone else's budget is
         # how an operator learns the wrong number for their own PR.
-        assert "5400 seconds for validation" in comment
+        assert "7500 seconds for validation" in comment
         assert "10 seconds for cleanup" in comment
         assert "Routine validation applies" in comment
         # ENG-10273: the label alone does nothing to an attempt whose budget is
