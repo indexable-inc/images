@@ -97,7 +97,7 @@ pub(super) fn spawn_tui(
     // refreshes it as it processes output; the actor reads it to pick the arrow
     // form on write. Shared like `cursor_shape` rather than channelled.
     let app_cursor_keys = Arc::new(parking_lot::RwLock::new(false));
-    let engine_tx = engine::spawn(
+    let engine = engine::spawn(
         id,
         rows,
         cols,
@@ -110,16 +110,7 @@ pub(super) fn spawn_tui(
     // zombie), publishes the exit code through `exit_tx`, and can signal it on
     // a kill request. It forwards bytes and reads to the engine thread.
     runtime.spawn(async move {
-        pty_actor(
-            id,
-            pty,
-            child,
-            command_rx,
-            engine_tx,
-            exit_tx,
-            app_cursor_keys,
-        )
-        .await;
+        pty_actor(id, pty, child, command_rx, engine, exit_tx, app_cursor_keys).await;
     });
 
     let instance = TuiInstance {
