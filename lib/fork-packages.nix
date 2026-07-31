@@ -1100,6 +1100,44 @@
           upstream = "hold";
           reason = "Lost-wakeup regression against libcurl 8.21.0: every cold `nix run` paid a 10s stall on its first transfer once the fleet's nixpkgs carried 8.21.0 (nix_run_hello p50 5.9s to 16.5s; indexable-inc/index#4122). Upstream-general and standalone, the contract change is upstream's to absorb; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
+        # Source paths under the store directory got no fingerprint, so
+        # `fetchToStore` skipped its cache and re-hashed and re-copied the
+        # subtree into the store on every eval, forever
+        # (indexable-inc/index#4323). Answers with the NAR hash the store
+        # already recorded for the enclosing store object, in the same
+        # `path:<sri>` namespace PathInputScheme uses, so the two share one
+        # cache entry per tree. Keyed on the hash and not the store path: an
+        # input-addressed path is a function of its derivation, not its
+        # content, so a non-reproducible rebuild after a GC could otherwise
+        # serve the pre-GC result. Unregistered content that merely sits under
+        # the store dir (a `<drv>.chroot` root) is declined rather than cached.
+        "libstore: fingerprint source paths that live inside the store" = {
+          upstream = "hold";
+          reason = "Source paths inside the store were uncacheable, so every eval re-hashed and re-copied the subtree (indexable-inc/index#4323). Verified on aarch64-darwin with lazy-trees off, five interleaved pairs: a 105 MB / 7,630-file store object as a source path goes 1394-1674 ms to 81-96 ms with a byte-identical output store path, `_NIX_TEST_BARF_ON_UNCACHEABLE=1` stops reporting the hydra home config uncacheable, and that config's activation-package drvPath is unchanged. Each assertion in the new tests/functional/store-path-fingerprint.sh was watched to fail against a deliberately broken implementation. Stock-nix behavior rather than a fork regression, so genuinely upstream, held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # `jj file list` reports a Git submodule as one entry naming a
+        # directory, and the workdir accessor consumed the list as allow-list
+        # PREFIXES, so that entry admitted every file physically under the
+        # submodule working tree, its own `.git` pointer file included
+        # (ENG-11616). This commit drops the `git-submodule` entries, which
+        # fixes the instance; the follow-up below closes the class.
+        "libfetchers: do not admit a Git submodule's whole tree in a jj workdir" = {
+          upstream = "hold";
+          reason = "A colocated repo with a submodule produced a source tree no git+file fetch can produce: submodule content without `submodules=1`, plus a `gitdir:` pointer baked into the store (ENG-11616). Verified on aarch64-darwin: store path and narHash now equal `git+file`'s byte for byte on a fixture with a submodule, a nested directory and a symlink, and tests/functional/jj-colocated.sh asserts that equality plus the stronger invariant that the fetched tree is exactly jj's tracked file set. Both assertions were watched to fail against the unfixed fetcher. Upstream-nix candidate for the jj scheme (NixOS/nix#16066), held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # Follow-up that closes the class the previous commit's fix instantiated.
+        # `CanonPath::isAllowed` grants access when either side is a parent, so
+        # ANY listed entry that happens to be a directory licences everything
+        # physically beneath it, tracked or not; a gitlink was merely the one
+        # way to get a directory into that list today. The list is now consumed
+        # as exact paths plus their explicit ancestors, which buys the walk's
+        # descent without the licence, and entry types are filtered by an
+        # allow-list (file, symlink, conflict) rather than a deny-list, so an
+        # unrecognised future type is skipped and reported instead of admitted.
+        "libfetchers: consume the jj file list as exact paths, not prefixes" = {
+          upstream = "hold";
+          reason = "Generalises the submodule fix above from the instance to the class: no listed entry can licence anything beneath it whatever its type, so a directory-naming entry renders as an empty directory rather than leaking a subtree (ENG-11616). Verified on aarch64-darwin: `git+file` and `jj+file` agree on both store path and narHash for one working copy, and the test additionally asserts the fetched tree equals exactly jj's tracked non-directory set, which is what catches an entry type nobody has thought of. Watched to fail against the unfixed fetcher with untracked junk planted inside the submodule, so the leak was visibly arbitrary rather than limited to the submodule's own files. Follow-up to the vendored jj scheme of the open upstream PR NixOS/nix#16066, so it belongs on that PR rather than a rival one; held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
       };
     }
     {
