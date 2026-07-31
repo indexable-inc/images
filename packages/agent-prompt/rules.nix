@@ -270,7 +270,7 @@
         and general before specific is the order a reader wants. Distinct
         from firstPrinciples, which scopes itself to claims about behavior:
         this one says which number to compute and report. Dropped a clause
-        asking for the breakdown as a stacked bar, since generativeUiOutput
+        asking for the breakdown as a stacked bar, since statusPageOutput
         already owns the response surface.
       '';
     };
@@ -344,16 +344,19 @@
       text = ''
         Real work starts from an issue, referenced in branch and PR. File
         friction as it happens, in the owning repo, with the exact error.
-        On finding an issue separate from the task at hand, file it and in
-        the same breath spawn a background subagent to fix it, the issue
-        number in its brief and branch; filing without dispatching is a
-        dropped ball unless the fix needs the user.
+        On finding an issue separate from the task at hand, file it and
+        move on; dispatch a fixer subagent only when the issue blocks the
+        goal or the user asks. Filing is the floor. The goal is working
+        code on the task at hand, not a fleet of side-fixers.
       '';
       reason = ''
         Root-cause notes died with sessions (#1941 through #1946); filed
         problems were forgotten even when filed (a deploy-verify defect sat
         as ix#8055 while its noise reddened every deploy). Sub-issue
-        mechanics moved to memories (index#3594).
+        mechanics moved to memories (index#3594). Amended 2026-07-31: the
+        same-breath dispatch mandate spent tokens and attention on side
+        quests while the main task waited, and duplicate dispatch was
+        already the observed failure mode (ix#8155, ix#8156).
       '';
     };
   }
@@ -492,7 +495,7 @@
       reason = ''
         Diagnosis ended at "upstream's problem" inside our own forks
         (index#3559, #3566). Authoring mechanics live in fork-patch memories
-        and the `flatForkBranches` rule (index#3594); the `rebase-patches`
+        and the `forkBranches` rule (index#3594); the `rebase-patches`
         driver that used to own them went with the megamerge migration.
         An agent worked around nix dropping a fast-failing derivation's log
         under a parallel build by moving its check to eval time and filing,
@@ -503,25 +506,29 @@
     };
   }
   {
-    flatForkBranches = {
+    forkBranches = {
       topics = ["architecture" "workflow"];
       text = ''
-        Fork repos keep one flat branch: `ix-patched` is a linear series of
-        ordinary git commits on the upstream base, one commit per patch, and
-        the flake input pins its tip. Use plain git. Do not reintroduce a jj
-        megamerge, a patch dependency graph, or an in-repo patch series.
-        Put each change in a commit of its own on top; there is no series to
-        absorb into and nothing to rewrite. Rebase onto the base when it
-        moves, which is the one operation the old patch graph existed to
-        optimise.
-        A force-push still needs a permanent `refs/pins/<date>-<sha12>` ref
-        for every rev a flake.lock has ever pinned, in the same operation, or
-        GitHub garbage-collects it and every consumer that pinned it breaks.
-        Read a conflicted fork PR as a moved base rather than a real
-        conflict: rebase, then run the tests again, because the tree under
-        them changed. A PR against the branch inherits the branch's state,
-        so a red check can predate the branch; a sibling PR against another
-        base separates the two.
+        Fork repos keep one branch: `ix-patched` carries ordinary git
+        commits on the upstream base, one commit per patch, and the flake
+        input pins its tip. Use plain git. Do not reintroduce a jj
+        megamerge, a patch dependency graph, or an in-repo patch series;
+        put each change in a commit of its own on top.
+        The branch is published history: flake.locks pin its revs, so it
+        is never rewritten. When upstream moves, merge upstream into
+        `ix-patched` as an ordinary two-parent merge, resolving conflicts
+        in the merge commit; never rebase onto the new base. The delta
+        over upstream stays readable as
+        `git log upstream/main..ix-patched --no-merges`.
+        A force-push is therefore exceptional, and one still needs a
+        permanent `refs/pins/<date>-<sha12>` ref for every rev a
+        flake.lock has ever pinned, in the same operation, or GitHub
+        garbage-collects it and every consumer that pinned it breaks.
+        Read a conflicted fork PR as a moved tree rather than a real
+        conflict: merge the branch forward, then run the tests again,
+        because the tree under them changed. A PR against the branch
+        inherits the branch's state, so a red check can predate the
+        branch; a sibling PR against another base separates the two.
         The branch is pushed directly, so make sure CI triggers on push to
         it and not only on pull requests, or nothing gates the thing every
         consumer builds from.
@@ -551,6 +558,16 @@
         replayed as independent cherry-picks, and the result confirmed by
         comparing tree object ids, not by reading a diff. The tree was
         byte-identical to the megamerge it replaced.
+        Amended 2026-07-31 from rebase-onto to merge-forward, at the
+        user's direction. The linear-series rule mandated rewriting a
+        branch flake.locks pin, and the pin-ref machinery, the
+        coordination around every force-push, and one retirement that
+        stranded index's pin on a deleted line all existed to compensate
+        for those rewrites. It also contradicted the derived-views
+        doctrine, which forbids rebasing published history. Merge-forward
+        keeps SHAs stable and deletes the compensation layer; the only
+        loss is a linear log, and the --no-merges delta answers the same
+        question.
       '';
     };
   }
@@ -693,11 +710,11 @@
     subagentVerification = {
       topics = ["tooling" "verification"];
       text = ''
-        Verification belongs in a context that did not do the work: spawn
-        a fresh subagent to check a change against its requirement when
-        the change spans more than one file, or when you cannot name the
-        failure mode you checked for. Otherwise verify inline and say what
-        you ran.
+        Verify a change against its requirement before calling it done,
+        and prefer one end-to-end check when the work is complete over
+        re-verifying every increment. Spawn a fresh-context subagent to
+        check only when you cannot name the failure mode you checked for;
+        otherwise verify inline and say what you ran.
       '';
       reason = ''
         Requested 2026-07-28 (index#4338): the delegation rules covered
@@ -711,7 +728,10 @@
         which is the same judgment-call carve-out defineAcronyms rejects.
         Dropped a sentence telling the agent to race a fan-out against an
         inline attempt; experiments gates rollouts behind "only when
-        asked".
+        asked". Amended 2026-07-31: the multi-file trigger made
+        fresh-context review the common case; the user's direction is
+        working code fastest, with verification concentrated in one
+        end-to-end pass at the end.
       '';
     };
   }
@@ -954,80 +974,36 @@
     };
   }
   {
-    generativeUiOutput = {
+    statusPageOutput = {
       topics = ["writing" "comms" "tooling"];
       text = ''
-        Respond as generative UI, not chat text: for everything, by
-        default, one mkapp app per session is the response surface.
-        Scaffold with `mkapp`, serve with `Serve.app` in a kernel cell;
-        the page opens in the terminal split and hot-reloads on every
-        green promote, so never tell the user to refresh. Build the page
-        while working, not after: put what you are doing right now and
-        why in the store's status field, and give every in-progress step
-        its own section marked loading, so the page always shows the work
-        in flight as skeletons; when a step's result lands, replace its
-        skeleton in place. Skeleton anything started but unfinished,
-        including steps only planned; set done with a final status when
-        finished. UI principles: render the page's full structure
-        immediately and fill it progressively, never a blank page or a
-        big-bang reveal; verdict and results before mechanism, top to
-        bottom; layout stays stable while filling (replace in place,
-        append at the end, no reflow jumps); a failed step renders as a
-        failed section carrying its error output, not a silent gap;
-        motion only signals liveness (skeleton pulse), never decoration;
-        one accent color on the theme tokens, auto light and dark
-        following the system. Edit only the app's
-        `staging/` tree; the gate typechecks it and promotes green code
-        into the live page. Durable state belongs in the store so
-        promotes keep it; an already-open page keeps its state across
-        promotes, so live updates go as imperative statements after the
-        store's rehydrate, never as initialState edits. The user reads
-        only the page and nothing else, so write no chat text at all: no
-        summary, no pointer, no status line, no closing remark. The page is
-        the entire response. Everything goes on it, including results
-        arriving from background work, corrections to earlier claims, the
-        evidence behind a verdict, and the question you want answered next.
-        Anything that feels like it needs saying in chat is a section the
-        page is missing, so add the section. Saying a thing in both places
-        is the standing failure of this rule. Layer the
-        page: the surface is a short causal story in plain words (we
-        thought X, but Y, so Z) with named actors, ordered what broke /
-        damage / fix / lesson for incidents; a reader who knows none of
-        the jargon can follow it. Mechanism and evidence sit one hover
-        down: each term of art gets a dashed underline and a CSS tooltip
-        (focusable, so tap works) carrying the deeper detail. Teach the
-        idea before the failure: where a term of art is load-bearing, give
-        it an everyday analogy and its plain meaning first, so the failure
-        itself lands in one sentence that needs no further explaining. A
-        numbered chain carries a loop better than prose. Name the
-        diagnostics that could not have worked and why, including the ones
-        you proposed, and separate what the evidence proves from what it
-        only cleared. Expand dense notes, never paste them. When mkapp or the kernel is
-        unavailable, fall back to one live-rewritten HTML file opened
-        with `html-open` (plain `open` only if that too is missing), and
-        say so.
+        For status, plans, reports and explanations, the default response
+        surface is one succinct HTML page written under /tmp in a
+        directory named after the topic and opened with `html-open`
+        (plain `open` only if that is missing), plus one short chat line
+        carrying the verdict. Page shape, top to bottom: a one-line
+        title; a one-line subtitle naming the bottleneck; a table whose
+        rows are the items and whose columns are thing, cost, why, cost
+        stated early and concretely (hours, a merge button, after X); a
+        one-line list of what is already done; a closing note only if it
+        changes what the reader does. Verdict and cost before mechanism,
+        everywhere. Plain words a reader without the jargon can follow;
+        the evidence lives in the why column, not in appended prose. One
+        screen where the content allows. System font stack, one accent
+        color, auto light and dark from the system. A failed item is a
+        row stating the failure, not a missing row. As facts change,
+        update the same file in place rather than opening a second page.
       '';
       reason = ''
-        Requested 2026-07-22 (index#4065, extended same day): the user
-        wants every response
-        built as live generative UI, replacing the 2026-07-19
-        single-HTML-file default (kept as the fallback). Folds in the
-        former generatedAppUi rule (index#4015) so the response surface
-        and the mkapp/Serve.app machinery are stated once. Imperative
-        store updates: initialState edits never reach an open page, the
-        HMR handoff wins (seen live 2026-07-22). Skeleton-per-step and
-        the UI principles requested 2026-07-22 after the live demo:
-        status text alone hid what was in flight. Layering from
-        index#3872; html-open fallback from 2026-07-21. Teach-before-fail,
-        the numbered chain, and naming the dead diagnostics requested
-        2026-07-28: an explainer for a kernel RCU stall landed because it
-        built the idea from a library-and-book analogy before naming RCU,
-        so the failure was one sentence; because a five-step numbered
-        chain carried the retry loop that prose had muddled; and because
-        it said which diagnostics could not have worked and why, three of
-        which the asker had proposed. The evidence split was the same
-        page: a reboot cleared the stall and proved nothing about its
-        cause, since all five hosts ran that kernel and one wedged.
+        Requested 2026-07-31: the user singled out a remaining-work page
+        in exactly this shape (title, bottleneck subtitle, thing/cost/why
+        table, done-line, one closing note) as the view to make the
+        default, cost first and succinct. Replaces the 2026-07-22
+        mkapp/Serve.app generative-UI mandate (index#4065): its
+        scaffold-and-promote machinery cost every session setup time
+        before the first fact landed, its removal was already in flight
+        (index#4381, index#4382), and the single-HTML-file surface it had
+        demoted to a fallback is what the user actually praised.
       '';
     };
   }
@@ -1278,14 +1254,18 @@
     reportToPlaybook = {
       topics = ["comms" "workflow"];
       text = ''
-        Publish substantial work as a site update:
+        Substantial landed work can be published as a site update:
         `packages/site/src/lib/updates/<slug>.svx`, frontmatter `id`,
         `postedAt`, `title`, `links`, `tags`; mdsvex, so fence `{` and
         `<...>`. It renders at `https://ix.dev/updates/<slug>`;
-        post that link to Slack `#general` with AI attribution.
+        post that link to Slack `#general` with AI attribution. Publish
+        after the code lands, when the user asks or the work is
+        outward-facing; never let the write-up precede working code.
       '';
       reason = ''
-        Investigations evaporated with sessions; `playbook/src/routes/` does
+        Amended 2026-07-31: demoted from a mandate to a post-landing
+        practice, since write-ups were competing for time with the code
+        they describe. Investigations evaporated with sessions; `playbook/src/routes/` does
         not render live (index#3458), so the path is exact.
       '';
     };
