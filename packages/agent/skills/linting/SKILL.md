@@ -88,7 +88,35 @@ ix exposes no such output -- `just lint` does not cover Rust there at all
 (clippy runs in the `rust` CI phase, per cargo-unit crate). Reach it through
 the unit build rather than a bare `cargo clippy`.
 
+## A green `nix run .#lint` does not mean the clone gate is green
+
+The lint app runs the clone detector's GLOBAL gate (whole-tree duplication under
+`[budget] global_pct`) and NOT its DIFF gate (duplication over the lines this
+branch changed, budget `0%`). The exclusion is deliberate: the diff gate needs a
+`.git` directory to resolve the merge base, and the CI lint derivation is handed
+a `.git`-less source tree. It is also invisible, because a lint run says nothing
+about the gate it did not run.
+
+So `flake-check` can fail on duplication minutes after 15/15 stages passed
+locally. Reproduce it before pushing:
+
+```sh
+nix run .#clone -- . --diff origin/main --pretty
+```
+
+`--pretty` is what makes the result actionable. The JSON names each clone
+instance's `fragments` with file and line ranges, which turns "33/793 changed
+lines duplicated" into "you copied `render_table` out of `drift.rs`". Without it
+you get a percentage and no location.
+
+Both gates are ratchets, so the fix is to delete the duplication rather than to
+raise a budget: extract the shared thing and confirm whole-tree duplication went
+DOWN. On index#4497 that was a copied markdown-table renderer plus a fifth copy
+of an enum-to-string `match`; factoring them into one module took the tree from
+0.2300% to 0.2246% and the diff gate to 0/865.
+
 ## index only: --json and --fix
+
 
 Both are flags of index's lint app, which ix has no equivalent of. `just lint`
 forwards its arguments to `nix build`, so `just lint --json` is nix's `--json`
