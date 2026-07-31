@@ -32,6 +32,10 @@
   # consumers whose operator deliberately permits merge-protection bypasses
   # (pairs with omitting the `forceMerge` prompt rule).
   protectedMergeGuard ? true,
+  # True also denies the native shell, making the kernel the only command
+  # path. Deliberately NOT implied by `indexKernelBaked`: see the
+  # `shellSuperseded` row below for what that costs.
+  kernelSupersedesShell ? false,
 }: let
   # One list of protected-merge command globs; the Claude render wraps them in
   # Bash(...) deny patterns, the codex render ships them verbatim for hook use.
@@ -64,6 +68,24 @@
       codexFeatures = {};
     };
   };
+  # The native shell. Kept OUT of `kernelSuperseded` above on purpose: a baked
+  # kernel denies the file tools unconditionally, but the shell is also the
+  # kernel-outage path (index#4080) -- an agent whose kernel dies with no Bash
+  # cannot run a command at all, and the dev-base gate in tests/default.nix
+  # asserts that default. An operator opting in trades that fallback, plus
+  # every per-command `Bash(...)` deny pattern (the deny vocabulary cannot see
+  # inside a kernel cell), for one audited command path: `IxMcp.Cmd` pins the
+  # launch cwd against a sibling's `File.cd!` (#3902), spawns with stdin closed
+  # so a pathless `rg` cannot hang (#3867), and lands every run in the action
+  # log.
+  shellSuperseded = {
+    claudeTools = ["Bash" "BashOutput" "KillShell"];
+    # No codex handle: codex reads, writes and searches THROUGH its shell and
+    # its apply_patch tool has no config toggle, so denying the shell would
+    # leave that agent unable to work at all rather than kernel-first.
+    codexFeatures = {};
+  };
+
   kernelClaudeTools = lib.concatMap (row: row.claudeTools) (lib.attrValues kernelSuperseded);
   kernelCodexFeatures = lib.mergeAttrsList (
     map (row: row.codexFeatures) (lib.attrValues kernelSuperseded)
@@ -107,30 +129,38 @@
   claudeBundledSkillDenies = [
     "Skill(artifact-design)"
   ];
-in {
-  claude = {
-    deniedToolPatterns =
-      map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
-      ++ claudeBundledSkillDenies
-      ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
-      ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools);
-  };
+in
+  # Denying the shell without the kernel that supersedes it leaves the agent no
+  # command path at all, so refuse the combination rather than render an agent
+  # that cannot work.
+  assert lib.assertMsg (kernelSupersedesShell -> indexKernelBaked)
+  ("kernelSupersedesShell denies Bash, BashOutput and KillShell, but indexKernelBaked is "
+    + "false: this render would leave the agent no way to run a command at all. Bake the "
+    + "index MCP server (mcpServers.index) or leave the shell alone."); {
+    claude = {
+      deniedToolPatterns =
+        map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
+        ++ claudeBundledSkillDenies
+        ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
+        ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools)
+        ++ lib.optionals kernelSupersedesShell shellSuperseded.claudeTools;
+    };
 
-  codex = {
-    forcedSettings.features =
-      codexHouseFeatures
-      // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
-      // lib.optionalAttrs indexKernelBaked kernelCodexFeatures;
-    inherit protectedMergeCommandPatterns;
-  };
+    codex = {
+      forcedSettings.features =
+        codexHouseFeatures
+        // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
+        // lib.optionalAttrs indexKernelBaked kernelCodexFeatures;
+      inherit protectedMergeCommandPatterns;
+    };
 
-  # cursor-agent's `cli-config.json` permission vocabulary only verifiably
-  # covers shell commands (`Shell(<glob>)` deny entries), so only the
-  # protected-merge row renders here; the kernel/exa gates have no cursor
-  # handle yet. Delivery is the consumer's config management (see the
-  # cursor-cli wrapper's passthru), since the CLI reads permissions from
-  # config, not flags.
-  cursor = {
-    deniedShellPatterns = map (pattern: "Shell(${pattern})") protectedMergeCommandPatterns;
-  };
-}
+    # cursor-agent's `cli-config.json` permission vocabulary only verifiably
+    # covers shell commands (`Shell(<glob>)` deny entries), so only the
+    # protected-merge row renders here; the kernel/exa gates have no cursor
+    # handle yet. Delivery is the consumer's config management (see the
+    # cursor-cli wrapper's passthru), since the CLI reads permissions from
+    # config, not flags.
+    cursor = {
+      deniedShellPatterns = map (pattern: "Shell(${pattern})") protectedMergeCommandPatterns;
+    };
+  }

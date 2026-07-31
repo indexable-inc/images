@@ -91,6 +91,20 @@
   # tool set. Core shell/file/search tools stay in sharedPermissions because
   # their defaults depend on which MCP replacements the wrapper bakes.
   systemTools ? {},
+  # The kernel-first posture (index#4486): the index kernel's `exec` becomes
+  # the session's only way to run a command, touch a file, or fan out to a
+  # subagent. Sets `kernelSupersedesShell` in the shared policy and flips the
+  # built-in orchestration tools the kernel supersedes off in one named posture
+  # rather than fifteen `systemTools` rows per consumer. An explicit
+  # `systemTools` row still outranks it, so a consumer can keep one tool.
+  #
+  # Off by default because the three reversals it carries all contradict a
+  # decision made on evidence: the native shell as the kernel-outage path
+  # (#4080), the depth-1 subagent star from the Fable 5 card (#3700), and
+  # SendMessage staying on so the Agent tool's description does not send the
+  # model down a path that corrupts state (ENG-10401). Turn it on for a
+  # measured rollout, not by default.
+  kernelFirst ? false,
   # False drops the protected-merge `gh pr merge --admin/--force` Bash denies
   # from the rendered permissions (policy/permissions.nix); pair with omitting
   # the `forceMerge` prompt rule so prompt and permissions agree.
@@ -405,11 +419,43 @@
     WaitForMcpServers = true;
     Workflow = true;
   };
+  # The kernel-first posture's base: every built-in whose job the kernel now
+  # owns. `Agent` and `SendMessage` flip TOGETHER and must stay that way -- the
+  # Agent tool's description tells the model to continue a running subagent
+  # with SendMessage, so denying only SendMessage was observed making it spawn
+  # a SECOND agent onto the first one's files (ENG-10401). With both gone the
+  # instruction is gone with them, and `IxMcp.Agents` is the whole surface.
+  #
+  # Kept ON deliberately: AskUserQuestion (the kernel's Ask.user elicitation
+  # renders as a worse dialog, #4095), the plan-mode pair (cheap, and the
+  # plan/act split earns its schemas), Skill (the library is the house
+  # workflow; skills that name Edit/Write break under this posture and get
+  # ported as they surface), and WaitForMcpServers (the session has to be able
+  # to wait for the kernel it now depends on entirely).
+  kernelFirstSystemTools = {
+    Agent = false;
+    Monitor = false;
+    RemoteTrigger = false;
+    ReportFindings = false;
+    SendMessage = false;
+    SendUserFile = false;
+    ShareOnboardingGuide = false;
+    TaskCreate = false;
+    TaskGet = false;
+    TaskList = false;
+    TaskOutput = false;
+    TaskStop = false;
+    TaskUpdate = false;
+    # Nothing left to search: the posture leaves about five tools.
+    ToolSearch = false;
+    Workflow = false;
+  };
+
   unknownSystemTools = lib.subtractLists (builtins.attrNames defaultSystemTools) (builtins.attrNames systemTools);
   effectiveSystemTools =
     if unknownSystemTools != []
     then throw "claude-code.systemTools: unknown tool(s): ${lib.concatStringsSep ", " unknownSystemTools}"
-    else defaultSystemTools // systemTools;
+    else defaultSystemTools // lib.optionalAttrs kernelFirst kernelFirstSystemTools // systemTools;
   disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: enabled: !enabled) effectiveSystemTools);
 
   # The computed settings render leaves this package only through
@@ -518,6 +564,7 @@
     inherit lib indexKernelBaked;
     exaSearchBaked = mcpServers ? exa;
     inherit protectedMergeGuard;
+    kernelSupersedesShell = kernelFirst;
   };
 
   # Controlled keys this package always owns: the highest-priority settings

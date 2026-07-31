@@ -207,14 +207,24 @@ defmodule IxMcp.MCP.Tools do
                                             private. Memories.validate(slug, by:, how:)
                                             records a later re-check and clears staleness
       Agents.spawn(brief, backend: :claude | :codex | :kimi)
-                                            spawn a real agent CLI as an async depth-1
-                                            subagent (Fable 5 card sec 8.15.3, #3700);
-                                            returns its id at once. Steer with
-                                            Agents.send(id, text); observe with
+                                            spawn a real agent CLI as an async subagent
+                                            (Fable 5 card sec 8.15.3, #3700); returns its id
+                                            at once. Steer with Agents.send(id, text) and
+                                            Agents.interrupt(id); observe with
                                             Agents.status(), .events(id), .report(),
-                                            .graph(); block only when necessary with
-                                            Agents.await(id). Finals arrive as
+                                            .graph(), .top() (CPU and RSS per child and per
+                                            process it spawned); block only when necessary
+                                            with Agents.await(id). Finals arrive as
                                             agent_finished notifications
+      Agents.spawn(brief, kernel: true)     give the child a kernel of its own, so it can run
+                                            cells and spawn in turn. Bounded by
+                                            Agents.max_depth() (default 2: you, a child, a
+                                            grandchild); without it a child has no MCP server
+                                            at all. Opt-in per spawn: only the flat shape is
+                                            measured (#4486)
+      Parent.send(text)                     in a spawned child only: report to the kernel that
+                                            spawned you before you have a final answer. Its
+                                            SessionWatch delivers it within seconds
       Fleet.multicall(Fleet.nodes(), code)  run Elixir across the fleet's server cores
                                             (Fleet.exec_least_loaded/2 for one node)
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface

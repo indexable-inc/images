@@ -15,13 +15,22 @@ defmodule IxMcp.Agents.CliRunner do
   Every parsed line is recorded as a normalized event in
   `IxMcp.Agents.Events` (which feeds the board graph); the final text
   returns to the harness, which routes it to the lead.
+
+  The runner process owns the port, and `Port.command/2` raises `badarg` from
+  anyone else, so steering that is not a queued message arrives here as a
+  BEAM message instead: `IxMcp.Agents.interrupt/1` looks the runner up in
+  `IxMcp.Agents.Control` and sends `{:interrupt, request_id}`, which this loop
+  turns into the SDK control frame on the child's stdin.
   """
 
   @behaviour AgentHarness.Runner
 
   alias AgentHarness.Context
+  alias IxMcp.Agents
   alias IxMcp.Agents.Backend
+  alias IxMcp.Agents.Control
   alias IxMcp.Agents.Events
+  alias IxMcp.Session
 
   # A child silent for this long is dead to us; the error reaches the
   # lead, which can respawn or investigate. Per spawn: :idle_timeout_ms.
@@ -38,10 +47,24 @@ defmodule IxMcp.Agents.CliRunner do
         |> Keyword.put(:model, ctx.model)
         |> Keyword.put(:resume, Events.session_ref(ctx.agent_id))
         |> Keyword.put(:prompt, instructions)
+        |> Keyword.put(:agent_id, ctx.agent_id)
+        # Computed here rather than in Backend because this process runs in the
+        # PARENT kernel: the child's depth is one below ours, and only this side
+        # knows which session is doing the spawning.
+        |> Keyword.put(:depth, Agents.child_depth())
+        |> Keyword.put(:parent_session, Session.ids().session_id)
       )
 
     cwd = validate_cwd!(ctx.opts)
     port = open_port(spec, cwd)
+
+    Control.register(ctx.agent_id, %{
+      runner: self(),
+      os_pid: os_pid(port),
+      stdin: spec.stdin,
+      backend: backend
+    })
+
     if spec.stdin == :stream, do: inject_user(port, instructions)
 
     loop(%{
@@ -124,6 +147,9 @@ defmodule IxMcp.Agents.CliRunner do
 
       {^port, {:exit_status, code}} ->
         exit_result(state, code)
+
+      {:interrupt, request_id} ->
+        loop(interrupt(state, request_id))
     after
       state.idle_timeout ->
         safe_close(port)
@@ -352,6 +378,35 @@ defmodule IxMcp.Agents.CliRunner do
       })
 
     Port.command(port, [line, "\n"])
+  end
+
+  # Only the stream backends have a stdin to write into. Agents.interrupt/1
+  # already refuses for the others; this second check keeps a stray message from
+  # writing into a pipe nobody reads.
+  defp interrupt(%{stdin: :stream, port: port} = state, request_id) do
+    Port.command(port, [interrupt_frame(request_id), "\n"])
+    Events.record(state.ctx.agent_id, :interrupt, %{request_id: request_id})
+    state
+  end
+
+  defp interrupt(state, _request_id), do: state
+
+  # The Agent SDK control request the CLI understands on a stream-json stdin. A
+  # build that does not understand it answers with an error event rather than
+  # acting, which lands in the ledger as an :error event.
+  defp interrupt_frame(request_id) do
+    JSON.encode!(%{
+      "type" => "control_request",
+      "request_id" => request_id,
+      "request" => %{"subtype" => "interrupt"}
+    })
+  end
+
+  defp os_pid(port) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} -> os_pid
+      nil -> nil
+    end
   end
 
   defp safe_close(port) do

@@ -17,7 +17,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
       ├── IxMcp.IssueWatch      (stdio + IX_MCP_ISSUE_WATCH_OWNERS set) new-issue channel feed
       ├── IxMcp.SessionWatch    (only when IX_MCP_STDIO=1) heartbeat + message/request-feed delivery
-      ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
+      ├── IxMcp.Agents.Harness     (AgentHarness) subagent CLI processes (#3700, #4486)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
 
@@ -65,8 +65,10 @@ defmodule IxMcp.Application do
         IxMcp.Fleet.Watch,
         {DynamicSupervisor, name: IxMcp.Jobs.Supervisor, strategy: :one_for_one},
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},
-        # The depth-1 subagent surface (index#3700): harness first, then the
-        # ledger that drains its lead mailbox.
+        # The subagent surface (index#3700, index#4486). Control before the
+        # harness: a runner registers its port there as it starts, which can be
+        # the first spawn immediately after boot.
+        IxMcp.Agents.Control,
         {AgentHarness, name: IxMcp.Agents.Harness, runner: IxMcp.Agents.CliRunner},
         {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
       ] ++ issue_watch() ++ transport()
