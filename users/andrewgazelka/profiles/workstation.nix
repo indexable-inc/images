@@ -972,6 +972,21 @@ in {
           "if".app-name-regex-substring = "ix-term";
           run = "layout tiling";
         }
+        # test-ide's fleet dashboard is the same shape: a Tauri window with
+        # titleBarStyle "Overlay", so AppKit reports no close, minimize or zoom
+        # button and aerospace floats it even though the subrole reads
+        # AXStandardWindow. Measured 2026-07-30: window 2287 sat at x=3200
+        # w=2080 across the Ghostty grid until `aerospace layout tiling` snapped
+        # it to a 1175x432 cell. The regex catches `npm run tauri dev`, whose
+        # binary carries no bundle id.
+        {
+          "if".app-id = "dev.andrewgazelka.fleet";
+          run = "layout tiling";
+        }
+        {
+          "if".app-name-regex-substring = "fleet";
+          run = "layout tiling";
+        }
         {
           "if".app-id = "com.paulsolt.SuperEasyTimerMac";
           run = "layout floating";
