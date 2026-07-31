@@ -117,14 +117,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # jj megamerge fork of nix-community/home-manager carrying the batched
-    # activation linking series (lib/fork-packages.nix). Distinct from the
-    # `home-manager` flake input above: this pins the `ix-patched` megamerge
-    # commit that workstation configs also consume. Pinned BY REV (autoUpdate
-    # = false): bump = jj rebase in indexable-inc/home-manager, push bookmark
-    # + pin ref, repin here.
+    # Fork of nix-community/home-manager carrying the batched activation
+    # linking series (lib/fork-packages.nix). Distinct from the
+    # `home-manager` flake input above: this pins the `ix-patched` tip that
+    # workstation configs also consume. Pinned BY REV (autoUpdate = false):
+    # bump = merge upstream into `ix-patched` in indexable-inc/home-manager,
+    # fast-forward the branch, repin here.
     home-manager-src = {
-      url = "github:indexable-inc/home-manager/d27be2a29e5feb86a9196838b1bb0fdc44119cb8";
+      url = "github:indexable-inc/home-manager/7d29fa5cbf4b468b7d9692cfb500cb89291fb519";
       flake = false;
     };
 
