@@ -1201,6 +1201,18 @@
           upstream = "never";
           reason = "Fork-local test infrastructure for a fork-local fetcher: declares jujutsu in tests/functional/package.nix and adds a requireJj that FAILS where requireGit skips, on the grounds that a tool named in the closure going missing is a broken closure rather than an unsupported environment. Upstream carries no jj scheme, so there is nothing there for this to gate. Verified on aarch64-darwin by building nix-functional-tests: fetchJj OK 2.49s and jj-colocated OK 3.14s, where the same build before the git-identity fix reported jj-colocated FAIL exit status 128 on `git commit` with no identity.";
         };
+        # The fork's own `tests on ubuntu` was red at `Run VM tests` from the
+        # moment the fingerprint patch above landed, and for a reason unrelated to
+        # what it tests: the test's last assertion plants unregistered content
+        # inside the store directory, so it reads $NIX_STORE_DIR, which
+        # common/vars.sh exports only when `! isTestOnNixOS`. meson runs each
+        # script under `bash -u`, so on that lane the reference is an unbound
+        # variable. Not a daemon-store hole: the fingerprint was measured working
+        # through a live daemon store before the skip was reached for (ENG-11658).
+        "tests/functional: skip store-path-fingerprint on the NixOS lane" = {
+          upstream = "never";
+          reason = "Fork-local test infrastructure, and specific to a test that exists only on this branch: it guards store-path-fingerprint.sh with TODO_NixOS because that lane gives the test no store directory it may write into, which its unregistered-content assertion requires. TODO_NixOS rather than needLocalStore because the fingerprint itself does work through a daemon store, measured on aarch64-darwin with 2.34.7+ix.gf200a3a8d492 against the live daemon under _NIX_TEST_BARF_ON_UNCACHEABLE=1: the cold eval copies once and a warm eval in a fresh process reports `cache hit in` on the same output path. So the index#4323 speedup does apply on daemon stores and no follow-up patch is owed on that axis. Verified on aarch64-darwin: store-path-fingerprint, fetchJj and jj-colocated all OK.";
+        };
       };
     }
     {
