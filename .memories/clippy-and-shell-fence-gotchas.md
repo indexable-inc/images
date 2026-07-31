@@ -24,7 +24,7 @@ implying it passed.
 
 **`shell-allowlist.txt` only shrinks.** It records a count per call site, e.g.
 `users/andrewgazelka/profiles/workstation.nix:writeBashApplication:6`. Deleting one
-generated script drops the real count to 5, and `shell-fence` then fails the
-pre-push hook with "stale shell-allowlist.txt entries (script gone or call-site
+generated script drops the real count to 5, and `shell-fence` then fails `nix run
+.#lint` with "stale shell-allowlist.txt entries (script gone or call-site
 count changed)". That is the gate working: it flags a stale entry, not a new
 violation. Edit the number down in the same commit. Never add an entry.
