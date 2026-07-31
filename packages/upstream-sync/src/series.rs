@@ -12,6 +12,7 @@
 //! that decides what an upstream contribution drags along. Patch identity is
 //! the commit SUBJECT, and the intent map in the registry is keyed by it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anstream::eprintln;
@@ -320,7 +321,7 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
     let series: Vec<Commit> = if all.iter().any(is_seal) {
         all.into_iter().filter(|c| !is_seal(c)).collect()
     } else {
-        let own = cmd::run_in(
+        let out = cmd::run_in(
             dir,
             "git",
             &[
@@ -334,7 +335,9 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
                 &range,
             ],
         )?;
-        parse_log(&own)
+        let own = parse_log(&out);
+        report_invisible_patches(dir, fork, tip, &range, &all, &own)?;
+        own
     };
 
     // Subjects are the patch identity (intent keys, branch slugs); a
@@ -350,6 +353,76 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
         seen.push(&commit.subject);
     }
     Ok(series)
+}
+
+/// Warn about patches the merge-forward walk cannot see.
+///
+/// `--first-parent --no-merges` is the branch's own line, which is the whole
+/// series only while every patch reaches the branch as a commit on it. A patch
+/// that arrived as a merged pull request sits on a second parent, so the walk
+/// never reaches it. Such a patch is absent rather than unclassified, which is
+/// the worse of the two: an unclassified patch defaults to `hold` and one
+/// intent entry fixes it, while an entry naming an absent one is an orphaned
+/// key that `ensure_no_orphaned_intent` rejects, so the gap resists being
+/// documented. On indexable-inc/nix that is 22 patches (ENG-11686).
+///
+/// Two deliberate choices. The delta is computed by comparing the walks rather
+/// than by asserting a count, so this cannot pass because both walks returned
+/// the same wrong thing. And it warns rather than fails: forks have been in
+/// this state for as long as pull requests have been merged into them, and a
+/// second hard failure here would be turned off, which is exactly how the
+/// orphaned-key path made the gap uncorrectable.
+fn report_invisible_patches(
+    dir: &Path,
+    fork: &str,
+    tip: &str,
+    range: &str,
+    all: &[Commit],
+    series: &[Commit],
+) -> Result<()> {
+    let merges = cmd::run_in(dir, "git", &["rev-list", "--merges", tip, range])?;
+    let merge_shas: HashSet<&str> = merges.split_whitespace().collect();
+    let seen_shas: HashSet<&str> = series.iter().map(|c| c.sha.as_str()).collect();
+    let seen_subjects: HashSet<&str> = series.iter().map(|c| c.subject.as_str()).collect();
+
+    let mut invisible: Vec<&str> = all
+        .iter()
+        .filter(|c| {
+            !seen_shas.contains(c.sha.as_str())
+                && !merge_shas.contains(c.sha.as_str())
+                // An earlier revision of a patch that IS in the series was
+                // merged in for ancestry alone, so a lock pinning it stays
+                // reachable. It shares its subject with the revision on the
+                // branch, is represented by it, and is not a lost patch.
+                && !seen_subjects.contains(c.subject.as_str())
+        })
+        .map(|c| c.subject.as_str())
+        .collect();
+    if invisible.is_empty() {
+        return Ok(());
+    }
+    invisible.sort_unstable();
+
+    let seen = series.len();
+    let total = all.len();
+    let lost = invisible.len();
+    let listed = invisible
+        .iter()
+        .map(|subject| format!("  - {subject}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    eprintln!(
+        "{}",
+        paint(
+            YELLOW,
+            &format!(
+                "upstream-sync: {fork}: the series is {seen} of {total} commits, and {lost} patch(es) \
+                 reached the branch on a merge commit's second parent, so nothing can classify them \
+                 and nothing will ever offer them upstream (ENG-11686):\n{listed}"
+            )
+        )
+    );
+    Ok(())
 }
 
 /// The megamerge seal: bookkeeping (tree = series applied linearly), not a

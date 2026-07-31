@@ -278,6 +278,49 @@ impl Fixture {
         Self::with_redirects(root, upstream, fork)
     }
 
+    /// A merge-forward branch where one patch arrived as a merged pull
+    /// request: its commit sits on the merge's second parent, off the
+    /// branch's own line, which is what GitHub's merge button produces
+    /// (ENG-11686).
+    pub fn pr_merged(root: &Path, direct: (&str, &str), merged: (&str, &str)) -> Self {
+        let upstream = init_upstream(root);
+        let fork = root.join("fork");
+        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
+        let base = git(&fork, &["rev-parse", "main"]);
+        git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
+
+        let (subject, body) = direct;
+        fs::write(fork.join("patch-direct.txt"), format!("{subject}\n")).unwrap();
+        git(&fork, &["add", "."]);
+        git(
+            &fork,
+            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
+        );
+
+        let (subject, body) = merged;
+        git(&fork, &["checkout", "--quiet", "-b", "pr-branch"]);
+        fs::write(fork.join("patch-pr.txt"), format!("{subject}\n")).unwrap();
+        git(&fork, &["add", "."]);
+        git(
+            &fork,
+            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
+        );
+        git(&fork, &["checkout", "--quiet", "ix-patched"]);
+        git(
+            &fork,
+            &[
+                "merge",
+                "--quiet",
+                "--no-ff",
+                "pr-branch",
+                "-m",
+                "Merge pull request #1 from fake/pr-branch",
+            ],
+        );
+
+        Self::with_redirects(root, upstream, fork)
+    }
+
     /// The scratch global gitconfig that redirects the https URLs the binaries
     /// use at the local fixture repos.
     fn with_redirects(root: &Path, upstream: PathBuf, fork: PathBuf) -> Self {
