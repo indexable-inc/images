@@ -3,39 +3,42 @@
   lib,
   updateScriptWriter ? null,
 }:
-# Upstream NixOS/nix pinned at tag 2.34.7 (the `nix-src` input, surfaced as
-# `ix.nixSrc`) with the in-repo patch series (./patches) applied, built through
-# nixpkgs' own modular nix packaging so the result is a protocol-compatible
-# drop-in for the daemon the fleet runs.
+# The `indexable-inc/nix` fork's `ix-patched` branch, pinned rev by rev as the
+# `nix-src` input and surfaced as `ix.nixSrc`, built through nixpkgs' own
+# modular nix packaging so the result is a protocol-compatible drop-in for the
+# 2.34.7 daemon the fleet runs.
 #
-# De-forking replacement for a standalone `indexable-inc/nix` fork checkout:
-# instead of tracking a whole fork branch, the delta lives as an ordered
-# `patches/` series applied on top of the exact upstream rev the daemon runs.
-# The current series carries the GC-roots client-interrupt daemon crash fix
-# (extracted from the fork's `fix-gc-roots-client-interrupt-crash` branch,
-# complete and clean against 2.34.7), an eval fix treating inaccessible
-# default lookup-path entries as absent (found while validating this build:
-# the macOS sandbox denies the host's root-channels dir with EPERM, which
-# aborted the C API unit tests and the recursive-nix functional test on any
-# darwin host with root channels; clean CI builders lack the path, which is
-# why caches carry the stock drvs green), and the `build-status-dir` global
-# build-observability series (patches 0003..0009): behind an experimental
-# feature of that name, every active build/substitution goal writes a JSON
-# status file under `<nixStateDir>/status/`, readable daemonlessly via the
-# new `nix store builds [--json]` command. Patches 0025-0029 carry the lazy
-# trees backport (NixOS/nix#15711 plus its post-merge fixes) behind an
-# off-by-default `lazy-trees` eval setting: flake inputs mount at their
-# content-addressed store paths and only materialize when forced
-# (indexable-inc/index#3645). Patches 0038-0039 import `builtins.wasm`
-# from the open upstream PR NixOS/nix#15380 (experimental feature
-# `wasm-builtin`, indexable-inc/index#3997) and force deterministic Wasm
-# execution (NaN canonicalization, deterministic relaxed SIMD) so eval
-# results stay bit-identical across the mixed darwin/linux fleet. The
-# `libfetchers: resolve git refs lazily...` patch makes rev-pinned
-# `builtins.fetchGit` inputs evaluate without network once cached and keeps
-# the git HEAD cache fresh (indexable-inc/index#4028). The fork's
-# `codex/flake-check-eval-cache` branch (draft PR indexable-inc/nix#1) is
-# deliberately excluded: it is self-declared WIP, untested, and incomplete.
+# The source is used as it comes. The only patches applied at build time are
+# nixpkgs' own for this version (`patchesCommon` below, currently just the
+# flaky-darwin-test skip); there is no in-repo series and no `./patches`
+# directory. An earlier revision of this file described one, from a de-forking
+# attempt that was reverted, and the description outlived the mechanism.
+#
+# So the fork's delta is not enumerated here, deliberately: it is the commits
+# between the upstream base and the pinned rev, their intent is recorded per
+# patch in lib/fork-packages.nix, and a list in this comment would be a second
+# copy that drifts. What the delta currently carries, in one line each: the
+# GC-roots client-interrupt daemon crash fix; treating an inaccessible default
+# lookup-path entry as absent (the macOS sandbox denies the host's
+# root-channels dir with EPERM, which aborted the C API unit tests and the
+# recursive-nix functional test on any darwin host that has one, while clean CI
+# builders lack the path and so carry the stock drvs green); the
+# `build-status-dir` build-observability series, where behind an experimental
+# feature of that name every active build or substitution goal writes a JSON
+# status file under `<nixStateDir>/status/`, readable daemonlessly via `nix
+# store builds [--json]`; the lazy trees backport (NixOS/nix#15711 and its
+# post-merge fixes) behind an off-by-default `lazy-trees` eval setting
+# (indexable-inc/index#3645, and see indexable-inc/index#4297 for why no host
+# sets it); `builtins.wasm` from the open upstream PR NixOS/nix#15380 behind
+# `wasm-builtin`, with deterministic execution forced so eval stays
+# bit-identical across the mixed fleet (indexable-inc/index#3997); lazy git ref
+# resolution so rev-pinned `builtins.fetchGit` inputs evaluate without network
+# once cached (indexable-inc/index#4028); a jj working-copy fetcher; and an
+# in-process parallel evaluator behind an off-by-default `eval-cores`, which
+# also moved where an infinite recursion is reported (see the fork's release
+# notes). The fork's `codex/flake-check-eval-cache` branch (draft PR
+# indexable-inc/nix#1) is deliberately excluded: self-declared WIP, untested,
+# incomplete.
 let
   # Read `pkgs` from `ix` rather than a `pkgs` callPackage formal: a `src`/`pkgs`
   # formal is fragile against `callPackage` auto-binding, and the rest of the
