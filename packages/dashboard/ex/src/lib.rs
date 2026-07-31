@@ -22,60 +22,52 @@
 //! first cut of this crate base64'd every snapshot and update through a
 //! `String`, paying a copy and 33% of the bytes on the hot path for nothing.
 //!
-//! ## Why the mirror document is polled
+//! ## The mirror document, and how it stays current
 //!
 //! A human's edit reaches the hub through the browser's `POST /apply`, i.e.
-//! `Hub::import`. dashboard-core keeps its update broadcast and
-//! `Hub::subscribe` `pub(crate)`, so nothing public reports that a merge
-//! happened; `Hub::export_snapshot` is the only public read. This crate
-//! therefore keeps a mirror `LoroDoc` per document and re-imports the hub's
-//! snapshot on a timer. A Loro import of ops the mirror already has changes
-//! no state and emits no event, so the poll is silent while the document is
-//! idle -- but it is still a poll standing in for a signal that exists one
-//! layer down. A public `Hub::updates()` (or making `Hub::subscribe`
-//! public) would delete the poll thread entirely; dashboard-core is owned
-//! elsewhere on this branch, so that is a follow-up (ENG-10199), not a
-//! local fix.
+//! `Hub::import`. This crate keeps a mirror `LoroDoc` per document because
+//! Loro reports a change only to a document that just imported it, and the
+//! watch stream is built from those change events.
 //!
-//! ## What the events do not say
+//! The mirror is driven by `Hub::subscribe`: one snapshot to seed it, taken
+//! under the hub's lock together with the update stream that continues it,
+//! and then one incremental import per delta. It used to be a 200ms timer
+//! re-exporting and re-importing the whole document, because the hub's
+//! update broadcast was `pub(crate)` and nothing public reported that a
+//! merge had happened (ENG-10199). An idle document now costs nothing and a
+//! human's edit wakes the agent as soon as it lands rather than up to a
+//! poll interval later.
 //!
-//! An event reports *what* changed (root container, path, shape of the
-//! diff), never *who* changed it. The mirror sees the producer's own
-//! `apply_scope` ticks and a browser's merge through the same import, and
-//! no public dashboard-core API carries the author. The inputs and
-//! attribution surface lands separately, and a public `Hub::peer_id()`
-//! would be enough to classify an import (ENG-10199). Until then, a
-//! consumer that only cares about human edits filters on `root`: a producer
-//! only ever writes under `panes`.
+//! ## What the events say about authorship
+//!
+//! A Loro change event reports *what* changed (root container, path, shape
+//! of the diff) and never who. `Update::authors` carries that separately:
+//! the peers whose ops are in the delta, taken from the version-vector diff
+//! at commit time. Compared against `Hub::peer_id` it separates this side's
+//! own `apply_scope` echo from a browser's merge, which is what stops an
+//! agent being woken by its own writes.
 
 /// The exported boundary. The module name names the generated Elixir
 /// namespace (`DashboardEx`) and the OTP app (`:dashboard_ex`).
 #[unibind::export(backends(ex))]
 mod _dashboard_ex {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeSet, HashMap};
     use std::net::{Ipv4Addr, SocketAddr};
     use std::pin::Pin;
     use std::sync::{Arc, OnceLock, Weak};
     use std::task::{Context, Poll};
-    use std::time::Duration;
 
     use dashboard_core::{Dashboard, Hub, Merge, Pane, ServedDashboard, serve_hub};
     use futures::Stream;
     use loro::event::{Diff, DiffEvent};
     use loro::{ContainerID, Index, LoroDoc, ToJson as _};
     use parking_lot::Mutex;
+    use tokio::sync::broadcast;
     use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
     use tokio_stream::wrappers::UnboundedReceiverStream;
     use unibind_runtime::UniStream;
 
-    /// The scope every pane published from the BEAM lands under.
-    /// `Hub::apply_scope` reconciles exactly one scope, so naming ours keeps
-    /// a second producer on the same hub from deleting our panes.
-    const AGENT_SCOPE: &str = "agent-ex";
 
-    /// How often the mirror re-reads the hub. This is the wake latency for a
-    /// human edit; see the module docs for why it is a poll at all.
-    const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
     /// Boundary failures. A document simply having no panes, or a merge
     /// landing as `pending`, is data rather than an error.
@@ -157,10 +149,11 @@ mod _dashboard_ex {
         /// lifetime is exactly this struct's: `close` removes the registry
         /// entry and the server stops with it.
         _dashboard: Dashboard,
-        /// The panes published from the BEAM, keyed by pane id. Held because
-        /// `Hub::apply_scope` reconciles a whole scope at once: a single
-        /// `set_html` has to re-send every pane we own or the others vanish.
-        panes: Mutex<BTreeMap<String, Pane>>,
+        /// Ids this side has published, so `panes/1` can answer "what did *I*
+        /// put here" in a document several agents write to. Only the ids: the
+        /// pane bodies live in the document, and `Hub::set_pane` touches one
+        /// pane at a time, so there is nothing to re-send.
+        panes: Mutex<BTreeSet<String>>,
         /// A peer of the hub's document, kept current by importing the hub's
         /// snapshot. Every read (`value`) and every watch event comes from
         /// here rather than from the hub, because Loro reports a change only
@@ -240,12 +233,16 @@ mod _dashboard_ex {
         Ok(())
     }
 
-    /// Re-send every pane this side owns and pull the result back into the
-    /// mirror, so a `value` read straight after a publish already sees it.
-    fn republish(document: &Document) -> Result<(), DashboardError> {
-        let panes: Vec<Pane> = document.panes.lock().values().cloned().collect();
-        document.hub.apply_scope(AGENT_SCOPE, &panes);
-        refresh(document)
+    /// Publish one pane and record that we own its id.
+    ///
+    /// No refresh: `Hub::set_pane` touches only this pane, the pump imports the
+    /// resulting delta, and every read that needs the mirror current
+    /// (`value/1`, `sync/1`) refreshes for itself. Refreshing here would put a
+    /// whole-document export and import back on the write path, which is what
+    /// this crate just stopped doing.
+    fn publish(document: &Document, pane: Pane) {
+        document.panes.lock().insert(pane.id.clone());
+        document.hub.set_pane(&pane);
     }
 
     /// The root container a diff happened under. A diff's `path` starts at
@@ -350,22 +347,50 @@ mod _dashboard_ex {
 
     /// Keep `document`'s mirror current until the document is closed.
     ///
-    /// A dedicated OS thread rather than a tokio task: each tick exports and
-    /// re-imports a whole Loro snapshot, which is CPU work that would stall
-    /// a runtime worker shared with the dashboard's HTTP server. The weak
-    /// reference is the stop signal -- `close` drops the last strong one --
-    /// so there is no separate shutdown flag to leak.
+    /// Driven by the hub's update stream, not a timer: `Hub::subscribe` hands
+    /// back the seed snapshot and the receiver that continues it, both taken
+    /// under one hub lock, so there is no window where a delta lands between
+    /// the two and is lost.
+    ///
+    /// A dedicated OS thread rather than a tokio task because a Loro import is
+    /// CPU work that would stall a runtime worker shared with the dashboard's
+    /// HTTP server, and because `blocking_recv` parks the thread while the
+    /// document is idle. Shutdown needs no flag: `close` drops the last strong
+    /// `Arc<Document>`, which drops the hub and its broadcast sender, and the
+    /// receiver then reports `Closed`.
     fn pump(document: &Arc<Document>) {
         let weak = Arc::downgrade(document);
+        let (snapshot, mut updates) = document.hub.subscribe().into_parts();
+        // Seed before the loop so the first delta applies to a document that
+        // already holds everything before it.
+        if !snapshot.is_empty() {
+            drop(document.mirror.lock().import(&snapshot));
+        }
         std::thread::spawn(move || {
             loop {
-                std::thread::sleep(POLL_INTERVAL);
+                let received = updates.blocking_recv();
+                // Upgrade after the wait, not before: holding a strong
+                // reference across it would keep the document alive forever.
                 let Some(document) = Weak::upgrade(&weak) else {
                     return;
                 };
-                // A failed refresh is dropped: the next tick re-reads the
-                // whole snapshot, so one skipped tick loses nothing.
-                drop(refresh(&document));
+                match received {
+                    // The callback that feeds the watch stream runs
+                    // synchronously inside `import`, under this lock. It only
+                    // pushes into an unbounded channel, so it neither blocks
+                    // nor re-enters the mirror.
+                    Ok(update) => {
+                        drop(document.mirror.lock().import(update.bytes()));
+                    }
+                    // The mirror fell further behind than the broadcast ring is
+                    // deep, so the deltas it missed are gone. Re-seed from a
+                    // whole snapshot rather than carrying on and silently
+                    // diverging from the hub.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        drop(refresh(&document));
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
             }
         });
     }
@@ -394,7 +419,7 @@ mod _dashboard_ex {
             hub,
             url: url.clone(),
             _dashboard: dashboard,
-            panes: Mutex::new(BTreeMap::new()),
+            panes: Mutex::new(BTreeSet::new()),
             mirror: Mutex::new(LoroDoc::new()),
         });
 
@@ -446,11 +471,8 @@ mod _dashboard_ex {
         html: String,
     ) -> Result<(), DashboardError> {
         let document = document(&doc)?;
-        document
-            .panes
-            .lock()
-            .insert(pane.clone(), Pane::html(pane, title, html));
-        republish(&document)
+        publish(&document, Pane::html(pane, title, html));
+        Ok(())
     }
 
     /// Publish (or replace) a data pane: `json` is parsed here so a
@@ -470,11 +492,8 @@ mod _dashboard_ex {
             serde_json::from_str(&json).map_err(|error| DashboardError::BadInput {
                 message: format!("data pane body is not JSON: {error}"),
             })?;
-        document
-            .panes
-            .lock()
-            .insert(pane.clone(), Pane::data(pane, title, renderer, data));
-        republish(&document)
+        publish(&document, Pane::data(pane, title, renderer, data));
+        Ok(())
     }
 
     /// Remove one pane this side published. Unknown ids are a no-op: the
@@ -483,12 +502,13 @@ mod _dashboard_ex {
     pub fn drop_pane(doc: String, pane: String) -> Result<(), DashboardError> {
         let document = document(&doc)?;
         document.panes.lock().remove(&pane);
-        republish(&document)
+        document.hub.drop_pane(&pane);
+        Ok(())
     }
 
     /// Ids of the panes this side has published into `doc`.
     pub fn panes(doc: String) -> Result<Vec<String>, DashboardError> {
-        Ok(document(&doc)?.panes.lock().keys().cloned().collect())
+        Ok(document(&doc)?.panes.lock().iter().cloned().collect())
     }
 
     /// A full Loro snapshot of the document, oplog included, so the receiver

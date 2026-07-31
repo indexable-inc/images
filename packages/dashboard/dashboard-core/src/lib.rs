@@ -33,7 +33,7 @@ mod subscribe;
 
 pub use dashboard::{
     Actor, ActorKind, Dashboard, HistoryChange, HistoryOp, Hub, Input, InputEntry, Merge, Recorder,
-    RecordingInfo, RecordingStore, ServedDashboard, serve_hub,
+    RecordingInfo, RecordingStore, ServedDashboard, Subscription, Update, serve_hub,
 };
 pub use error::{Error, Result};
 pub use pane::{

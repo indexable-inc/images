@@ -16,6 +16,30 @@
 //! Storing each field as text means updates diff incrementally and, because a
 //! Loro oplog *is* a recording, the whole pane history replays for free.
 //!
+//! # Who may write what, when several writers share a pane
+//!
+//! The two halves of a pane merge differently, and this is the one place the
+//! CRDT does not save a careless writer:
+//!
+//! - a [`LoroText`] field (a body, an execution's `stdout`) **merges**, so two
+//!   writers appending concurrently both survive;
+//! - the `meta` [`LoroMap`] scalars (`title`, `kind`, `subtitle`) are
+//!   **last-write-wins**, so two writers setting `title` concurrently silently
+//!   lose one of them.
+//!
+//! So the convention is: **the writer that created a pane owns its scalars, and
+//! anyone may append to its text.** Nothing here enforces that, deliberately.
+//! Enforcing single ownership would make the case this document exists for --
+//! several agents contributing competing findings about one subject --
+//! impossible to express, and it would turn a merge into an error the writer
+//! has to handle, which is what a CRDT is for avoiding.
+//!
+//! Leaving it unenforced is defensible only because a violation is *visible*:
+//! [`LoroMap::get_last_editor`] reports who last set a key, so a title that
+//! changed hands says so on the pane itself rather than in a log nobody opens.
+//! See `map_scalars_report_their_last_editor` in `tests/peer_switching.rs`,
+//! which is that convention written as a test.
+//!
 //! Every commit carries a millisecond wall-clock timestamp
 //! ([`set_next_commit_timestamp`](LoroDoc::set_next_commit_timestamp)), and each
 //! pane is stamped with a `created_at` the first time it appears. Together they
@@ -38,7 +62,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use loro::{
     Container, ExportMode, JsonMapOp, JsonOp, JsonOpContent, JsonTextOp, LoroDoc, LoroMap,
-    LoroText, LoroValue, Subscription as LoroSubscription, ValueOrContainer, VersionVector,
+    LoroText, LoroValue, PeerID, Subscription as LoroSubscription, ValueOrContainer,
+    VersionVector,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -377,7 +402,7 @@ impl DocState {
     /// Record `actor` as this hub's identity and write it against the current
     /// peer id straight away, so an owner that declares before its first pane is
     /// still in the document, and a re-declaration takes effect at once.
-    fn declare_identity(&mut self, actor: &Actor) -> Result<Option<Vec<u8>>> {
+    fn declare_identity(&mut self, actor: &Actor) -> Result<Option<Delta>> {
         // The guard has to be gone before the commit below: the first-commit
         // callback takes the same lock, and it is not reentrant.
         *self.identity.lock() = actor.clone();
@@ -412,7 +437,7 @@ impl DocState {
     /// sentences survive. Declaring it here as well means the container is
     /// already in the snapshot every viewer imports, so no viewer has to create
     /// it at all.
-    fn declare_note(&mut self, scope: &str, pane: &str, field: &str) -> Result<Option<Vec<u8>>> {
+    fn declare_note(&mut self, scope: &str, pane: &str, field: &str) -> Result<Option<Delta>> {
         let key = input_key(scope, pane, field);
         self.inputs.ensure_mergeable_text(&key).map_err(loro_err)?;
         self.commit_delta(CommitTag {
@@ -507,7 +532,7 @@ impl DocState {
     /// Reconcile the panes under `scope` to exactly `panes`. Entries under other
     /// scopes are left alone. Returns the CRDT delta since the last broadcast
     /// when anything changed.
-    fn apply_scope(&mut self, scope: &str, panes: &[Pane]) -> Result<Option<Vec<u8>>> {
+    fn apply_scope(&mut self, scope: &str, panes: &[Pane]) -> Result<Option<Delta>> {
         let mut added: Vec<&str> = Vec::new();
         let mut changed: Vec<&str> = Vec::new();
         for pane in panes {
@@ -550,6 +575,63 @@ impl DocState {
             add: added,
             set: changed,
             del: dropped,
+            ..CommitTag::default()
+        })
+    }
+
+    /// Create or update exactly one pane, leaving every other entry untouched.
+    ///
+    /// The per-pane twin of [`apply_scope`](Self::apply_scope), and the right
+    /// call when several writers share one document: `apply_scope` reconciles a
+    /// whole scope to the slice it is handed, so a writer that owns three panes
+    /// has to re-send all three to change one, and has to hold a copy of them to
+    /// do it. Naming the pane makes "you can only touch what you name"
+    /// structural rather than a convention, and costs one pane per publish.
+    ///
+    /// The key is the pane id with no scope prefix. Scoped and unscoped entries
+    /// coexist in the same root map; readers already treat a key with no
+    /// separator as unscoped.
+    fn set_pane(&mut self, pane: &Pane) -> Result<Option<Delta>> {
+        let key = pane.id.clone();
+        let kind = pane.view.kind();
+
+        // Same reasoning as `apply_scope`: a reused id whose kind changed cannot
+        // be edited in place, because the stored fields mean something else now.
+        if self.panes.get(&key).is_some_and(|slot| slot.kind != kind) {
+            self.drop_keys(std::slice::from_ref(&key))?;
+        }
+
+        let fresh = !self.panes.contains_key(&key);
+        if fresh {
+            self.create_slot(&key, pane)?;
+        }
+        let changed = self.update_slot(&key, pane)?;
+
+        self.commit_delta(CommitTag {
+            on: "panes",
+            pane: Some(&pane.id),
+            add: if fresh { vec![pane.id.as_str()] } else { Vec::new() },
+            set: if changed && !fresh {
+                vec![pane.id.as_str()]
+            } else {
+                Vec::new()
+            },
+            ..CommitTag::default()
+        })
+    }
+
+    /// Remove one pane by id. Unknown ids are a no-op and broadcast nothing, so
+    /// a writer retiring something twice does not wake every viewer twice.
+    fn drop_pane(&mut self, id: &str) -> Result<Option<Delta>> {
+        let key = id.to_owned();
+        if !self.panes.contains_key(&key) {
+            return Ok(None);
+        }
+        self.drop_keys(std::slice::from_ref(&key))?;
+        self.commit_delta(CommitTag {
+            on: "panes",
+            pane: Some(id),
+            del: vec![id],
             ..CommitTag::default()
         })
     }
@@ -671,7 +753,7 @@ impl DocState {
                   operations and callers share; narrowing it would make the one \
                   no-op in the set the odd one out"
     )]
-    fn remove_scope(&mut self, scope: &str) -> Result<Option<Vec<u8>>> {
+    fn remove_scope(&mut self, scope: &str) -> Result<Option<Delta>> {
         let _ = scope;
         Ok(None)
     }
@@ -689,7 +771,7 @@ impl DocState {
     /// wall-clock timestamp so the browser timeline has a fine-grained axis, and
     /// with `tag` as its commit message so the change is legible and stays its
     /// own change.
-    fn commit_delta(&mut self, tag: CommitTag<'_>) -> Result<Option<Vec<u8>>> {
+    fn commit_delta(&mut self, tag: CommitTag<'_>) -> Result<Option<Delta>> {
         self.seq += 1;
         let tag = CommitTag {
             seq: self.seq,
@@ -703,12 +785,22 @@ impl DocState {
         if current == self.streamed {
             return Ok(None);
         }
-        let delta = self
+        let bytes = self
             .doc
             .export(ExportMode::updates(&self.streamed))
             .map_err(loro_err)?;
+        // Who wrote this delta, for free: exactly the peers whose counter moved
+        // between the last broadcast and now. Reading it here costs one pass
+        // over a small map; recovering it later would mean decoding the update.
+        let authors = current
+            .iter()
+            .filter(|(peer, counter)| {
+                self.streamed.get(peer).copied().unwrap_or_default() < **counter
+            })
+            .map(|(peer, _)| *peer)
+            .collect();
         self.streamed = current;
-        Ok(Some(delta))
+        Ok(Some(Delta { bytes, authors }))
     }
 
     /// A full snapshot of the current document, for a newly-connected client, a
@@ -919,6 +1011,23 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
     }
 }
 
+/// What one [`DocState::import`] did: whether Loro applied the update or only
+/// recorded it, and the delta to broadcast (absent when nothing was pending).
+struct Imported {
+    merge: Merge,
+    delta: Option<Delta>,
+}
+
+/// A committed delta and the peers whose ops are in it.
+///
+/// The author set is taken from the version-vector diff at commit time, so it
+/// costs nothing beyond a pass over a map, and it is what lets a subscriber tell
+/// its own writes from someone else's without decoding the update.
+struct Delta {
+    bytes: Vec<u8>,
+    authors: Vec<PeerID>,
+}
+
 /// One broadcast delta in both of the forms its transports need.
 ///
 /// SSE is a text protocol and has to base64 its payload; the Loro websocket
@@ -927,19 +1036,40 @@ fn loro_err(source: impl std::fmt::Display) -> Error {
 /// lag domain -- two channels would let the same delta sit at different
 /// positions in each, so a subscriber resyncing on one could double-apply
 /// from the other.
-/// What one [`DocState::import`] did: whether Loro applied the update or only
-/// recorded it, and the delta to broadcast (absent when nothing was pending).
-struct Imported {
-    merge: Merge,
-    delta: Option<Vec<u8>>,
-}
-
 pub struct Update {
-
     /// The raw Loro update, as the websocket transport frames it.
     pub(crate) bytes: Vec<u8>,
     /// The same bytes base64'd, as an SSE `data:` field requires.
     pub(crate) encoded: String,
+    /// Peers whose ops are in this delta. See [`Update::authors`].
+    authors: Vec<PeerID>,
+}
+
+impl Update {
+    /// The raw Loro update, to import into a replica of this document.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Peers whose ops are in this delta.
+    ///
+    /// This is how a subscriber that also writes tells its own changes from
+    /// everyone else's. Comparing against [`Hub::peer_id`] classifies a delta as
+    /// this hub's own write or as a merge from outside; where the hub writes for
+    /// several agents under a peer each, the set names exactly which of them
+    /// wrote, so a wake can skip the agent that caused it.
+    #[must_use]
+    pub fn authors(&self) -> &[PeerID] {
+        &self.authors
+    }
+
+    /// True when every op in this delta came from `peer`, i.e. the delta is that
+    /// peer's own echo and a subscriber acting for it has nothing new to learn.
+    #[must_use]
+    pub fn is_only_from(&self, peer: PeerID) -> bool {
+        self.authors == [peer]
+    }
 }
 
 /// A new subscriber's starting point: the current full snapshot taken under the
@@ -950,6 +1080,18 @@ pub struct Subscription {
     pub(crate) snapshot: Vec<u8>,
     /// The CRDT update stream, consistent with `snapshot`.
     pub(crate) updates: broadcast::Receiver<Arc<Update>>,
+}
+
+impl Subscription {
+    /// Split into the seed snapshot and the update stream that continues it.
+    ///
+    /// Import the snapshot before applying anything off the receiver: the two
+    /// were taken under one lock, so together they are a gap-free view, and in
+    /// the other order the first updates are applied to an empty document.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<u8>, broadcast::Receiver<Arc<Update>>) {
+        (self.snapshot, self.updates)
+    }
 }
 
 /// Who is behind a peer id.
@@ -1069,8 +1211,8 @@ pub struct HistoryChange {
     pub counter: i32,
     /// Logical clock, for ordering changes that are concurrent in wall time.
     pub lamport: u32,
-    /// Wall clock the writer stamped, in milliseconds (see
-    /// [`commit_delta`](DocState::commit_delta)).
+    /// Wall clock the writer stamped, in milliseconds. Every commit through
+    /// this hub is stamped; `DocState::commit_delta` is where.
     pub timestamp: i64,
     /// The commit tag, a JSON object for a change this hub wrote. Absent for a
     /// writer that set no message.
@@ -1185,6 +1327,24 @@ impl Hub {
         self.broadcast(delta);
     }
 
+    /// Create or update one pane, leaving every other entry untouched.
+    ///
+    /// Prefer this to [`apply_scope`](Self::apply_scope) when more than one
+    /// writer shares the document: it touches only the pane it names, so a
+    /// writer needs no copy of everything else it owns in order to change one
+    /// thing. See the module docs for which parts of a pane merge and which do
+    /// not.
+    pub fn set_pane(&self, pane: &Pane) {
+        let delta = self.state.lock().set_pane(pane);
+        self.broadcast(delta);
+    }
+
+    /// Remove one pane by id. An unknown id is a no-op that broadcasts nothing.
+    pub fn drop_pane(&self, id: &str) {
+        let delta = self.state.lock().drop_pane(id);
+        self.broadcast(delta);
+    }
+
     /// Merge remote CRDT bytes into the shared document and broadcast the
     /// result, so every other connected client converges on it.
     ///
@@ -1213,6 +1373,16 @@ impl Hub {
     pub fn declare_identity(&self, actor: &Actor) {
         let delta = self.state.lock().declare_identity(actor);
         self.broadcast(delta);
+    }
+
+    /// This hub's own Loro peer id.
+    ///
+    /// Paired with [`Update::authors`] it is what lets an in-process consumer
+    /// classify a delta as this hub's own write or as a merge from a browser or
+    /// another peer, without decoding the update.
+    #[must_use]
+    pub fn peer_id(&self) -> PeerID {
+        self.state.lock().doc.peer_id()
     }
 
     /// Every peer that has introduced itself, keyed by peer id.
@@ -1269,17 +1439,27 @@ impl Hub {
         self.state.lock().history()
     }
 
-    fn broadcast(&self, delta: Result<Option<Vec<u8>>>) {
-        if let Ok(Some(bytes)) = delta {
+    fn broadcast(&self, delta: Result<Option<Delta>>) {
+        if let Ok(Some(Delta { bytes, authors })) = delta {
             let encoded = BASE64.encode(&bytes);
-            let _ = self.updates.send(Arc::new(Update { bytes, encoded }));
+            let _ = self.updates.send(Arc::new(Update {
+                bytes,
+                encoded,
+                authors,
+            }));
         }
     }
 
-    /// Subscribe to the base64 CRDT update stream and read the current full
-    /// snapshot, both under one lock so the snapshot version lines up with the
-    /// first update the subscriber will receive.
-    pub(crate) fn subscribe(&self) -> Subscription {
+    /// Subscribe to the CRDT update stream and read the current full snapshot,
+    /// both under one lock so the snapshot version lines up with the first
+    /// update the subscriber will receive.
+    ///
+    /// This is the signal an in-process consumer needs to keep a replica of the
+    /// document current: seed from the snapshot, then import each
+    /// [`Update::bytes`]. Polling [`export_snapshot`](Self::export_snapshot) on
+    /// a timer instead costs a whole-document export and import per tick and
+    /// still cannot say who wrote anything (ENG-10199).
+    pub fn subscribe(&self) -> Subscription {
         let state = self.state.lock();
         let updates = self.updates.subscribe();
         Subscription {
@@ -1295,7 +1475,7 @@ impl Hub {
     /// fan-out middleman that seeds nobody -- each websocket client takes its
     /// own snapshot after subscribing to the relay -- so it wants the stream
     /// without paying for a snapshot export per hub delta.
-    pub(crate) fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
+    pub fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
         self.updates.subscribe()
     }
 

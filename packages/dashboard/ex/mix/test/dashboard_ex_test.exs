@@ -9,8 +9,13 @@ defmodule DashboardExTest do
   # from the BEAM reach the shared document, a peer's CRDT bytes merge into
   # it, and the watch stream pushes `{:unibind_stream, ref, ...}` under
   # granted demand -- the wire contract ix-mcp-ex's bridge GenServer is
-  # written against. No browser is involved; a browser's edit arrives as
-  # `merge/2`, which is exactly what the merge tests exercise.
+  # written against. A browser's edit arrives as `merge/2` in most of these,
+  # which is a deliberate stand-in.
+  #
+  # One test does not accept that stand-in. `merge/2` refreshes the mirror
+  # synchronously inside the call, so it cannot observe how long an edit takes
+  # to reach a watcher when nothing on the BEAM was involved -- which is what a
+  # real browser edit is. That one drives `POST /apply` over HTTP instead.
 
   setup context do
     doc = "test-#{:erlang.phash2(context.test)}"
@@ -113,6 +118,65 @@ defmodule DashboardExTest do
     Native.unibind_demand(handle, 4)
     :ok = DashboardEx.set_html(doc, "notes", "Notes", "<b>second-edit</b>")
     assert_receive {:unibind_stream, ^ref, {:item, %DocEvent{}}}, 2_000
+  end
+
+  test "an out-of-band HTTP edit wakes the watcher promptly", %{doc: doc} do
+    # The real human-edit path, which `merge/2` cannot stand in for: bytes
+    # arrive at the HTTP server from a browser and nothing on the BEAM is
+    # called, so nothing refreshes the mirror on the way past. This used to be
+    # served by a 200ms poll, making the wake up to a poll interval late; the
+    # mirror is now driven by `Hub::subscribe` (ENG-10199). The bound below is
+    # what fails if that poll ever comes back.
+    peer = doc <> "-http-peer"
+    on_exit(fn -> DashboardEx.close(peer) end)
+    {:ok, url} = DashboardEx.open(doc)
+    {:ok, _} = DashboardEx.open(peer)
+    :ok = DashboardEx.set_html(peer, "remote", "Remote", "<i>typed-in-a-browser</i>")
+    {:ok, update} = DashboardEx.snapshot(peer)
+
+    ref = make_ref()
+    {:ok, handle} = Native.watch(ref, doc)
+    Native.unibind_demand(handle, 8)
+
+    # A hand-written POST over `:gen_tcp` rather than an HTTP client: `:inets`
+    # is not in this build's OTP, and the point of the test is that the bytes
+    # arrive without the BEAM touching the document, which one socket does.
+    %URI{host: host, port: port} = URI.parse(url)
+
+    request = [
+      "POST /apply HTTP/1.1\r\n",
+      "Host: #{host}:#{port}\r\n",
+      "Content-Type: application/octet-stream\r\n",
+      "Content-Length: #{byte_size(update)}\r\n",
+      "Connection: close\r\n\r\n",
+      update
+    ]
+
+    started = :erlang.monotonic_time(:millisecond)
+
+    {:ok, socket} =
+      :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false, packet: :raw])
+
+    :ok = :gen_tcp.send(socket, request)
+    {:ok, response} = :gen_tcp.recv(socket, 0, 5_000)
+    :ok = :gen_tcp.close(socket)
+
+    # A merged update answers 204: the hub took the bytes and has nothing to
+    # return. A rejected one is a 4xx, so this is the positive check.
+    assert response =~ "204 No Content",
+           "POST /apply should be accepted, got: #{inspect(response)}"
+
+    assert_receive {:unibind_stream, ^ref, {:item, %DocEvent{doc: ^doc}}}, 2_000
+    elapsed = :erlang.monotonic_time(:millisecond) - started
+
+    # Generous against the 200ms poll it replaces, tight enough that the poll
+    # returning fails here rather than merely getting slower.
+    assert elapsed < 50,
+           "an out-of-band edit should wake the watcher immediately, took #{elapsed}ms"
+
+    # A real last use of `handle`: collecting it aborts the producer, so it has
+    # to stay reachable past the assertion above.
+    Native.unibind_demand(handle, 1)
   end
 
   test "a merge from a peer wakes the watcher, which is the human-edit path", %{doc: doc} do

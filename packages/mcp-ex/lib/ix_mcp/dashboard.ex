@@ -23,6 +23,30 @@ defmodule IxMcp.Dashboard do
 
   CRDT payloads (`snapshot/1`, `merge/2`) are plain binaries -- Loro bytes
   cross the unibind boundary natively, no base64 in between.
+
+  ## Who may write what, when several agents share a document
+
+  A document is meant to be co-maintained: several agents contributing to
+  one report, and a human editing it. That works because the two halves of
+  a pane merge differently -- and one of them does not merge at all:
+
+    * a pane's **text** (an html body, an execution's output) merges, so two
+      agents appending concurrently both survive;
+    * a pane's **scalars** (`title`, the renderer name, the data payload
+      passed to `data/5`) are last-write-wins, so two agents setting the
+      same one concurrently silently lose one of them.
+
+  So: **the agent that created a pane owns its scalars, and anyone may
+  append to its text.** Nothing enforces this. Enforcing it would make the
+  thing this document exists for -- three agents reporting different
+  numbers for the same measurement, which a reader then weighs -- impossible
+  to express.
+
+  What makes that safe to leave unenforced is that a violation is visible
+  rather than silent: the document records who last wrote each key, so a
+  title that changed hands says so on the pane itself. If you are correcting
+  another agent's finding, prefer adding your own pane, or appending to the
+  text, over overwriting their title.
   """
 
   alias IxMcp.Dashboard.Bridge

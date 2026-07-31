@@ -31,6 +31,27 @@ reconcile mechanism and recordings are documented in [internals](internals.md).
 - **`error`** - one [`Error::Dashboard`] variant collapsing foreign-boundary
   failures (TCP bind, Loro encode); `Result<T>` alias. `src/error.rs`.
 
+## Who may write what, when several writers share a pane
+
+The two halves of a pane merge differently, and this is the one place the CRDT
+does not save a careless writer:
+
+| part | merge rule | two concurrent writers |
+| --- | --- | --- |
+| text fields (`body`, `stdout`, ...) | CRDT text merge | both survive |
+| `meta` scalars (`title`, `kind`, `subtitle`) | last-write-wins | one is silently lost |
+
+**The writer that created a pane owns its scalars; anyone may append to its
+text.** Nothing enforces this, on purpose. Enforcing single ownership would make
+the case a shared document exists for -- several agents contributing competing
+findings about one subject -- impossible to express, and would turn a merge into
+an error the writer has to handle.
+
+That is safe to leave unenforced only because a violation is visible rather than
+silent. `LoroMap::get_last_editor` reports who last set a key, so a title that
+changed hands says so on the pane itself. `map_scalars_report_their_last_editor`
+in `tests/peer_switching.rs` is that convention written as a test.
+
 ## Wire types (`src/pane.rs`)
 
 A [`Pane`] (`pane.rs:35`) is `{ id, title, subtitle, view }`. `id` is unique
