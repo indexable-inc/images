@@ -88,6 +88,7 @@ jobs:
           set -euo pipefail
           mapfile -t rows < <(
             nix eval --json '.#lib.forkPackages' \
+              --apply 'fs: builtins.filter (f: f ? input) fs' \
               | nix run nixpkgs#jq -- -c '.[] | {name, input, forkRepo}'
           )
           failed=0

@@ -83,6 +83,11 @@ impl Class {
     /// No answer: the input is absent from flake.lock, or the forge said the
     /// bookmark or the rev is not there.
     pub const UNKNOWN: Self = Self("unknown");
+    /// There is no pin: the fork is carried in this repository as a derived
+    /// view. Deliberately its own word rather than folding into `current`,
+    /// which would claim a check that did not happen, or into `unknown`, which
+    /// fails the gate for a state that is correct by construction.
+    pub const VENDORED: Self = Self("vendored");
 
     const fn word(self) -> &'static str {
         self.0
@@ -273,7 +278,7 @@ fn verdict(
     lines.push(format!(
         "  pinned     {} (flake.lock {})",
         rev.unwrap_or("<absent>"),
-        fork.input
+        fork.input.as_deref().unwrap_or("<unset>")
     ));
     lines.push(format!(
         "  bookmark   {} ({})",
@@ -307,6 +312,38 @@ fn verdict(
     }
 }
 
+/// A vendored fork's row: no forge read, no rev, and never a failure.
+///
+/// It is still a ROW rather than a filtered-out entry, because a fork that
+/// silently leaves the pin report is a fork nobody notices has left it, and by
+/// the fourteenth conversion the report would be empty and green.
+///
+/// What this row does NOT check, and says so: whether the fork repo's published
+/// bookmark still matches what this tree derives to. Vendoring moves the drift
+/// risk rather than deleting it -- editing the subtree and never pushing the
+/// derived view leaves the published branch stale in exactly the way a stale pin
+/// used to. Answering that needs a local `jj-views derive` over this repo's
+/// history, which this forge-reading lane cannot do. ENG-11685 owns it.
+fn vendored_row(fork: &Fork, path: &str) -> Row {
+    Row {
+        name: fork.name.clone(),
+        input: format!("vendored:{path}"),
+        fork_repo: fork.fork_repo.clone(),
+        bookmark: fork.bookmark.clone(),
+        rev: None,
+        tip: None,
+        class: Class::VENDORED,
+        standing: None,
+        failed: false,
+        note: format!(
+            "carried at {path} as a derived view, so there is no pin to drift; whether {} {} \
+             still matches this tree is NOT checked here (ENG-11685)",
+            fork.fork_repo, fork.bookmark
+        ),
+        problem: None,
+    }
+}
+
 /// What a `behind` row owes the operator: how many published patches this build
 /// does not have. The gate does not fail on it (see the module doc), so an empty
 /// cell here would be the whole of what it said.
@@ -335,7 +372,7 @@ fn unknown_problem(fork: &Fork, rev: Option<&str>, tip: Option<&str>) -> String 
         (None, _) => format!(
             "flake.lock carries no locked rev for input {}, so the registry and the lock disagree \
              about what this fork even is.",
-            fork.input
+            fork.input.as_deref().unwrap_or("<unset>")
         ),
         (Some(rev), None) => format!(
             "the forge does not have bookmark {} in {}, so the pin ({rev}) answers to nothing. A \
@@ -355,8 +392,12 @@ fn unknown_problem(fork: &Fork, rev: Option<&str>, tip: Option<&str>) -> String 
 }
 
 fn row(fork: &Fork) -> Result<Row> {
+    let input = match fork.source()? {
+        mapping::Source::Pinned(input) => input,
+        mapping::Source::Vendored(path) => return Ok(vendored_row(fork, path)),
+    };
     let ctx = format!("pin-drift: {}", fork.name);
-    let rev = lock_rev(&fork.input)?;
+    let rev = lock_rev(input)?;
     let tip = match gh::read(
         &ctx,
         &format!("repos/{}/commits/{}", fork.fork_repo, fork.bookmark),
@@ -379,7 +420,7 @@ fn row(fork: &Fork) -> Result<Row> {
 
     Ok(Row {
         name: fork.name.clone(),
-        input: fork.input.clone(),
+        input: input.to_owned(),
         fork_repo: fork.fork_repo.clone(),
         bookmark: fork.bookmark.clone(),
         rev,
@@ -443,11 +484,13 @@ fn tally(rows: &[Row]) -> String {
     let count = |f: &dyn Fn(&Row) -> bool| rows.iter().filter(|r| f(r)).count();
     let diverged = |r: &Row| r.class == Class::DIVERGED;
     format!(
-        "{} current, {} behind, {} diverged and waived, {} diverged on a floating input",
+        "{} current, {} behind, {} diverged and waived, {} diverged on a floating input, {} \
+         vendored with no pin",
         count(&|r| r.class == Class::CURRENT),
         count(&|r| r.class == Class::BEHIND),
         count(&|r: &Row| diverged(r) && r.note.starts_with("waived")),
         count(&|r: &Row| diverged(r) && r.note.starts_with("floating")),
+        count(&|r| r.class == Class::VENDORED),
     )
 }
 
@@ -504,7 +547,8 @@ mod tests {
     fn fork(name: &str, auto_update: bool, waiver: Option<PinDivergence>) -> Fork {
         Fork {
             name: name.to_owned(),
-            input: format!("{name}-src"),
+            input: Some(format!("{name}-src")),
+            vendored: None,
             fork_repo: format!("indexable-inc/{name}"),
             bookmark: "ix-patched".to_owned(),
             upstream_url: format!("https://github.com/upstream/{name}.git"),
@@ -604,6 +648,33 @@ mod tests {
     }
 
     // Pinned bytes, for the same reason drift's table is: the fork-sync
+    // A vendored fork is the state this gate must NOT fail, and the state it
+    // must not silently drop either. Both halves are asserted, because passing
+    // by disappearing from the report is how a fourteen-fork registry ends up
+    // with an empty green table.
+    #[test]
+    fn a_vendored_fork_is_reported_and_never_failed() {
+        let mut fork = fork("nd", false, None);
+        fork.input = None;
+        fork.vendored = Some("vendor/nix-derivation".to_owned());
+
+        let row = row(&fork).expect("a vendored row needs no forge and cannot fail");
+        assert_eq!(row.class, Class::VENDORED);
+        assert!(!row.failed, "a fork with no pin cannot have a drifting pin");
+        assert!(row.problem.is_none(), "problem: {:?}", row.problem);
+        assert_eq!(row.rev, None);
+        assert_eq!(row.input, "vendored:vendor/nix-derivation");
+        assert!(
+            row.note.contains("ENG-11685"),
+            "the row must name what it does NOT check, said: {}",
+            row.note
+        );
+        assert!(
+            tally(&[row]).contains("1 vendored"),
+            "the pass line must count it"
+        );
+    }
+
     // workflow embeds it in step summaries.
     #[test]
     fn markdown_table_matches_nu_to_md_pretty() {

@@ -257,20 +257,6 @@
       flake = false;
     };
 
-    # jj megamerge fork of Gabriella439/Haskell-Nix-Derivation-Library, the
-    # `nix-derivation` Haskell library nix-output-monitor parses .drv files
-    # with. The upstream repo publishes no
-    # tags; this rev is upstream main while the cabal version still reads
-    # 1.1.3 -- the hackage release nixpkgs builds -- PLUS the post-release
-    # dependency-bound relaxations (QuickCheck 2.15, filepath 1.5) hackage
-    # carries as cabal revisions, so overriding the hackage sdist with this
-    # tree keeps the same dependency envelope. autoUpdate = false: repin when
-    # nixpkgs moves to a newer nix-derivation.
-    nix-derivation-src = {
-      url = "github:indexable-inc/Haskell-Nix-Derivation-Library/ba78008319f3517013a9fd70245ecee5ab2054b4";
-      flake = false;
-    };
-
     # jj megamerge forks of nix-community/rnix-parser at the release tags
     # whose crates the repo's nix tools vendor today: v0.12.0 (alejandra,
     # deadnix) and v0.14.0 (statix), one bookmark per series in
@@ -441,7 +427,6 @@
     codex-src,
     nix-src,
     nix-fast-build-src,
-    nix-derivation-src,
     rnix-0-12-src,
     rnix-0-14-src,
     ghostty-src,
@@ -526,7 +511,6 @@
         codex-src
         nix-src
         nix-fast-build-src
-        nix-derivation-src
         rnix-0-12-src
         rnix-0-14-src
         ghostty-src

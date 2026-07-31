@@ -268,23 +268,6 @@
         "type": "github"
       }
     },
-    "nix-derivation-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1784724798,
-        "narHash": "sha256-2iW2bmKUlHZ+uVhb5JjZdIfICxMjSjCsdDzHKw/HFPA=",
-        "owner": "indexable-inc",
-        "repo": "Haskell-Nix-Derivation-Library",
-        "rev": "ba78008319f3517013a9fd70245ecee5ab2054b4",
-        "type": "github"
-      },
-      "original": {
-        "owner": "indexable-inc",
-        "repo": "Haskell-Nix-Derivation-Library",
-        "rev": "ba78008319f3517013a9fd70245ecee5ab2054b4",
-        "type": "github"
-      }
-    },
     "nix-fast-build-src": {
       "flake": false,
       "locked": {
@@ -579,7 +562,6 @@
         "jj-src": "jj-src",
         "launchk-src": "launchk-src",
         "mesa-src": "mesa-src",
-        "nix-derivation-src": "nix-derivation-src",
         "nix-fast-build-src": "nix-fast-build-src",
         "nix-ninja-src": "nix-ninja-src",
         "nix-src": "nix-src",
