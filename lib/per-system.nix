@@ -321,7 +321,7 @@
           exit 1
         }
       }
-      # Site content invariants, front-loaded into the pre-push lint.
+      # Site content invariants, front-loaded into `nix run .#lint`.
       #
       # The SvelteKit build is the full validator and the Check gate DOES run
       # it: `site` is in `packageSet`, so `cachePushRoots` carries it and

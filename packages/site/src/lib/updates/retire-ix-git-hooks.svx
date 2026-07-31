@@ -1,0 +1,39 @@
+---
+id: retire-ix-git-hooks
+postedAt: "2026-07-31T00:45:00-07:00"
+title: "ix drops its git hooks; CI already ran every check they did"
+links:
+  - label: "the removal"
+    href: "https://github.com/indexable-inc/ix/pull/9311"
+tags:
+  - ci
+  - workflow
+---
+
+`ix` carried three hooks under `.githooks/`, installed by entering the
+devshell: a `pre-commit` running astlog over the staged `.nix` files, a
+`pre-push` running the stale-base check and a `treefmt` gate, and a guard
+whose only job was refusing a hook that had come from a different worktree
+of the same clone. All three are gone, and no check went with them.
+
+Each one already had a wider CI gate. The whole-tree `astlog-check` and
+`treefmtCheck` stages of `ci-lint-checks` cover both lint hooks and cover
+more than the staged subset ever did; `check-merge-integrity.sh` runs from
+`run-ci-phases.sh` with the same arguments. What the hooks added was not
+coverage but earliness, and the price was a devshell shell hook, a configure
+script, a fixture suite, a lint stage, and an eval-time assert keeping a
+count printed inside `pre-commit` in sync with the real stage list.
+
+Neither repo now runs any hook. `nix run .#lint` in index and `just lint`
+in ix are the local gates, and running one is on you: a clean commit says
+nothing about lint. `pre-commit install` refuses in both trees, and writing
+a config to make it work is how ix ended up with a rule that had never run
+on a single commit in its life.
+
+One thing this does not fix. The stale-base check was put in `pre-push`
+because a merge can outrun its own required checks, which is what happened
+twice on 2026-07-27: both merges came from a ruleset bypass actor seconds
+after the run started, and the merge cancelled the run. A hook was never a
+control on that, since the same bypass skips it, but nothing local catches
+a stale-base tree before a push now either. The real fix is a ruleset
+without bypass actors, tracked in ENG-11624.
