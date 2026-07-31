@@ -753,6 +753,20 @@ $env.config = {
         ]
         # Ring bell when command finishes - shows ! in tmux for other windows
         pre_prompt: [{||
+            # A closed Ghostty surface sometimes fails to take its shell down:
+            # the REPL is reparented to launchd (ppid 1) and keeps firing these
+            # hooks against the dead pty at ~15% CPU, accumulating one orphan
+            # every few hours (andrewgazelka/nix#116). A tab shell never has
+            # ppid 1 while its surface is alive, so exit on the first hook run
+            # after orphaning. pre_prompt only fires in the REPL, so `nu -c`
+            # background scripts are unaffected; the env gate keeps the guard
+            # scoped to ghostty-launched sessions. SIGTERM rather than `exit`:
+            # nushell swallows exit requests raised inside hooks, so an orphaned
+            # REPL survives `exit 1` here (verified on 0.114.0) while a signal
+            # actually takes it down.
+            if ($env.GHOSTTY_RESOURCES_DIR? | is-not-empty) and ((ps | where pid == $nu.pid | get -o ppid.0 | default 0) == 1) {
+                ^/bin/kill $nu.pid
+            }
             github-pr-prompt-refresh-current-if-stale
             if "TMUX" in $env { print -n (char bel) }
         }]
