@@ -69,6 +69,15 @@ fn the_series_is_the_branchs_own_line_not_everything_merged_into_it() {
         "expected exactly the two patches:\n{}",
         run.stdout
     );
+    // The earlier revision merged in for ancestry shares its subject with the
+    // revision on the branch, so it is represented rather than lost. Reporting
+    // it would fire on every fork of this shape and teach everyone to ignore
+    // the warning that ENG-11686 exists to make audible.
+    assert!(
+        !run.stderr.contains("second parent"),
+        "false positive: the benign ancestry merge was called an invisible patch:\n{}",
+        run.stderr
+    );
 }
 
 /// The other half of the shape detection, and the regression that a
@@ -110,6 +119,50 @@ fn a_megamerge_seals_parents_are_all_still_patches() {
     assert!(
         run.stdout.contains("2 patch decisions"),
         "expected both patches:\n{}",
+        run.stdout
+    );
+}
+
+/// ENG-11686: a patch that arrived as a merged pull request is on the merge's
+/// second parent, so the branch's own line never reaches it. It cannot be
+/// classified (an intent entry naming it is an orphaned key, which fails the
+/// run) and it will never be offered upstream. Before this warning the tool
+/// reported cleanly on the patches it could see and said nothing about the
+/// ones it could not.
+#[test]
+fn a_patch_merged_as_a_pull_request_is_reported_as_invisible() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let fixture = Fixture::pr_merged(root, (PATCH_ONE, BODY), (PATCH_TWO, BODY));
+    let work = root.join("work");
+    fs::create_dir(&work).unwrap();
+    let envs = fixture.envs();
+
+    let mapping = work.join("mapping.json");
+    fs::write(&mapping, mapping_json("fake", "{}")).unwrap();
+    let run = run_sync(&mapping, &work, &envs);
+
+    // Warn, never fail: every fork that has ever merged a PR is in this state,
+    // and a second hard failure here would be turned off, which is how the
+    // orphaned-key path made the gap uncorrectable in the first place.
+    assert_eq!(
+        run.status, 0,
+        "the warning must not fail the run:\n{}\n{}",
+        run.stdout, run.stderr
+    );
+    assert!(
+        run.stderr.contains("second parent"),
+        "the invisible patch was not reported:\n{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(PATCH_TWO),
+        "the report must name the patch it cannot see, not just count it:\n{}",
+        run.stderr
+    );
+    assert!(
+        !run.stdout.contains(PATCH_TWO),
+        "the series should still not contain the invisible patch:\n{}",
         run.stdout
     );
 }
