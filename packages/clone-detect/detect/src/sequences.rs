@@ -227,16 +227,22 @@ fn sequence_to_fragment(scan: &Output, generated_files: &[bool], loc: &SeqLoc) -
     let file = scan.files.get(loc.file_id)?;
     let node = file.nodes.get(loc.node_idx)?;
 
-    let mut code_children = node
-        .children
-        .iter()
-        .filter(|child| !child.kind.contains("comment"));
-    let first_child = code_children.nth(loc.start)?;
-    let last_child = node
+    let code_children: Vec<_> = node
         .children
         .iter()
         .filter(|child| !child.kind.contains("comment"))
-        .nth(loc.end.checked_sub(1)?)?;
+        .collect();
+    let first_child = code_children.get(loc.start)?;
+    let last_child = code_children.get(loc.end.checked_sub(1)?)?;
+
+    // A sequence fragment has no single AST node to take a normalized hash
+    // from; its reformat-stable identity is the hash of the window's child
+    // hashes (the same values the k-gram match keyed on).
+    let child_hashes: Vec<u64> = code_children
+        .iter()
+        .map(|child| child.normalized_hash)
+        .collect();
+    let fingerprint = hash_kgram(&child_hashes, loc.start, loc.end);
 
     Some(Fragment {
         file: file.path.clone(),
@@ -250,6 +256,7 @@ fn sequence_to_fragment(scan: &Output, generated_files: &[bool], loc: &SeqLoc) -
         },
         kind: node.kind.to_owned(),
         generated: *generated_files.get(loc.file_id)?,
+        fingerprint,
     })
 }
 

@@ -133,11 +133,23 @@ The run exits `FAILURE` iff any enabled gate fails (or on error).
   `global_pct`. Its ceiling is `--max-global-pct` > `[budget] global_pct` >
   `0.0`. The `0.0` default reproduces the legacy behavior (any surviving clone
   fails), so a repo with no `[budget]` and no gate flags gates exactly as before.
-- **diff** (opt-in, `--diff`): duplication concentrated on lines changed since a
-  git base rev. Changed lines are the added/modified new-side lines of
+- **diff** (opt-in, `--diff`): NEW duplication concentrated on lines changed
+  since a git base rev. Changed lines are the added/modified new-side lines of
   `git diff <merge-base(base, HEAD)>` taken against the working tree, so
-  uncommitted edits count (`cli/src/diff.rs`). A changed line is "duplicated"
-  when a surviving clone fragment in that file covers it;
+  uncommitted edits count (`cli/src/diff.rs`). A changed line is charged when a
+  surviving clone fragment in that file covers it, unless the base already had
+  that duplication (#3455): the merge base is checked out into a temporary git
+  worktree and measured with the same pipeline (`cli/src/base.rs`, `min_lines`
+  relaxed to 1 so clones packed under the reporting threshold still register),
+  and two kinds of base evidence excuse a line: the covering fragment's
+  fingerprint multiplicity (file + normalized AST hash + count) already existed
+  at the base (a pure reflow or in-file move, where the AST is untouched), or
+  the line's diff hunk replaced a base region that was already inside a clone
+  fragment (a reformat that legitimately alters the AST, like rustfmt bracing
+  a closure body it splits). Counting fingerprint multiplicity rather than
+  membership keeps a NEW copy of an already-duplicated shape chargeable, and a
+  pure insertion replaced nothing, so it is never ancestry-excused. The base
+  scan only runs when a changed line actually lands on a clone fragment.
   `diff_pct = 100 * duplicated / changed` (`0` when nothing changed). The base is
   the `--diff` argument > `[budget] diff_base` > `origin/main`; the ceiling is
   `--max-diff-pct` > `[budget] diff_pct` > `0.0`. If git is missing or the base
@@ -175,7 +187,8 @@ schema. A gate key is present only when the gate is enabled:
       "base": "origin/main",
       "base_sha": "aa24dc0b...",
       "changed_lines": 12,
-      "duplicated_changed_lines": 0
+      "duplicated_changed_lines": 0,
+      "preexisting_duplicated_changed_lines": 12
     }
   }
 }

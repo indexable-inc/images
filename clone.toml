@@ -80,6 +80,15 @@ ignore = [
 # 0.12% above its own 0.2497% measure, so ordinary drift (0.2502%) redded
 # main the same day. Restore the ~10% headroom this file's convention calls
 # for; the gate still trips on any real regression.
+#
+# `diff_pct` counts only duplication NEW relative to `diff_base` (#3455). A
+# changed line is excused when the duplication under it already existed at the
+# base: every covering fragment's per-file AST-fingerprint multiplicity was
+# already there (a reflow moves lines, not fingerprints), or the line's hunk
+# replaced a base region that was already inside a clone fragment (for
+# reformats that legitimately alter the AST, e.g. rustfmt bracing a closure
+# body). Mechanical reformats pass without exceptions; a new copy of an
+# existing shape still fails.
 [budget]
 global_pct = 0.275
 diff_pct = 0.0
