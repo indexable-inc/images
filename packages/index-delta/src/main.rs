@@ -87,6 +87,17 @@ enum Command {
         #[arg(long, value_enum)]
         format: Option<Format>,
     },
+    /// Copy text drift back to each file's recorded repository source.
+    /// Output is JSON for scripts. Every selected source must still match
+    /// the tracked base, and staged conflicts are rejected.
+    Pull {
+        /// Repository root used to resolve recorded `sourceFile` paths.
+        #[arg(long, value_name = "DIR")]
+        repo_root: PathBuf,
+        /// Managed target to pull. Omit to pull every drifted text target
+        /// that records a `sourceFile`.
+        path: Option<String>,
+    },
     /// Silence a drifted file until its diff changes.
     Snooze { path: String },
     /// Archived state transitions — including the logical diffs of edits
@@ -114,6 +125,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Discard { path } => cmd::discard(&store, &path)?,
         Command::Adopt { path } => cmd::adopt(&store, &path)?,
         Command::ApplyOps { file, ops, format } => cmd::apply_ops(&file, &ops, format)?,
+        Command::Pull { repo_root, path } => {
+            let report = cmd::pull(&store, &repo_root, path.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::Snooze { path } => cmd::snooze(&store, &path)?,
         Command::Journal { path, json } => cmd::journal(&store, path.as_deref(), json)?,
     }

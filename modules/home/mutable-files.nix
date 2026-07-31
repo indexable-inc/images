@@ -12,13 +12,13 @@
 #   * `durable`: edits survive. When the declared base changes under local
 #     drift, the incoming base is parked as *staged* and the file queues in
 #     `index-delta status` for resolution (discard / adopt / absorb via
-#     `apply-ops` / snooze) — the file itself is never touched.
+#     `apply-ops` or `pull` / snooze). The file itself is never touched.
 #
 # The resolution queue (`index-delta status --json`) is designed for a model
 # to read: both diffs (yours + incoming) as addressed ops, plus the overlap
 # between them. `index-delta apply-ops <repo-file> <ops.json>` replays chosen
-# ops onto the Nix source, so drift can be absorbed into the repo instead of
-# resolved by hand.
+# ops onto the Nix source. For text files, `index-delta pull --repo-root DIR`
+# safely copies drift into each recorded `sourceFile`.
 #
 # Closed over the per-system flake package set (for the `index-delta` binary)
 # and the portable-services home module (for the login reseed agent: native
@@ -103,11 +103,10 @@
         default = null;
         example = "modules/profiles/ghostty/config";
         description = ''
-          Repo path of the file holding the declared content, recorded in the
-          file's state so `index-delta status` can point "absorb this drift
-          into Nix" edits (`index-delta apply-ops`) at the right file. Purely
-          informational — omitting it only means status cannot suggest where
-          to apply ops.
+          Repo-relative path of the file holding the declared content. It is
+          recorded in state for `index-delta apply-ops` guidance and safe text
+          updates through `index-delta pull --repo-root DIR`. Pull refuses to
+          write when this source no longer matches the tracked base.
         '';
       };
 

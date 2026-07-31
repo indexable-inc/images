@@ -71,7 +71,7 @@
       sourceFile = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "Repo path of the declared content, so `index-delta status` can point `apply-ops` at it. Informational.";
+        description = "Repo-relative path of the declared content, used by `index-delta pull --repo-root DIR` for conflict-safe text updates and surfaced by status for `apply-ops`.";
       };
 
       declaredAt = mkOption {
