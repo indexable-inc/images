@@ -2,7 +2,7 @@
 //!
 //! [`MonitorSnapshot`](crate::MonitorSnapshot) is the full state the web UI
 //! consumes over its delta protocol: every activity, a 500-line log tail, the
-//! dependency DAG, daemon syscalls, the switch activation subtree. That is far
+//! dependency DAG, the switch activation subtree. That is far
 //! more than a small "what is this build doing right now" pane needs, and its
 //! log tail changes every line -- pathological for a dashboard body that is
 //! diffed wholesale on each tick.
@@ -110,7 +110,7 @@ pub struct BuildCounts {
 impl MonitorState {
     /// Project the current state into the compact [`BuildView`] a build-tree
     /// pane renders. Bounded by construction, unlike [`snapshot`](Self::snapshot):
-    /// the log tail, dependency DAG, and daemon view are dropped, and errors and
+    /// the log tail and dependency DAG are dropped, and errors and
     /// non-build activities are capped, so the serialized body stays small on the
     /// dashboard's wholesale-diffed pane path regardless of build verbosity.
     #[must_use]
