@@ -443,11 +443,26 @@
     # lib/per-system.nix have a single source of truth.
     # The data-subtree entries below resolve to the `outPath` of relative-path
     # inputs (declared `flake = false` above) instead of bare `./<dir>`
-    # literals, so each consumer's source identity is scoped to just that
-    # subtree. Nix-code roots the flake imports directly (`modules`,
-    # `packagesRoot`) and the whole-repo `root` (the lint source intentionally
-    # covers the entire tree) stay ordinary relative paths: those are
-    # import-time / whole-repo by design, not per-subtree source identity.
+    # literals. What that does NOT buy, despite what this comment used to say,
+    # is per-subtree source identity. A relative-path input resolves to a
+    # subpath of the whole flake source, so any commit anywhere in the repo
+    # moves it. Measured on a clean tree at main, and the same store path from
+    # a local checkout and from a fetched `github:indexable-inc/index/<rev>`:
+    #
+    #   inputs.skills.outPath
+    #     -> /nix/store/v53pc7hv0h0aq3768j7zgxz0kl23a6zn-source/./packages/agent/skills
+    #
+    # Recorded because the claim it replaces would send someone here for a
+    # consumer that must not rebuild on an unrelated commit, where this shape
+    # would quietly do nothing. `builtins.path` is what does that: it hashes
+    # the directory alone, so the store path moves only when the directory
+    # does. lib/kernel/kbuild-unit.nix already used it and the vendored forks
+    # in lib/default.nix now do too.
+    #
+    # Nix-code roots the flake imports directly (`modules`, `packagesRoot`) and
+    # the whole-repo `root` (the lint source intentionally covers the entire
+    # tree) stay ordinary relative paths: those are import-time / whole-repo by
+    # design.
     paths = {
       root = ./.;
       skills = skills.outPath;
