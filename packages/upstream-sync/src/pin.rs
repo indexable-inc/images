@@ -28,6 +28,15 @@
 //! - `behind` or `diverged` -> diverged. The pinned rev is not reachable from
 //!   the bookmark, so no rebase or repin can be described as "moving forward".
 //!
+//! A `behind` pin is REPORTED and never failed, including for a rev-pinned fork,
+//! and that is a scope decision rather than an oversight. Every push to a fork
+//! bookmark makes its pin behind by construction, so failing on it would turn any
+//! fork commit into a red main until someone repinned, and a repin is a
+//! deliberate act with its own build to justify (index#4483 is what one costs).
+//! What the gate owes the operator instead is the count, so `behind` rows say how
+//! many published patches this build does not have. What it refuses to do is let a
+//! pin that is not on the branch AT ALL look like the same situation.
+//!
 //! A diverged pin fails for a rev-pinned fork and not for a floating one, and
 //! the asymmetry is real rather than a concession. `autoUpdate = true` forks
 //! are rebased and re-locked by the same fork-sync run, and a jj rebase
@@ -47,6 +56,14 @@ use crate::gh;
 use crate::mapping::{self, Fork};
 use crate::report;
 use crate::style::{GREEN, RED, paint};
+
+/// What a 404 or 422 means for this lane, for [`gh::read`]'s warning. BOTH of
+/// this lane's reads are inside our own fork repo, so drift's explanation (a fork
+/// sharing no object store with its upstream) would send the reader looking in
+/// the wrong place, which is the ENG-11160 mistake.
+const ABSENT_HINT: &str = "The bookmark or the pinned rev is not in the FORK repo: a renamed or \
+     deleted bookmark, or a pinned rev whose refs/pins ref was lost. The row is unknown, and an \
+     unknown row FAILS this gate rather than passing it.";
 
 /// Where a pinned rev sits relative to its fork bookmark.
 ///
@@ -78,6 +95,24 @@ impl Serialize for Class {
     }
 }
 
+/// How far apart the two revs are, in the REPORT's vocabulary rather than the
+/// forge's: `behind` is what the bookmark has and the pin lacks.
+///
+/// One struct rather than three fields on [`Row`] and three more on [`Compare`],
+/// because the translation from GitHub's base/head wording is the one place this
+/// module can get the direction backwards, and it should exist once.
+#[derive(Debug, Clone, Serialize)]
+pub struct Standing {
+    /// Commits the bookmark has that the pin does not.
+    pub behind: i64,
+    /// Commits the pinned tree has that the bookmark does not. Non-zero only
+    /// when diverged, and the reason a diverged pin cannot be fixed by a bump.
+    #[serde(rename = "aheadOfBookmark")]
+    pub ahead: i64,
+    #[serde(rename = "mergeBase")]
+    pub merge_base: String,
+}
+
 /// One fork's pin standing (the `--json` row shape).
 #[derive(Debug, Serialize)]
 pub struct Row {
@@ -91,30 +126,23 @@ pub struct Row {
     /// The bookmark tip, or `None` when the forge would not name it.
     pub tip: Option<String>,
     pub class: Class,
-    /// Commits the bookmark has that the pin does not.
-    pub behind: Option<i64>,
-    /// Commits the pinned tree has that the bookmark does not. Non-zero only
-    /// when diverged, and the reason a diverged pin cannot be fixed by a bump.
-    #[serde(rename = "aheadOfBookmark")]
-    pub ahead: Option<i64>,
-    #[serde(rename = "mergeBase")]
-    pub merge_base: Option<String>,
-    /// Whether a divergence in this row fails the gate.
-    pub gated: bool,
+    /// Absent when the forge would not compare the two, which is an unknown row.
+    #[serde(flatten)]
+    pub standing: Option<Standing>,
+    /// Whether this row fails the gate.
+    pub failed: bool,
     /// Why this row is informational, when it is.
     pub note: String,
     /// The gate's complaint about this row, if it has one.
     pub problem: Option<String>,
 }
 
-/// One `compare/<base>...<head>` answer. The four fields travel together
-/// because they are one answer: a status word with no counts is not reportable,
-/// and counts with no merge base are not actionable.
+/// One `compare/<base>...<head>` answer: the forge's status word plus the
+/// distance. They travel together because they are one answer, and a status word
+/// with no distance is not reportable.
 struct Compare {
     status: String,
-    ahead_by: i64,
-    behind_by: i64,
-    merge_base: String,
+    standing: Standing,
 }
 
 /// Read the pinned rev against the bookmark tip in one forge call.
@@ -127,6 +155,7 @@ fn compare(name: &str, fork_repo: &str, base: &str, head: &str) -> Result<Option
         &format!("pin-drift: {name}"),
         &path,
         "[.status, .ahead_by, .behind_by, .merge_base_commit.sha] | @tsv",
+        ABSENT_HINT,
     )?
     else {
         return Ok(None);
@@ -145,9 +174,13 @@ fn compare(name: &str, fork_repo: &str, base: &str, head: &str) -> Result<Option
     };
     Ok(Some(Compare {
         status: (*status).to_owned(),
-        ahead_by: parse("ahead_by", ahead)?,
-        behind_by: parse("behind_by", behind)?,
-        merge_base: (*merge_base).to_owned(),
+        // The crossover, and the only place it happens: GitHub reports
+        // `ahead_by` from the HEAD's point of view, and head is the bookmark.
+        standing: Standing {
+            behind: parse("ahead_by", ahead)?,
+            ahead: parse("behind_by", behind)?,
+            merge_base: (*merge_base).to_owned(),
+        },
     }))
 }
 
@@ -170,9 +203,9 @@ fn classify(status: &str) -> Result<Class> {
     }
 }
 
-/// Whether this row fails, and what to say about it either way.
+/// What to say about this row, and whether it fails. A row fails exactly when it
+/// has a `problem`, so there is one thing to be wrong about rather than two.
 struct Verdict {
-    gated: bool,
     note: String,
     problem: Option<String>,
 }
@@ -189,10 +222,20 @@ fn verdict(
     let waiver = fork.pin_divergence.as_ref();
     let covers = waiver.is_some_and(|w| rev.is_some_and(|r| r == w.rev));
 
+    if class == Class::UNKNOWN {
+        return Verdict {
+            note: String::new(),
+            problem: Some(unknown_problem(fork, rev, tip)),
+        };
+    }
+
     if class != Class::DIVERGED {
-        // A waiver over a pin that is not diverged waives nothing, and dead
+        // A waiver over a pin that is CURRENT or BEHIND waives nothing, and dead
         // intent is worse than no intent: the next person reads it as a live
-        // exemption and stops asking.
+        // exemption and stops asking. Deliberately not said about an UNKNOWN row,
+        // which is handled above: there the waiver may be perfectly live and what
+        // is missing is the answer, so "delete it" would be advice derived from no
+        // information.
         let problem = waiver.map(|_| {
             format!(
                 "{}: pinDivergence is declared but the pin is {}. The waiver covers nothing, so \
@@ -202,15 +245,13 @@ fn verdict(
             )
         });
         return Verdict {
-            gated: !fork.auto_update && waiver.is_none(),
-            note: String::new(),
+            note: behind_note(class, cmp),
             problem,
         };
     }
 
     if fork.auto_update {
         return Verdict {
-            gated: false,
             note: "floating input: fork-sync rebases and re-locks together, so main is off the \
                    branch until the rolling PR merges"
                 .to_owned(),
@@ -220,7 +261,6 @@ fn verdict(
     if covers {
         let reason = waiver.map_or("", |w| w.reason.as_str());
         return Verdict {
-            gated: false,
             note: format!("waived: {reason}"),
             problem: None,
         };
@@ -241,11 +281,11 @@ fn verdict(
         fork.bookmark
     ));
     if let Some(cmp) = cmp {
-        lines.push(format!("  merge base {}", cmp.merge_base));
+        lines.push(format!("  merge base {}", cmp.standing.merge_base));
         lines.push(format!(
             "  {} commit(s) on the bookmark are unpinned, and {} commit(s) in the pinned tree are \
              not on the bookmark, which is why no bump fixes this by itself.",
-            cmp.ahead_by, cmp.behind_by
+            cmp.standing.behind, cmp.standing.ahead
         ));
     }
     lines.push(
@@ -262,10 +302,56 @@ fn verdict(
         ));
     }
     Verdict {
-        gated: true,
         note: String::new(),
         problem: Some(lines.join("\n")),
     }
+}
+
+/// What a `behind` row owes the operator: how many published patches this build
+/// does not have. The gate does not fail on it (see the module doc), so an empty
+/// cell here would be the whole of what it said.
+fn behind_note(class: Class, cmp: Option<&Compare>) -> String {
+    if class != Class::BEHIND {
+        return String::new();
+    }
+    cmp.map_or_else(String::new, |cmp| {
+        format!(
+            "{} patch(es) published on the bookmark are not in this build; a repin picks them up",
+            cmp.standing.behind
+        )
+    })
+}
+
+/// An unverifiable pin FAILS rather than passing.
+///
+/// A gate that cannot see the answer and exits 0 is the ENG-11630 defect wearing
+/// a different hat, and each of the three ways to get here is a real broken
+/// state: a registry entry naming an input the lock does not carry, a bookmark
+/// that has been renamed or deleted, and a pinned rev the fork repo no longer has
+/// because its refs/pins ref was lost. All three would otherwise buy permanent
+/// green, which is worse than the drift they were meant to catch.
+fn unknown_problem(fork: &Fork, rev: Option<&str>, tip: Option<&str>) -> String {
+    let cause = match (rev, tip) {
+        (None, _) => format!(
+            "flake.lock carries no locked rev for input {}, so the registry and the lock disagree \
+             about what this fork even is.",
+            fork.input
+        ),
+        (Some(rev), None) => format!(
+            "the forge does not have bookmark {} in {}, so the pin ({rev}) answers to nothing. A \
+             renamed or deleted bookmark looks exactly like this.",
+            fork.bookmark, fork.fork_repo
+        ),
+        (Some(rev), Some(tip)) => format!(
+            "the forge refused to compare {rev} with {tip}, which means one of them is not in {}. \
+             A pinned rev the fork repo no longer has is a lost refs/pins ref.",
+            fork.fork_repo
+        ),
+    };
+    format!(
+        "{}: this pin could not be checked, so it fails rather than passes. {cause}",
+        fork.name
+    )
 }
 
 fn row(fork: &Fork) -> Result<Row> {
@@ -275,6 +361,7 @@ fn row(fork: &Fork) -> Result<Row> {
         &ctx,
         &format!("repos/{}/commits/{}", fork.fork_repo, fork.bookmark),
         ".sha",
+        ABSENT_HINT,
     )? {
         gh::Read::Value(sha) => Some(sha),
         gh::Read::Absent(_) => None,
@@ -289,11 +376,6 @@ fn row(fork: &Fork) -> Result<Row> {
         None => Class::UNKNOWN,
     };
     let v = verdict(fork, class, rev.as_deref(), tip.as_deref(), cmp.as_ref());
-    let note = if class == Class::UNKNOWN && v.note.is_empty() {
-        unknown_note(rev.as_deref(), tip.as_deref())
-    } else {
-        v.note
-    };
 
     Ok(Row {
         name: fork.name.clone(),
@@ -303,21 +385,11 @@ fn row(fork: &Fork) -> Result<Row> {
         rev,
         tip,
         class,
-        behind: cmp.as_ref().map(|c| c.ahead_by),
-        ahead: cmp.as_ref().map(|c| c.behind_by),
-        merge_base: cmp.map(|c| c.merge_base),
-        gated: v.gated,
-        note,
+        standing: cmp.map(|c| c.standing),
+        failed: v.problem.is_some(),
+        note: v.note,
         problem: v.problem,
     })
-}
-
-fn unknown_note(rev: Option<&str>, tip: Option<&str>) -> String {
-    match (rev, tip) {
-        (None, _) => "no locked rev for this input in flake.lock".to_owned(),
-        (_, None) => "the forge does not have this bookmark".to_owned(),
-        _ => "the forge would not compare the pin with the bookmark".to_owned(),
-    }
 }
 
 /// Report every fork's pin against its bookmark, and FAIL on a divergence that
@@ -350,7 +422,10 @@ pub fn run(
         .collect();
     if problems.is_empty() {
         if !json && !markdown {
-            println!("{}", paint(GREEN, "every fork pin is on its bookmark"));
+            // "all clear" over a table showing three diverged pins is the same
+            // silent-success shape this gate exists to refuse, so the pass line
+            // counts what it passed.
+            println!("{}", paint(GREEN, &format!("no failing pin: {}", tally(&rows))));
         }
         return Ok(());
     }
@@ -359,6 +434,21 @@ pub fn run(
         "upstream-sync: pin-drift: {} fork pin(s) are off their bookmark",
         problems.len()
     ))
+}
+
+/// What the pass line counts, so a green run still says what it saw. Diverged
+/// rows are split by WHY they did not fail, because "2 diverged" alone invites
+/// the reader to assume the gate is broken.
+fn tally(rows: &[Row]) -> String {
+    let count = |f: &dyn Fn(&Row) -> bool| rows.iter().filter(|r| f(r)).count();
+    let diverged = |r: &Row| r.class == Class::DIVERGED;
+    format!(
+        "{} current, {} behind, {} diverged and waived, {} diverged on a floating input",
+        count(&|r| r.class == Class::CURRENT),
+        count(&|r| r.class == Class::BEHIND),
+        count(&|r: &Row| diverged(r) && r.note.starts_with("waived")),
+        count(&|r: &Row| diverged(r) && r.note.starts_with("floating")),
+    )
 }
 
 /// "?" marks a cell the forge would not fill, so a degraded row is visibly
@@ -393,8 +483,12 @@ fn render_table(rows: &[Row]) -> String {
                 } else {
                     r.class.word().to_owned()
                 },
-                r.behind.map_or_else(unknown, |v| v.to_string()),
-                r.ahead.map_or_else(unknown, |v| v.to_string()),
+                r.standing
+                    .as_ref()
+                    .map_or_else(unknown, |s| s.behind.to_string()),
+                r.standing
+                    .as_ref()
+                    .map_or_else(unknown, |s| s.ahead.to_string()),
                 r.note.clone(),
             ]
         })
@@ -425,9 +519,11 @@ mod tests {
     fn cmp() -> Compare {
         Compare {
             status: "diverged".to_owned(),
-            ahead_by: 72,
-            behind_by: 54,
-            merge_base: "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c".to_owned(),
+            standing: Standing {
+                behind: 72,
+                ahead: 54,
+                merge_base: "2c6d06e9387cf58167cb5a7ab91cee7333d8d17c".to_owned(),
+            },
         }
     }
 
@@ -460,7 +556,6 @@ mod tests {
             Some("f200a3a8d4921393547f93166cce8cebcb2b0e44"),
             Some(&cmp()),
         );
-        assert!(v.gated);
         let problem = v.problem.expect("a gated divergence states its problem");
         assert!(problem.contains("0f356d7cf513ca074a2122079defeb95810b6a91"), "{problem}");
         assert!(problem.contains("f200a3a8d4921393547f93166cce8cebcb2b0e44"), "{problem}");
@@ -473,7 +568,6 @@ mod tests {
     fn a_floating_input_is_reported_and_not_gated() {
         let f = fork("btop", true, None);
         let v = verdict(&f, Class::DIVERGED, Some("9f43b7904e2d"), None, Some(&cmp()));
-        assert!(!v.gated);
         assert!(v.problem.is_none());
         assert!(v.note.contains("rolling PR"), "{}", v.note);
     }
@@ -486,13 +580,12 @@ mod tests {
         };
         let f = fork("git", false, Some(waiver));
         let covered = verdict(&f, Class::DIVERGED, Some("69fbc5cfd883"), None, Some(&cmp()));
-        assert!(!covered.gated);
+        assert!(covered.problem.is_none());
         assert!(covered.note.contains("ENG-11646"), "{}", covered.note);
 
         // The pin moved, so the acknowledgement someone made about the old rev
         // says nothing about this one.
         let moved = verdict(&f, Class::DIVERGED, Some("aaaaaaaaaaaa"), None, Some(&cmp()));
-        assert!(moved.gated);
         let problem = moved.problem.expect("an expired waiver still fails");
         assert!(problem.contains("expired"), "{problem}");
         assert!(problem.contains("69fbc5cfd883"), "{problem}");
@@ -523,10 +616,12 @@ mod tests {
                 rev: Some("0f356d7cf513ca074a2122079defeb95810b6a91".to_owned()),
                 tip: Some("f200a3a8d4921393547f93166cce8cebcb2b0e44".to_owned()),
                 class: Class::DIVERGED,
-                behind: Some(72),
-                ahead: Some(54),
-                merge_base: Some("2c6d06e9387c".to_owned()),
-                gated: true,
+                standing: Some(Standing {
+                    behind: 72,
+                    ahead: 54,
+                    merge_base: "2c6d06e9387c".to_owned(),
+                }),
+                failed: true,
                 note: String::new(),
                 problem: Some("nix: ...".to_owned()),
             },
@@ -538,10 +633,8 @@ mod tests {
                 rev: None,
                 tip: None,
                 class: Class::UNKNOWN,
-                behind: None,
-                ahead: None,
-                merge_base: None,
-                gated: false,
+                standing: None,
+                failed: false,
                 note: "no locked rev".to_owned(),
                 problem: None,
             },

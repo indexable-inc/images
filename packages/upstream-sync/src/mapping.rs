@@ -308,9 +308,14 @@ pub fn validate(forks: &[Fork]) -> Result<()> {
             ));
         }
         if let Some(waiver) = &fork.pin_divergence {
-            if waiver.rev.trim().is_empty() {
+            // A 12-char rev is the tempting thing to paste from a table, and it
+            // fails in the confusing direction: the waiver stops matching the pin
+            // it was written for and the gate reports it as expired, naming the
+            // rev that IS pinned.
+            let rev = waiver.rev.trim();
+            if rev.len() != 40 || !rev.chars().all(|c| c.is_ascii_hexdigit()) {
                 problems.push(format!(
-                    "{}: pinDivergence names no rev; it has to name the exact pinned rev it covers, so the waiver expires when the pin moves",
+                    "{}: pinDivergence rev must be the full 40-character sha the lock pins, not {rev:?}; a waiver keyed on anything else cannot expire when the pin moves",
                     fork.name
                 ));
             }

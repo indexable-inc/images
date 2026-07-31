@@ -25,6 +25,14 @@ use crate::report;
 use crate::status;
 use crate::style::{YELLOW, paint};
 
+/// What a 404 or 422 means for this lane, for [`gh::read`]'s warning. The probe
+/// is aimed at the UPSTREAM repo, which shares no object store with a
+/// mesa-style fork, so a megamerge sha resolving to nothing there is an expected
+/// answer rather than a broken state.
+const ABSENT_HINT: &str = "The pinned rev is not present upstream -- either the fork repo is not \
+     a GitHub fork of the upstream (they share no object store, so a megamerge sha can never \
+     resolve there) or the rev was garbage-collected. Cell left unknown.";
+
 /// One fork's drift facts (the `--json` row shape).
 #[derive(Debug, Serialize)]
 pub struct Row {
@@ -100,7 +108,7 @@ fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
     let repo = format!("repos/{}/{}", slug.owner, slug.repo);
     let branch = match &fork.upstream_ref {
         Some(configured) => configured.clone(),
-        None => match gh::read(&ctx, &repo, ".default_branch")? {
+        None => match gh::read(&ctx, &repo, ".default_branch", ABSENT_HINT)? {
             gh::Read::Value(branch) => branch,
             gh::Read::Absent(_) => return Ok(None),
         },
@@ -109,6 +117,7 @@ fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
         &ctx,
         &format!("{repo}/compare/{rev}...{branch}"),
         ".ahead_by",
+        ABSENT_HINT,
     )?
     else {
         return Ok(None);
@@ -189,6 +198,7 @@ fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result
             &format!("drift: {}", fork.name),
             &format!("repos/{}/{}/commits/{rev}", slug.owner, slug.repo),
             ".commit.committer.date",
+            ABSENT_HINT,
         )
         .map(|read| match read {
             gh::Read::Value(date) => Some(date),
