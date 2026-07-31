@@ -107,6 +107,31 @@
           default = clippyPackage;
           description = "The clippy package providing clippy-driver.";
         };
+        packages = lib.mkOption {
+          type = lib.types.nullOr (lib.types.listOf lib.types.str);
+          default = null;
+          example = ["jj-views"];
+          description = ''
+            Cargo package names to gate, or null for every package in the
+            workspace. A list is for a workspace we only partly own: a vendored
+            upstream tree with our crates grafted in answers to its own CI for
+            its own code, and to our lint policy for ours.
+
+            Naming them here rather than filtering wherever the checks get
+            wired keeps "we gate what we own" next to the decision. A caller
+            that later wires `clippyByPackage` wholesale then inherits the
+            boundary instead of silently adopting the whole tree.
+
+            These are cargo PACKAGE names, so `jj-views`, not the `jj_views`
+            of the unit keys, which carry the lib target name instead.
+
+            An entry naming no package in the workspace is refused rather than
+            ignored, because the failure of a silent no-op is that the gate
+            this list exists to guarantee quietly stops running. The refusal
+            lists the workspace's real package names, since the usual mistake
+            is the spelling rather than the crate.
+          '';
+        };
         cargoArgs = lib.mkOption {
           type = lib.types.listOf lib.types.str;
           default = ["--all-targets"];

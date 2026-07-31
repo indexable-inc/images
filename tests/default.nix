@@ -1461,6 +1461,41 @@
       ];
     }).packages;
 
+  # `policy.clippy.packages`: null gates every package, a list gates only those.
+  #
+  # Deliberately the two-crate scope fixture (`scope-alpha`, `scope-bravo`)
+  # rather than the one-crate hello fixture. With a single package, "filtered to
+  # the one package" and "not filtered at all" are the same attrset, so the
+  # assertion would pass against a filter that does nothing.
+  #
+  # These also pin the SPELLING. `clippyByPackage` is keyed by cargo PACKAGE
+  # name (hyphens), not by the unit key (`scope_alpha-0.1.0-<hash>`, which
+  # carries the lib target name), and reaching for the wrong namespace is the
+  # mistake the refusal below exists to catch.
+  cargoUnitClippyAllowlisted = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitScopeFixture;
+    workspaceRoot = ./fixtures/cargo-unit-workspace-scope;
+    policy.clippy.packages = ["scope-alpha"];
+  };
+
+  cargoUnitClippyUnfiltered = ix.cargoUnit.buildWorkspace {
+    src = cargoUnitScopeFixture;
+    workspaceRoot = ./fixtures/cargo-unit-workspace-scope;
+  };
+
+  # An allowlist entry matching no package must refuse rather than quietly gate
+  # nothing, since the thing a silent no-op disables is the gate the allowlist
+  # exists to guarantee. `scope_alpha` is the real shape of the mistake: an
+  # underscored unit-key spelling where a package name belongs.
+  cargoUnitClippyUnknownEval =
+    builtins.tryEval
+    (ix.cargoUnit.buildWorkspace {
+      src = cargoUnitScopeFixture;
+      workspaceRoot = ./fixtures/cargo-unit-workspace-scope;
+      policy.clippy.packages = ["scope_alpha"];
+    })
+    .clippyByPackage;
+
   cargoUnitScopePolicy = {
     denyUnusedCrateDependencies = false;
     cargoAudit.enable = false;
@@ -5802,6 +5837,35 @@
       {
         assertion = !(cargoUnitWorkspace.policyChecks ? cargoClippy);
         message = "cargo-unit buildWorkspace should suppress the legacy workspace-level cargoClippy when per-unit clippy is on";
+      }
+      {
+        # The null default has to keep meaning "every package". The allowlist is
+        # opt-in, and a new branch through a function is exactly where a default
+        # quietly stops working; `!= {}` above would still pass if the default
+        # started filtering to a subset.
+        assertion =
+          builtins.attrNames cargoUnitClippyUnfiltered.clippyByPackage
+          == [
+            "scope-alpha"
+            "scope-bravo"
+          ];
+        message = "cargo-unit clippy.packages = null should gate every package in the workspace";
+      }
+      {
+        # One of the two, so this fails against a filter that does nothing as
+        # well as against one that drops everything.
+        assertion = builtins.attrNames cargoUnitClippyAllowlisted.clippyByPackage == ["scope-alpha"];
+        message = "cargo-unit clippy.packages should gate exactly the listed cargo package names";
+      }
+      {
+        assertion = builtins.all lib.isDerivation (
+          builtins.attrValues cargoUnitClippyAllowlisted.clippyByPackage
+        );
+        message = "cargo-unit clippy.packages should leave the surviving entries as ordinary check derivations";
+      }
+      {
+        assertion = !cargoUnitClippyUnknownEval.success;
+        message = "cargo-unit clippy.packages should refuse an entry that names no package in the workspace";
       }
       {
         # Each package's clippy gate is one derivation (a symlinkJoin over only
