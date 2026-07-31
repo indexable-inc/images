@@ -1,0 +1,49 @@
+name: Scheduled workflow heartbeat
+
+# Does every scheduled workflow in this repository still fire? A cron that
+# stops records nothing -- no run, no annotation, no event -- so the only
+# evidence is a hole in a list nobody reads.
+#
+# This runs on pull requests, not on a schedule, and files no ticket. That is
+# the whole design decision and the reasoning is in
+# .github/scripts/scheduled-heartbeat.mjs: this repository has three separate
+# proofs that a correct, visible, out-of-band alarm changes nothing, and one
+# observation that cost landing on somebody mid-task produces a decision inside
+# a day. Detection was the easy half.
+#
+# It also means this workflow has no cron of its own to die silently, which is
+# the self-liveness problem every watchdog otherwise has.
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: scheduled-workflow-heartbeat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    # One API sweep over ~10 workflows; the sibling watchdogs of this shape run
+    # well under a minute. 10m floor.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check every scheduled workflow against its own cron
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const {default: heartbeat} = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/scheduled-heartbeat.mjs`);
+            await heartbeat({github, context, core});
