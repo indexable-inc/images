@@ -31,7 +31,8 @@ defmodule IxMcp.Workspace do
              "alias IxMcp.Read; alias IxMcp.Edit; alias IxMcp.PrWatch; alias IxMcp.Tui; " <>
              "alias IxMcp.TuiLocal; alias IxMcp.Gmail; alias IxMcp.Imsg; alias IxMcp.Contacts; " <>
              "alias IxMcp.Dashboard; " <>
-             "alias IxMcp.Kernel, as: Ix; alias IxMcp.Agents; alias IxMcp.Memory; " <>
+             "alias IxMcp.Kernel, as: Ix; alias IxMcp.Agents; alias IxMcp.Parent; " <>
+             "alias IxMcp.Memory; " <>
              "alias IxMcp.Memories; " <>
              "alias IxMcp.Ask; alias IxMcp.Cmd; alias IxMcp.Issues; alias IxMcp.Sessions; " <>
              "alias IxMcp.Serve; " <>

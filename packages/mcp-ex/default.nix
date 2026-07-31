@@ -170,6 +170,7 @@
         --set RELEASE_DISTRIBUTION none \
         --set-default RELEASE_TMP /tmp \
         --set-default IX_MCP_GH ${lib.getExe pkgs.gh} \
+        --set-default IX_MCP_EX_BIN "$out/bin/ix-mcp-ex" \
         --set-default IX_MCP_TUI_EX ${tuiExApp} \
         --set-default IX_MCP_GMAIL_EX ${gmailExApp} \
         --set-default IX_MCP_DASHBOARD_EX ${dashboardExApp} \

@@ -2,7 +2,10 @@ defmodule IxMcp.Agents.CliRunnerTest do
   # async: false: exercises the application's shared harness and ledger.
   use ExUnit.Case, async: false
 
+  import IxMcpTest.Eventually
+
   alias IxMcp.Agents
+  alias IxMcp.Agents.Control
 
   @fixtures Path.expand("../../fixtures", __DIR__)
 
@@ -42,6 +45,68 @@ defmodule IxMcp.Agents.CliRunnerTest do
 
     assert %{nodes: nodes, edges: _} = Agents.graph()
     assert Enum.any?(nodes, &(&1["id"] == "rt-codex" and &1["state"] == "blocked"))
+  end
+
+  describe "interrupt (#4486)" do
+    # A stub that answers the SDK control frame and nothing else: it reads the
+    # injected brief, then waits for the interrupt before finishing. So a final
+    # result proves the frame arrived on the child's stdin, rather than proving
+    # only that nothing crashed.
+    defp interrupt_stub!(tmp) do
+      path = Path.join(tmp, "stub-interrupt")
+
+      File.write!(path, """
+      #!/bin/sh
+      read _brief
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sid-int"}'
+      while read line; do
+        case "$line" in
+          *control_request*)
+            printf '%s\\n' '{"type":"result","result":"stopped","is_error":false}'
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(path, 0o755)
+      path
+    end
+
+    @tag :tmp_dir
+    test "reaches the child's stdin through the runner that owns the port", %{tmp_dir: tmp} do
+      bin = interrupt_stub!(tmp)
+      {:ok, id} = Agents.spawn("wait for it", backend: :claude, bin: bin, name: "rt-interrupt")
+
+      # The runner registers as it starts; interrupting before that is the
+      # :not_running case, so wait for the handle rather than racing it.
+      eventually(fn -> if match?({:ok, _entry}, Control.lookup(id)), do: true end)
+
+      assert :ok = Agents.interrupt(id)
+      assert {:ok, "stopped"} = Agents.await(id, 10_000)
+      assert :interrupt in (id |> Agents.events() |> Enum.map(& &1.kind))
+
+      # A finished child idles rather than terminating (the lead can wake it),
+      # so it holds one of the harness's four concurrency slots until deleted.
+      Agents.delete(id)
+    end
+
+    @tag :tmp_dir
+    test "a codex child says it has no channel instead of pretending", %{tmp_dir: tmp} do
+      bin = stub!(tmp, "codex-oneshot.jsonl")
+      {:ok, id} = Agents.spawn("say ok", backend: :codex, bin: bin, name: "rt-int-codex")
+
+      # Either the runner is still up (no stdin channel) or the one-shot child
+      # already finished (nothing to interrupt). Both are honest answers; a bare
+      # :ok would not be.
+      assert Agents.interrupt(id) in [{:error, :no_stdin_channel}, {:error, :not_running}]
+
+      Agents.delete(id)
+    end
+
+    test "an unknown child is not running, not silently accepted" do
+      assert {:error, :not_running} = Agents.interrupt("never-spawned-at-all")
+    end
   end
 
   # The #3989 shape (Cmd's #3979, fixed in #3985): Erlang's child setup

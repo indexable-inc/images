@@ -5033,6 +5033,32 @@
       }
       {
         assertion = let
+          policy = gates:
+            import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
+          kernelFirst = policy {
+            indexKernelBaked = true;
+            exaSearchBaked = true;
+            kernelSupersedesShell = true;
+          };
+        in
+          # The kernel-first posture is the one render that denies the shell,
+          # and it denies the whole family: a session left holding BashOutput or
+          # KillShell can still read and steer a shell it can no longer start,
+          # which is a worse surface than either end state.
+          builtins.all (tool: builtins.elem tool kernelFirst.claude.deniedToolPatterns) [
+            "Bash"
+            "BashOutput"
+            "KillShell"
+          ]
+          # Opting in changes nothing else: the file rows a baked kernel already
+          # denied stay denied, and codex keeps its shell because that is how
+          # codex reads and writes at all.
+          && builtins.elem "Read" kernelFirst.claude.deniedToolPatterns
+          && !(kernelFirst.codex.forcedSettings.features ? shell_tool);
+        message = "kernelSupersedesShell should deny the whole native shell family, kernel-side only";
+      }
+      {
+        assertion = let
           forced = repoPackages.codex.passthru.specValue.forced;
         in
           lib.all

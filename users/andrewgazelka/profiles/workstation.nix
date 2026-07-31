@@ -259,7 +259,7 @@
     # silently shipped prompts WITH the forceMerge rule while
     # protectedMergeGuard below already allowed force-merging (index#3537).
     # backgroundSubagents is omitted because this machine wants the opposite
-    # preference: native harness subagents over the kernel's depth-1 Agents.*
+    # preference: native harness subagents over the kernel's Agents.*
     # surface (reverses the index#3700 default), with the kernel still owning
     # shell/file/search. Until #4224 the rule also claimed those harness tools
     # were absent, which is no longer why it is dropped.

@@ -1,0 +1,76 @@
+---
+id: kernel-nesting-subagents
+postedAt: 2026-07-31T01:20:00-07:00
+title: "Subagents can nest, report upward, be interrupted, and be measured"
+tags: [interesting, mcp, agents, elixir]
+links:
+  - label: index#4486
+    href: https://github.com/indexable-inc/index/issues/4486
+  - label: Kernel surface
+    href: https://github.com/indexable-inc/index/blob/main/packages/mcp-ex/lib/ix_mcp/agents.ex
+  - label: Prior shape (depth-1 star)
+    href: https://ix.dev/updates/kernel-depth-1-subagents
+---
+
+`Agents.spawn` has carried a hard depth-1 rule since it landed: a child got
+an empty MCP config, so it had no kernel, could not run cells, and could not
+fan out, and `IX_AGENT_CHILD=1` made a nested `spawn` raise. That shape is
+the one the Fable 5 card measured, and it stays the default. What changes is
+that four things which used to be impossible are now expressible.
+
+**A child can have a kernel of its own.** `Agents.spawn(brief, kernel: true)`
+writes the child a one-server MCP config pointing at the same `mcp-ex` build
+its parent runs, so the child gets `exec`, jobs, and its own `spawn`. It is a
+separate OS process with its own workspace, which is the only way to get a
+real namespace per agent: bindings cannot be partitioned inside one BEAM
+because modules are VM-global, the OS cwd is VM-global (#3902), and no caller
+identity reaches a shared kernel at all (#3967). The name in the child's
+config is `index`, the same name the parent uses, which is safe here for a
+reason worth stating: the #2382 collision is about an *inline* server in a
+Claude Code subagent definition sharing the parent session's connection, and
+this is a separate process under `--strict-mcp-config` with no connection to
+share.
+
+**The tree is bounded by construction, not by good behaviour.**
+`IX_AGENT_CHILD` is replaced by `IX_AGENT_DEPTH`, and `spawn` refuses past
+`Agents.max_depth()` (default 2: lead, child, grandchild;
+`IX_AGENT_MAX_DEPTH` raises it on the lead). Every level still runs with
+`--disallowedTools Agent,Task`: fan-out is the kernel's job at every depth,
+never the native subagent tools.
+
+**A child can talk before it finishes.** `Parent.send(text)` reaches the
+kernel that spawned it, over the cross-session bus that already exists
+(#3881) rather than a new transport, and arrives in the parent within
+seconds. A child used to have exactly one outbound message, its final
+response, so a half-finished finding or a blocked dependency had to wait for
+the end of the run. Messaging stays a star at each level: a child holds its
+parent's session id and no sibling's.
+
+**A turn can be stopped, and a child can be costed.**
+`Agents.interrupt(id)` sends the Agent SDK control frame down the child's
+stdin, which had to travel through the runner process: `Port.command/2`
+raises `badarg` from anyone but the port's owner. `Agents.top()` reports CPU
+and memory per child and per process that child spawned, walking the same
+tree a cancel would kill (`IxMcp.OsProc`).
+
+Two honest gaps in `top()`. `%CPU` from `ps` is a lifetime average, not an
+instantaneous rate, so a child spiking right now reads low. And memory is
+unavailable on darwin: macOS 27 answers `ps: rss: requires entitlement` and
+then *drops* that column while printing the others, so a five-column parse
+silently reads four fields and shifts every value one place. That is how the
+restriction was found. Columns are now chosen per platform and darwin reports
+`:unavailable` rather than a shifted or invented number; index#4487 tracks the
+`proc_pid_rusage` NIF that would give the real figure. Linux, which is what
+the fleet runs, reports both memory and per-process IO from `/proc`.
+
+Alongside this, the claude-code wrapper gains an opt-in `kernelFirst`
+posture: the kernel's `exec` becomes the session's only way to run a command,
+touch a file, or fan out, with the native shell family denied and the
+built-in orchestration tools off. It is off by default because it reverses
+three decisions each made on evidence: the shell as the kernel-outage path
+(#4080), the depth-1 star (#3700), and SendMessage staying on so the Agent
+tool's own description cannot send the model into a state-corrupting fallback
+(ENG-10401). It exists to be rolled out and measured, not assumed.
+
+Nothing in the default render changes: the policy gate still asserts a baked
+kernel does not deny the shell, and `kernel: true` is opt-in per spawn.
