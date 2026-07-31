@@ -196,18 +196,29 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # Megamerge 0f356d7c (54 patches on 2c6d06e9387c): the 53-patch series
-      # that 5ab172cd carries, plus `don't let Darwin discard a fast-exiting
-      # builder's log` (ENG-11172). On macOS a builder that writes its
-      # diagnostic and exits at once during a parallel build produced no log at
-      # all -- XNU flushes a pseudoterminal's output queue about 0.6s after the
-      # last slave fd closes, and nix's worker only polls once it has finished
-      # starting every runnable child, so the bytes were gone before anything
-      # read them. Two agents hit it in one afternoon and both worked around it
-      # downstream. Nix now holds a slave fd for the build's lifetime and takes
-      # the end of the build from a liveness pipe the builder inherits, so the
-      # pty is never torn down with unread output in it.
-      url = "github:indexable-inc/nix/0f356d7cf513ca074a2122079defeb95810b6a91";
+      # ix-patched f200a3a8d492 (72 patches on 2c6d06e9387c). This pin does NOT
+      # descend from the 0f356d7c it replaces: ix-patched was reflattened and
+      # reformatted after that megamerge commit, so the two share only the
+      # upstream base and the old rev survives as refs/pins/2026-07-29-0f356d7cf513
+      # (this one as refs/pins/2026-07-31-f200a3a8d492). The pin had drifted 16
+      # patches behind the branch before this bump, so it carries more than the
+      # 3 patches the bump was opened for: `nix invocation` post-hoc build
+      # introspection, a 384 MiB to 8 GiB initial GC heap cap, the settled end
+      # of the Darwin fast-exit pty work (drain from its own thread, reverted,
+      # relanded, then handshake-fd fix), remote build machine recording
+      # (ENG-11260) and the Mach-O page-hash reproducibility fix. Only nix's own
+      # tests gate those here; they have no lib/fork-packages.nix intent entries
+      # and so default to `hold`, which cannot send them upstream.
+      #
+      # The 3 deliberate ones: source paths under the store directory now carry
+      # a fingerprint, so `fetchToStore` stops re-hashing and re-copying the
+      # subtree on every eval (ENG-10821, indexable-inc/index#4323), and the jj
+      # workdir accessor consumes `jj file list` as exact paths rather than
+      # allow-list prefixes, so a listed entry that names a directory can no
+      # longer admit the whole subtree beneath it (ENG-11616) -- which had been
+      # baking a submodule's contents and its `gitdir:` pointer file into the
+      # store for a `jj+file` input nobody passed `submodules=1` to.
+      url = "github:indexable-inc/nix/f200a3a8d4921393547f93166cce8cebcb2b0e44";
       flake = false;
     };
 
