@@ -275,16 +275,45 @@
       };
     }
     {
+      # RETIRED SERIES, STILL BUILT. The submodule work below is parked on
+      # `submodules-phase1` and is not being carried forward; `ix-patched` was
+      # rewound to upstream main (32bfcf3ba) and carries none of it. The entry
+      # stays because index still BUILDS jj from the pinned rev, which is that
+      # parked commit, so deleting the entry would delete a package that works.
+      #
+      # `bookmark` names `submodules-phase1` rather than `ix-patched` for a
+      # reason worth stating, because the tempting alternative is wrong: the
+      # field looks droppable, since the comment below says the input is pinned
+      # by rev and nothing in the BUILD reads the bookmark. But `bookmark` is
+      # `#[serde(default = "default_bookmark")]` in upstream-sync's
+      # `mapping.rs`, and that default is the literal "ix-patched". An omitted
+      # field is therefore not "no bookmark", it is a silent, confident
+      # "ix-patched", which is the one branch that definitely does not carry
+      # these patches. Naming the branch that does is the only shape that is
+      # true.
+      #
+      # Why the series was retired rather than upstreamed: jj reversed
+      # direction on submodules in jj-vcs/jj#5954 (merged 2025-03-11, -313
+      # lines), which deleted the `.gitmodules` parser and
+      # `test_git_submodule.rs`, and Philip Metzger recorded on jj-vcs/jj#494
+      # that "there hasn't been any progress here" with the original design
+      # author having left source control two years earlier. So the destination
+      # is a parked branch, not an upstream PR, for everything that depends on
+      # the storage design. The standalone bug fixes are a separate case; see
+      # their individual entries.
+      #
       # The series is large and reaches into working-copy internals, so a
       # rebase onto upstream main conflicts easily and a conflicted jj commit
       # must never be pushed to the bookmark. The input is pinned BY REV in
       # flake.nix and autoUpdate is off: the rev moves only under a deliberate
-      # rebase a human resolves, never under the scheduled fork-sync.
+      # rebase a human resolves, never under the scheduled fork-sync. Repinning
+      # to the new upstream-main tip is a separate change with its own
+      # verification, because that jj has no submodule support at all.
       name = "jj";
       input = "jj-src";
       upstreamUrl = "https://github.com/jj-vcs/jj.git";
       forkRepo = "indexable-inc/jj";
-      bookmark = "ix-patched";
+      bookmark = "submodules-phase1";
       autoUpdate = false;
       upstreamPolicy = {
         prsWelcome = true;
@@ -296,44 +325,52 @@
           reason = "Out: the PR checklist is a personal attestation that the submitter understands every line including LLM-drafted code and has copy-edited any LLM prose, and Google's CLA is signed by a person. An unattended PR would tick boxes nobody stood behind.";
         };
       };
+      # RETIRED to `submodules-phase1`, and the stances below say which kind of
+      # retirement each patch got. Five implement the storage design and are
+      # `never`: jj-vcs/jj#5954 deleted the ground they stand on. Three are
+      # standalone bug fixes in gitlink handling that upstream still ships and
+      # stay `attempt`, because #5954 removed the `.gitmodules` PARSER, not
+      # gitlinks themselves. That distinction is load-bearing and was checked
+      # rather than assumed: jj's own `describe_file_type` still returns
+      # "git-submodule" for a gitlink on current main, so every code path these
+      # three fix is still reachable.
       patches = {
         "docs/design: record the submodule storage decision and guiding principles" = {
-          upstream = "attempt";
-          reason = "Records a decision jj already made: git-submodule-storage.md reached a proposal in 2023 and says it 'will be recorded in ./git-submodules.md', which never happened, so the main design doc still reads 'under discussion' and a user said so on jj-vcs/jj#494. Also lands the guiding principles from the author's own unmerged PR #1611 and states honestly that none of Phase 1 is implemented.";
-          prExtra = "Records the decision from docs/design/git-submodule-storage.md as its own Objective asks. Guiding-principles content is adapted from jj-vcs/jj#1611 by the original design author. Confusion this resolves: jj-vcs/jj#494 (comment of 2025-12-22).";
+          upstream = "never";
+          reason = "Was `attempt`, recording the 2023 storage decision that git-submodule-storage.md said 'will be recorded in ./git-submodules.md' and never was (jj-vcs/jj#494). Retired: upstream reversed direction in jj-vcs/jj#5954 (merged 2025-03-11, -313 lines, deleting the .gitmodules parser and test_git_submodule.rs), so writing that decision down now would document a plan the project has walked away from. Recording a dead decision as live is worse than the confusion it was meant to resolve. Parked on submodules-phase1; reopen only if upstream restarts the design conversation on #494.";
         };
         "diff: emit Git submodules as gitlinks in git-format diffs" = {
           upstream = "attempt";
-          reason = "Standalone upstream bug fix: `jj diff --git` gave a gitlink git's TREE mode 040000 and an empty body, so `git apply` rejects the patch with 'corrupt patch for submodule'. The upstream source carried a TODO asking what it should do. Fix verified by applying the emitted patches with `git apply --cached`.";
+          reason = "Standalone upstream bug fix: `jj diff --git` gave a gitlink git's TREE mode 040000 and an empty body, so `git apply` rejects the patch with 'corrupt patch for submodule'. The upstream source carried a TODO asking what it should do. Fix verified by applying the emitted patches with `git apply --cached`. Survives the submodules-phase1 retirement: jj-vcs/jj#5954 removed the .gitmodules parser, not gitlinks, and jj still emits them in git-format diffs, so this bug is live on current main. Depends on nothing else in the parked series.";
         };
         "cli: name a submodule conflict as one and say what can resolve it" = {
           upstream = "attempt";
-          reason = "Fixes the 'incorrect suggestion' half of jj-vcs/jj#7806: a conflict whose every term is a gitlink was bucketed as generic and jj pointed at a merge tool that cannot resolve it. Now jj names it and points at `jj restore`, which was verified to actually clear the conflict.";
+          reason = "Fixes the 'incorrect suggestion' half of jj-vcs/jj#7806: a conflict whose every term is a gitlink was bucketed as generic and jj pointed at a merge tool that cannot resolve it. Now jj names it and points at `jj restore`, which was verified to actually clear the conflict. Survives the submodules-phase1 retirement: a gitlink can still land in a conflict on current main whatever jj decides about submodule storage. Depends on nothing else in the parked series.";
           prExtra = "Partially addresses jj-vcs/jj#7806. The other half of that report, the working copy dropping the submodule on the next snapshot, is not fixed here.";
         };
         "working_copy: report ignored Git submodules through checkout stats" = {
           upstream = "attempt";
-          reason = "Three eprintln! calls in jj-lib printed submodule notices straight to stderr, bypassing the Ui, so they ignored --quiet, colour and formatter labels and could only be tested by scraping raw stderr. Reports them as data on CheckoutStats instead, which is the channel jj already uses for skipped files.";
+          reason = "Three eprintln! calls in jj-lib printed submodule notices straight to stderr, bypassing the Ui, so they ignored --quiet, colour and formatter labels and could only be tested by scraping raw stderr. Reports them as data on CheckoutStats instead, which is the channel jj already uses for skipped files. Survives the submodules-phase1 retirement: those eprintln! calls fire when a checkout SKIPS a gitlink, which is exactly what upstream still does after jj-vcs/jj#5954, so the reporting defect outlives the storage design. Depends on nothing else in the parked series.";
         };
         "git: read `.gitmodules` through gix" = {
-          upstream = "hold";
-          reason = "Restores a capability jj deliberately deleted in #5954 as 'redundant with gix's native API and not used by anything', this time built on gix-submodule. Sound on its own but pointless upstream without the series that consumes it, so it goes as part of the Phase 1 proposal rather than alone.";
+          upstream = "never";
+          reason = "Was `hold`, pending the Phase 1 proposal that would consume it. Retired with that proposal: it restores the very capability jj-vcs/jj#5954 deleted as 'redundant with gix's native API and not used by anything', and with Phase 1 parked nothing consumes it, so the upstream objection now stands unanswered. Parked on submodules-phase1.";
         };
         "submodule_store: give the store a name-keyed CRUD surface" = {
-          upstream = "hold";
-          reason = "Implements jj-vcs/jj#1698 and the storage decision, and picks the on-disk layout the design never specified (hex-encoded names, because a submodule name may contain a slash and the 2023 prototype's slash-to-underscore sanitising is lossy). That layout choice wants maintainer agreement before a PR, per jj's design-doc process.";
+          upstream = "never";
+          reason = "Was `hold`, pending maintainer agreement on the on-disk layout (hex-encoded names, since a submodule name may contain a slash and the 2023 prototype's slash-to-underscore sanitising is lossy) per jj's design-doc process. Retired: that conversation has no counterparty. Philip Metzger recorded on jj-vcs/jj#494 that 'there hasn't been any progress here' and the original design author left source control two years ago, so a layout decision nobody is in a position to agree to cannot become a PR. Implements jj-vcs/jj#1698; parked on submodules-phase1.";
         };
         "cli: add `jj git submodule clone`" = {
-          upstream = "hold";
-          reason = "Implements jj-vcs/jj#1755. Depends on the store layout above, so it waits on the same design conversation.";
+          upstream = "never";
+          reason = "Was `hold`, waiting on the store-layout conversation above, which has no counterparty (jj-vcs/jj#494). Implements jj-vcs/jj#1755 and depends on the store, so it is retired with it. Parked on submodules-phase1.";
         };
         "git submodule: report declared submodules and how the store disagrees" = {
-          upstream = "hold";
-          reason = "Implements jj-vcs/jj#1754. Depends on the store layout above.";
+          upstream = "never";
+          reason = "Was `hold`, depending on the store layout above. Implements jj-vcs/jj#1754 and is retired with the store. Parked on submodules-phase1.";
         };
         "working_copy: populate Git submodule contents on checkout" = {
-          upstream = "hold";
-          reason = "The Phase 1 headline outcome (jj-vcs/jj#1757), but it changes the public LockedWorkingCopy::check_out signature to take CheckoutOptions, which upstream will want to review on its own terms. Wants the design conversation on jj-vcs/jj#494 first, where a maintainer said in 2025-12 that submodules 'will probably require large design changes' and that the 2023 design's fit with current jj is unclear.";
+          upstream = "never";
+          reason = "Was `hold`. The Phase 1 headline outcome (jj-vcs/jj#1757), gated on the design conversation on jj-vcs/jj#494 where a maintainer said in 2025-12 that submodules 'will probably require large design changes' and that the 2023 design's fit with current jj is unclear. That conversation did not happen and upstream went the other way in jj-vcs/jj#5954, so it is retired. It also changes the public LockedWorkingCopy::check_out signature to take CheckoutOptions, which no maintainer has signalled appetite to review. Parked on submodules-phase1.";
         };
       };
     }
