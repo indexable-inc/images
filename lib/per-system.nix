@@ -49,17 +49,52 @@
     ];
     text = ''
       # nu
+      # The top-level `vendor/` tree is not ours to style. Each subtree under
+      # it is a byte-for-byte copy of another project's, and the derived-view
+      # import filters those paths back out so a copy hashes to upstream's own
+      # commit; reformat, rename or annotate one file there and that identity
+      # is gone, so house style stops at the repository's own files. This is
+      # the single place naming what is vendored: the stages that discover
+      # their own files go through `owned-files`, and the four tools that walk
+      # the tree themselves (statix, deadnix, clone, complexity) exclude the
+      # same directory through their own flag.
+      const vendored_dir = "vendor"
+      # One directory, three spellings, because those flags disagree on syntax.
+      # `fd` and `statix` take gitignore patterns, where the leading slash
+      # anchors the match to the scan root: a bare name matches at any depth and
+      # would also drop users/*/config/nushell/vendor/autoload, which is ours
+      # and is shell-fenced.
+      const vendored_gitignore = $"/($vendored_dir)"
+      # `clone` and `complexity` match a `glob::Pattern` against a scan path
+      # carrying a `./` prefix, so a bare directory name matches nothing there;
+      # `*` crosses separators, so one trailing `*` covers the whole subtree.
+      const vendored_scan_glob = $"./($vendored_dir)/*"
+      # `deadnix` takes a path prefix instead of a glob, so the bare directory
+      # is the exclusion there; a vendored tree nested deeper would need its own
+      # entry.
+      #
+      # `fd` restricted to repository-owned files: every file-discovering stage
+      # calls this instead of bare `fd`. The arguments are fd's own, passed as a
+      # list because a custom nushell command rejects flags its own signature
+      # does not declare.
+      def owned-files [fd_args: list<string>] { fd --exclude $vendored_gitignore ...$fd_args }
       def "main alejandra" [] {
-        let nix_files = (fd --extension nix | lines)
+        let nix_files = (owned-files [--extension nix] | lines)
         alejandra --check ...$nix_files
       }
-      def "main statix" [] { statix check . }
+      # `--ignore` extends statix.toml's `ignore` rather than replacing it, so
+      # the two module roots listed there stay excluded.
+      def "main statix" [] { statix check . --ignore $vendored_gitignore }
       # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
       # dropping a pattern name is unsafe without `...` in the pattern (it
       # narrows the callable signature); an unused name here must be deleted
       # (migrating call sites) or kept behind `...`, matching what the LSP
       # already flags as unused.
-      def "main deadnix" [] { deadnix --fail . }
+      # `--exclude` takes a list, so the `--` is load-bearing: written as
+      # `deadnix --fail --exclude vendor .` the `.` is read as a second exclude,
+      # the default scan path then has everything excluded, and the stage passes
+      # having checked nothing.
+      def "main deadnix" [] { deadnix --fail --exclude $vendored_dir -- . }
       # The Nix style rules as astlog lint declarations
       # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
       # finding per lint-declared relation row and exits nonzero on any
@@ -69,7 +104,7 @@
       # .nix files are handed to the corpus: astlog would otherwise parse
       # every known-grammar file in the repo to run nix-only rules.
       def "main astlog" [] {
-        let nix_files = (fd --extension nix | lines)
+        let nix_files = (owned-files [--extension nix] | lines)
         astlog scan astlog-rules/nix.astlog ...$nix_files
       }
       # The Rust style rules (astlog-rules/rust.astlog), the successor to the
@@ -98,7 +133,7 @@
         # [workspace.dependencies] and inherited with `workspace = true`. A
         # separate ruleset because the `astlog-rules` self-test maps one source
         # extension per ruleset (rust.astlog -> .rs, cargo.astlog -> .toml).
-        let cargo_files = (fd --hidden --glob Cargo.toml | lines)
+        let cargo_files = (owned-files [--hidden --glob Cargo.toml] | lines)
         if ($cargo_files | is-not-empty) {
           astlog scan astlog-rules/cargo.astlog ...$cargo_files
         }
@@ -115,7 +150,7 @@
       # speccing them would be noise. `fd` already skips gitignored `_build`/`deps`.
       def "main astlog-elixir" [] {
         let files = (
-          fd --extension ex --extension exs
+          owned-files [--extension ex --extension exs]
           | lines
           | where {|p| $p =~ '(^|/)lib/' }
         )
@@ -143,11 +178,13 @@
           | where {|line| $line != "" and not ($line | str starts-with "#") }
         )
         let scripts = (
-          fd --hidden --type file --exclude .git
+          owned-files [
+            --hidden --type file --exclude .git
             --extension sh --extension bash --extension nu
+          ]
           | lines
         )
-        let nix_files = (fd --extension nix | lines)
+        let nix_files = (owned-files [--extension nix] | lines)
         # `astlog scan` exits nonzero on findings by design; capture the JSON
         # (an empty corpus still prints `[]`) instead of failing the stage.
         let scan = (do { astlog scan astlog-rules/shell-fence.astlog --json ...$nix_files } | complete)
@@ -241,11 +278,13 @@
           '^tests/.*\.json$'
         ]
         let candidates = (
-          fd --hidden --type file
-          --extension toml --extension json --extension yaml --extension yml
-          --extension kdl --extension ini --extension conf --extension cfg --extension xml
-          --extension properties --extension editorconfig --extension sobelow-conf
-          --exclude .git
+          owned-files [
+            --hidden --type file
+            --extension toml --extension json --extension yaml --extension yml
+            --extension kdl --extension ini --extension conf --extension cfg --extension xml
+            --extension properties --extension editorconfig --extension sobelow-conf
+            --exclude .git
+          ]
           | lines
         )
         let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
@@ -269,7 +308,7 @@
       # fine and stay out of scope.
       def "main dirnames" [] {
         let offenders = (
-          fd --type directory . packages
+          owned-files [--type directory . packages]
           | lines
           | where {|dir| ($dir | path basename) == ($dir | path dirname | path basename) }
           | where {|dir|
@@ -294,7 +333,7 @@
       # `-dark.svg` twin (the creating-a-readme skill documents the pattern).
       def "main svg-dark" [] {
         let offenders = (
-          fd --hidden --extension md --exclude .git --exclude .claude
+          owned-files [--hidden --extension md --exclude .git --exclude .claude]
           | lines
           | each {|md|
               let dir = ($md | path dirname)
@@ -366,7 +405,7 @@
         let routes_root = "packages/site/src/routes"
         let lib_root = "packages/site/src/lib"
         let owners = (
-          fd --type file '^\+(page\.svelte|page\.ts|server\.ts)$' $routes_root
+          owned-files [--type file '^\+(page\.svelte|page\.ts|server\.ts)$' $routes_root]
           | lines
           | each {|file| $file | path dirname }
           | uniq
@@ -405,7 +444,7 @@
               )
               $collections
               | each {|name|
-                  fd --extension svx . ($lib_root | path join $name)
+                  owned-files [--extension svx . ($lib_root | path join $name)]
                   | lines
                   | each {|svx|
                       let stem = ($svx | path parse | get stem)
@@ -417,7 +456,7 @@
           | flatten
         )
         let assets = (
-          fd --type file . "packages/site/static"
+          owned-files [--type file . "packages/site/static"]
           | lines
           | each {|file| $file | str replace "packages/site/static/" "" }
         )
@@ -493,7 +532,7 @@
         let routes = (site-routes | each {|route| route-key $route })
         [plans updates stories]
         | each {|kind|
-            fd --extension svx . $"packages/site/src/lib/($kind)"
+            owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
             | lines
             | sort
             | each {|path|
@@ -535,7 +574,7 @@
       def svx-tag-errors [] {
         [plans updates stories]
         | each {|kind|
-            fd --extension svx . $"packages/site/src/lib/($kind)"
+            owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
             | lines
             | sort
             | each {|path|
@@ -568,7 +607,7 @@
           [plans updates stories]
           | each {|kind|
               let entries = (
-                fd --extension svx . $"packages/site/src/lib/($kind)"
+                owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
                 | lines
                 | sort
                 | each {|path|
@@ -650,7 +689,7 @@
         let errors = (
           [plans updates stories]
           | each {|kind|
-              fd --extension svx . $"packages/site/src/lib/($kind)"
+              owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
               | lines
               | sort
               | each {|path|
@@ -708,7 +747,7 @@
       # worktrees and assets) is filtered out explicitly.
       def "main ruff" [] {
         let py_files = (
-          fd --extension py
+          owned-files [--extension py]
           | lines
           | where {|p| not ($p | str starts-with ".claude/") }
         )
@@ -726,7 +765,7 @@
       # DetectionResult JSON to stdout; redirect it to null so a failing stage's
       # log shows the tracing gate summary (stderr), not the full JSON blob.
       def "main clone" [] {
-        clone . out> /dev/null
+        clone . --ignore $vendored_scan_glob out> /dev/null
       }
       # Per-unit complexity over the whole tree (packages/complexity).
       # `complexity .` walks up for the repo `complexity.toml`, whose
@@ -737,7 +776,7 @@
       # the JSON goes to null so a failing stage's log shows the tracing
       # summary naming the worst units, not the whole report.
       def "main complexity" [] {
-        complexity . out> /dev/null
+        complexity . --ignore $vendored_scan_glob out> /dev/null
       }
       def main [] {
         error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | site-frontmatter | ruff | clone | complexity" }
