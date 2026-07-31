@@ -263,20 +263,11 @@
       forkRepo = "indexable-inc/git";
       bookmark = "ix-patched";
       # The package overlays nixpkgs' git recipe onto this source, so the base
-      # must equal nixpkgs' git version tag (v2.54.0), never free-float under
-      # the fork-sync cron. Repin manually when nixpkgs bumps git.
+      # must equal nixpkgs' git version tag (v2.55.0), never free-float under
+      # the fork-sync cron. Repin manually when nixpkgs bumps git;
+      # packages/git/default.nix asserts the two agree, so a stale pin fails
+      # eval rather than building the old tree under the new label.
       autoUpdate = false;
-      # Here the BRANCH is the stale side: the pin is 682 commits ahead of
-      # ix-patched and the bookmark holds one commit the pin does not
-      # (compare/69fbc5cfd883...ix-patched answers `diverged`, 1 ahead / 682
-      # behind, merge base 94f057755b79). Someone rebased onto the v2.54.0 base,
-      # minted the pin ref and floated the lock without moving the bookmark, so
-      # anyone reading ix-patched to see what we carry on git reads a months-old
-      # base. Fixing it means pushing the bookmark, not repinning. ENG-11646.
-      pinDivergence = {
-        rev = "69fbc5cfd883f5a45c88f202325ba08d20fdbdcb";
-        reason = "ENG-11646: ix-patched was never moved to the v2.54.0 base the pin already uses; push the bookmark to the pinned series rather than repinning.";
-      };
       upstreamPolicy = {
         # git/git on GitHub is a read-only mirror: contributions go through the
         # mailing list (or GitGitGadget), never GitHub PRs, so the tool must not
