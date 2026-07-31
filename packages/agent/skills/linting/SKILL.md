@@ -14,9 +14,9 @@ git remote get-url origin
 | `indexable-inc/index` | `nix run .#lint` |
 | `indexable-inc/ix` | `just lint` |
 
-`index` is a submodule of `ix`, so one checkout holds both. The origin is what
-decides, not the directory you started in: inside `ix/index/` you are in index
-and `nix run .#lint` is correct.
+`ix` vendors index's history under `ix/index/`, so one checkout holds both. The
+origin is what decides, not the directory you started in: inside `ix/index/` you
+are in an ix checkout, and `just lint` is the command for the whole thing.
 
 Neither command is platform-gated. Both run on darwin and Linux.
 
@@ -33,26 +33,24 @@ was unavailable to them, and each filed the same ticket (ENG-9808 and eight
 duplicates). The command had never existed in ix on any platform, so every one
 of those reports diagnosed a darwin gap that was not there.
 
-## No commit hook runs the full lint in either repo
+## Neither repo runs any git hook, so nothing lints for you
 
-Do not treat a green commit as a green lint. What actually runs:
+There is no `.githooks/` and no `.pre-commit-config.yaml` in either tree, and
+nothing is installed into `.git/hooks`. Cloning is the whole setup. index's last
+hook went on 2026-07-19 (the `drop-direnv-and-hooks` site update) and ix's three
+went in ENG-11624, once every check they ran had a CI gate that was the same or
+wider.
 
-- **index**: nothing. There is no `.githooks/`, no `.pre-commit-config.yaml`,
-  and no installed hook -- the last one was removed on 2026-07-19 (the
-  `drop-direnv-and-hooks` site update). Cloning is the whole setup, and running
-  the lint is on you.
-- **ix**: `.githooks/pre-commit`, installed by entering the devshell, which
-  points `core.hooksPath` at `.githooks/`. It runs astlog over the staged
-  `.nix` files -- 1 of the 15 stages in the bundle -- and prints the stages it
-  skipped on every commit, including the ones it passes. Take that footer
-  literally.
+So a clean commit and a clean push say nothing about lint. Run the command in the
+table above before you push, or read the verdict off CI after you do. Those are
+the only two ways to know.
 
-ix also carries a `.pre-commit-config.yaml`, and it is not the installed hook.
-`core.hooksPath` and the pre-commit framework are mutually exclusive: with the
-path set, `pre-commit install` refuses outright; unset it and the framework's
-`.git/hooks/pre-commit` runs *instead of* `.githooks/pre-commit`, silently
-dropping the submodule-gitlink/flake.lock desync refusal. Never run
-`pre-commit install` in ix.
+Do not install a hook to get the check back. `pre-commit install` in either repo
+refuses with `No .pre-commit-config.yaml file was found`, and writing one is how
+this went wrong the first time: ix had a config for its whole life that
+`core.hooksPath` made unreachable, so the `no-raw-config-in-nix` rule listed in
+it had never run on a single commit. A gate reporting nothing is indistinguishable
+from a gate reporting clean.
 
 ## Run every gate through nix, never an ambient tool
 
