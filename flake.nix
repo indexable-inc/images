@@ -153,12 +153,13 @@
     # submodule object store instead of re-cloning every submodule from the
     # network (#3610). The base tracks nixpkgs' git version (v2.55.0 tag)
     # because the package overlays nixpkgs' git recipe, so it never
-    # free-floats: on a nixpkgs git bump, jj-rebase indexable-inc/git onto
-    # the matching tag and repin. Each rebase lands on a new branch
-    # (ix-patched-v<version>) rather than rewriting the previous one, so revs
-    # pinned by older index commits stay reachable and keep building.
+    # free-floats: on a nixpkgs git bump, rebase the series onto the matching
+    # tag, MERGE the result into ix-patched and repin. The merge is what keeps
+    # revs pinned by older index commits reachable, so a per-release branch
+    # (ix-patched-v<version>) is no longer minted; the one left behind,
+    # ix-patched-v2.55.0, is now an ancestor of the bookmark.
     git-src = {
-      url = "github:indexable-inc/git/69fbc5cfd883f5a45c88f202325ba08d20fdbdcb";
+      url = "github:indexable-inc/git/eef38393cda1413ded72f0259d1618110cf38456";
       flake = false;
     };
 
