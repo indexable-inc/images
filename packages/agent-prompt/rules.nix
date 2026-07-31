@@ -157,9 +157,15 @@
         needs them. An isolation worktree belongs to the session's repo,
         not necessarily your task's: verify its origin, and when the task
         targets another repo, add your own worktree of the target
-        checkout. Unmerged branches are unfinished for reasons you may
-        not see; check for open PRs touching a file before nontrivial
-        edits.
+        checkout. A repo with no colocated `.git` fails
+        `git worktree add`. Keep the path and change the command:
+        `git clone --filter=blob:none <origin>
+        /tmp/worktree/<org>/<repo>/<name>`. Use a `jj workspace` instead
+        when you need the repo's own operation log. Never point
+        `git worktree add` at `.jj/repo/store/git`: that store is jj's,
+        other sessions read it, and a worktree writes metadata into it.
+        Unmerged branches are unfinished for reasons you may not see; check for
+        open PRs touching a file before nontrivial edits.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
@@ -176,7 +182,17 @@
         2026-07-29 at the operator's request: "the first action in any
         repo" reads as a rule about entering a repo, so an agent already
         mid-session asked for a one-line fix does not see itself covered.
-        No size or urgency exemption exists.
+        No size or urgency exemption exists. Extended on 2026-07-31 for
+        repos with no colocated git: the shared checkouts of nix, ix and
+        index all carry `.jj` and no `.git`, so `git worktree add` fails
+        outright in each, and three agents in one session invented three
+        different substitutes for it. The filtered clone is named because
+        it is the one that keeps the standardized path. Worktreeing
+        `.jj/repo/store/git` is called out separately because it looks
+        like the obvious way through and is not: writing into a store
+        other sessions read is the same class of mistake as deleting a
+        shared checkout's `.git`, which destroyed another agent's
+        worktrees the same day (ENG-11676).
       '';
     };
   }
