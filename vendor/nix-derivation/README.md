@@ -216,3 +216,15 @@ issue or pull request
     ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
     (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
     SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Vendored into the index monorepo
+
+This fork is also carried inside `indexable-inc/index` at
+`vendor/nix-derivation`, as a derived view: that path filters back out into this
+repository's exact commit hashes, so the two share real ancestry and a sync in
+either direction is an ordinary fetch.
+
+Take a change made here into the monorepo with
+`jj-views unfilter --path vendor/nix-derivation`. Do not rebase a derived view
+onto the monorepo: reverse-mapping a rebase rewrites monorepo history that other
+people already have.
