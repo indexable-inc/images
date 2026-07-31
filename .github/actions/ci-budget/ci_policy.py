@@ -244,6 +244,11 @@ def classify(
     repository: str,
     *,
     force_big_change: bool,
+    # Pull requests whose file list GitHub refused to enumerate, as
+    # (number, changed_files). Non-empty means big on its own: the caller could
+    # not read the paths, so no `costly_paths` match can be computed and the
+    # only honest classification is the conservative one.
+    unenumerable: Sequence[tuple[int, int]] = (),
     policy: Policy = POLICY,
 ) -> Classification:
     repo_policy = repository_policy(repository, policy)
@@ -260,10 +265,14 @@ def classify(
         sources.append("label")
     if matches:
         sources.append("costly_path")
-    return Classification(
-        big_change=bool(sources),
-        reason={"sources": sources, "matches": matches},
-    )
+    reason: dict[str, object] = {"sources": sources, "matches": matches}
+    # Only present when it applies. Every existing caller and test compares the
+    # whole reason dict, so an always-present key would churn them all to carry
+    # an empty list that means nothing.
+    if unenumerable:
+        sources.append("unenumerable")
+        reason["unenumerable"] = [list(entry) for entry in unenumerable]
+    return Classification(big_change=bool(sources), reason=reason)
 
 
 def decide(
