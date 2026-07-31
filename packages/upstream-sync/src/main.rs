@@ -4,7 +4,9 @@
 //! on from the hand-written declarative intent, tracks the live state of the
 //! PRs we open, spots duplicate upstream PRs, and retires patches that land
 //! upstream. `upstream-sync drift [--json|--markdown] [name]` is the
-//! read-only companion report (see [`upstream_sync::drift`]).
+//! read-only companion report (see [`upstream_sync::drift`]), and
+//! `upstream-sync pin-drift` is the gate over the other axis, each pin against
+//! its own fork bookmark (see [`upstream_sync::pin`]).
 //!
 //! The patch series lives in each fork repo's commit DAG (the jj megamerge
 //! layout, see [`upstream_sync::series`]): every patch is a commit whose
@@ -57,7 +59,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use lazy_regex::regex;
 use upstream_sync::mapping::{self, Fork, Slug};
 use upstream_sync::style::{CYAN, GREEN, RED, YELLOW, paint};
-use upstream_sync::{cmd, drift, gh, notify, series, status};
+use upstream_sync::{cmd, drift, gh, notify, pin, series, status};
 
 #[derive(Parser)]
 #[command(name = "upstream-sync")]
@@ -72,6 +74,8 @@ struct Cli {
 enum Command {
     /// Read-only drift report: pinned base vs upstream default branch
     Drift(DriftArgs),
+    /// Gate: every fork pin against its OWN bookmark; fails on a diverged pin
+    PinDrift(DriftArgs),
     /// Regenerate the committed org roster that drives PR @-mentions
     Members(MembersArgs),
     /// Bring every tracked PR's @-mention block in line with the roster
@@ -196,7 +200,14 @@ fn main() -> Result<()> {
             args.json,
             args.markdown,
         ),
+        Some(Command::PinDrift(args)) => pin::run(
+            args.mapping.as_deref(),
+            args.name.as_deref(),
+            args.json,
+            args.markdown,
+        ),
         Some(Command::Members(args)) => run_members(&args),
+
         Some(Command::Notify(args)) => run_notify(&args),
         Some(Command::Validate(args)) => run_validate(&args),
         None => run_sync(&cli.sync),

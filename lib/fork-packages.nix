@@ -69,6 +69,14 @@
 #                may jj-rebase the fork onto the upstream tip and float the
 #                input under the cron. `false` pins the input by rev; it moves
 #                only under a deliberate manual rebase.
+#   pinDivergence : optional. ACKNOWLEDGES that this entry's pinned rev is not an
+#                ancestor of `bookmark`, which `upstream-sync pin-drift` fails on
+#                by default. Keyed by the rev it covers, so the acknowledgement
+#                expires the moment the pin moves and cannot be inherited by a
+#                pin nobody looked at; the gate also fails a waiver whose fork is
+#                no longer diverged, so a dead one cannot sit here looking live.
+#                  rev    : the full pinned rev this waiver covers.
+#                  reason : why it is not fixed yet, and what fixing it means.
 #
 # Upstreaming intent (hand-written declarative intent; the human gate on the
 # outward act). `packages/upstream-sync` reads these; the LIVE state it tracks
@@ -220,6 +228,16 @@
       forkRepo = "indexable-inc/home-manager";
       bookmark = "ix-patched";
       autoUpdate = false;
+      # One commit each way off a shared base (compare/d27be2a29e5f...ix-patched
+      # answers `diverged`, 1 ahead / 1 behind, merge base f4d01c1d87c7): the
+      # shape of a series amended and pushed while the lock stayed on the
+      # pre-amend megamerge, so the activation patch that ships is a different
+      # revision from the one on the branch. Which one is right is a question for
+      # whoever amended it, so the pin is not moved here. ENG-11646.
+      pinDivergence = {
+        rev = "d27be2a29e5feb86a9196838b1bb0fdc44119cb8";
+        reason = "ENG-11646: the branch and the pin each hold one revision of the activation patch; repin or re-push once someone says which is the reviewed one.";
+      };
       upstreamPolicy = {
         prsWelcome = true;
         # The contributing manual (guidelines, getting-started) has no
@@ -254,6 +272,17 @@
       # must equal nixpkgs' git version tag (v2.54.0), never free-float under
       # the fork-sync cron. Repin manually when nixpkgs bumps git.
       autoUpdate = false;
+      # Here the BRANCH is the stale side: the pin is 682 commits ahead of
+      # ix-patched and the bookmark holds one commit the pin does not
+      # (compare/69fbc5cfd883...ix-patched answers `diverged`, 1 ahead / 682
+      # behind, merge base 94f057755b79). Someone rebased onto the v2.54.0 base,
+      # minted the pin ref and floated the lock without moving the bookmark, so
+      # anyone reading ix-patched to see what we carry on git reads a months-old
+      # base. Fixing it means pushing the bookmark, not repinning. ENG-11646.
+      pinDivergence = {
+        rev = "69fbc5cfd883f5a45c88f202325ba08d20fdbdcb";
+        reason = "ENG-11646: ix-patched was never moved to the v2.54.0 base the pin already uses; push the bookmark to the pinned series rather than repinning.";
+      };
       upstreamPolicy = {
         # git/git on GitHub is a read-only mirror: contributions go through the
         # mailing list (or GitGitGadget), never GitHub PRs, so the tool must not
@@ -1160,6 +1189,17 @@
         "libfetchers: consume the jj file list as exact paths, not prefixes" = {
           upstream = "hold";
           reason = "Generalises the submodule fix above from the instance to the class: no listed entry can licence anything beneath it whatever its type, so a directory-naming entry renders as an empty directory rather than leaking a subtree (ENG-11616). Verified on aarch64-darwin: `git+file` and `jj+file` agree on both store path and narHash for one working copy, and the test additionally asserts the fetched tree equals exactly jj's tracked non-directory set, which is what catches an entry type nobody has thought of. Watched to fail against the unfixed fetcher with untracked junk planted inside the submodule, so the leak was visibly arbitrary rather than limited to the submodule's own files. Follow-up to the vendored jj scheme of the open upstream PR NixOS/nix#16066, so it belongs on that PR rather than a rival one; held: humans submit Nix patches upstream per NixOS/nix#15984.";
+        };
+        # The two jj tests were the entire gate on the jj fetcher series, and the
+        # gate was open: `jj` was declared in no Nix file, so both tests hit
+        # `skipTest` on every Nix-driven run, and a skip is counted next to the
+        # passes rather than next to the failures. Running them for the first
+        # time failed jj-colocated.sh immediately, which built its fixtures with
+        # a bare `git init` plus `git commit` and so could only ever work on a
+        # machine carrying a global git identity (ENG-11636).
+        "tests/functional: run the jj tests instead of skipping them" = {
+          upstream = "never";
+          reason = "Fork-local test infrastructure for a fork-local fetcher: declares jujutsu in tests/functional/package.nix and adds a requireJj that FAILS where requireGit skips, on the grounds that a tool named in the closure going missing is a broken closure rather than an unsupported environment. Upstream carries no jj scheme, so there is nothing there for this to gate. Verified on aarch64-darwin by building nix-functional-tests: fetchJj OK 2.49s and jj-colocated OK 3.14s, where the same build before the git-identity fix reported jj-colocated FAIL exit status 128 on `git commit` with no identity.";
         };
       };
     }
