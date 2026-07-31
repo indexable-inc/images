@@ -17,7 +17,7 @@
 # view, and both directions of that -- `jj-views unfilter` to take upstream ix
 # commits in, `jj-views derive` to publish work back -- are this binary. Three
 # separate agent sessions built it by hand into /tmp before this landed.
-repoPackages.jj.passthru.workspace.binaries."jj-views".overrideAttrs (old: {
+repoPackages.jj.passthru.workspace.binaries.jj-views.overrideAttrs (old: {
   meta =
     (old.meta or {})
     // {
