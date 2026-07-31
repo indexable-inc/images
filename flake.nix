@@ -213,7 +213,8 @@
       # of the Darwin fast-exit pty work (drain from its own thread, reverted,
       # relanded, then handshake-fd fix), remote build machine recording
       # (ENG-11260) and the Mach-O page-hash reproducibility fix. Only nix's own
-      # tests gate those here; they have no lib/fork-packages.nix intent entries
+      # tests gate those here; apart from the Mach-O fix, whose NACK this repo
+      # records (index#4344), they have no lib/fork-packages.nix intent entries
       # and so default to `hold`, which cannot send them upstream.
       #
       # The 3 deliberate ones: source paths under the store directory now carry

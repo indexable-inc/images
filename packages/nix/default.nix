@@ -374,6 +374,13 @@ let
   # has finished starting every runnable child (ENG-11172). This runs on linux
   # too, where it asserts the invariant the darwin fix restores.
   buildLogFastExit = focusedFunctionalTest {name = "build-log-fast-exit";};
+  # `libstore: Bit-reproducibly fix darwin Mach-O page hashes after rewriting`
+  # regression coverage: after `RewritingSink` mutates bytes the linker had
+  # already covered with ad-hoc page hashes, the rewritten binary must still
+  # execute, verify under codesign, and keep its `linker-signed` flag rather
+  # than being re-signed. The test expects `--check` itself to fail (LC_UUID is
+  # still a stale content hash, index#4336) and inspects the `.check` binary.
+  machoRewrite = focusedFunctionalTest {name = "macho-rewrite";};
 in
   package.overrideAttrs (old: {
     passthru =
@@ -387,7 +394,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildLogFastExit buildStatus daemonSignal fetchGitHeadCache overlayLowerGainsOutput smoke sparseLocks;
+            inherit autoGcInterrupt buildLogFastExit buildStatus daemonSignal fetchGitHeadCache machoRewrite overlayLowerGainsOutput smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
