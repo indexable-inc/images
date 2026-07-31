@@ -171,7 +171,7 @@
     # in lib/fork-packages.nix). Bump it by hand: jj-rebase indexable-inc/jj,
     # push bookmark + pin ref, repin here, then build `.#jj`.
     jj-src = {
-      url = "github:indexable-inc/jj/9ae980e1356188537cbfbc945ca436a7cd7c451e";
+      url = "github:indexable-inc/jj/13b0c7120ff86d66da9a86aa43be475a47c82f17";
       flake = false;
     };
 
