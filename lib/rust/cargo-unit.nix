@@ -236,6 +236,37 @@
     packageTestEnv = rawArgs.packageTestEnv or {};
     testRunPrelude = rawArgs.testRunPrelude or "";
 
+    # Every per-package table below is consumed in the rendered units file as
+    # `<table>.${packageName} or <empty>`, so a key that names no package in
+    # the graph is silently dropped: the value never reaches a unit and the
+    # build still succeeds, which is how a `packageBuildEnv` scoping fix can
+    # be a complete no-op with zero signal (ENG-10675 -- and the whole point
+    # of `packageBuildEnv` is that the workspace-wide fallback is gone, so
+    # there is nothing left to make the miss visible). Default-deny on the
+    # keys instead.
+    #
+    # The universe is every package name in the lock, which covers workspace
+    # members and vendored dependencies alike (`packageBuildEnv.libsqlite3-sys`
+    # is a vendored crate). It is a superset of the names the renderer actually
+    # tags units with -- a lock entry gated behind a cfg the graph never
+    # resolves is accepted here -- because the exact set only exists after the
+    # render IFD, and a typo is what this catches. Reading the lock is a plain
+    # `importTOML` of a path, so it costs no IFD and fails in seconds.
+    cargoLockPackageNames = lib.unique (
+      map (package: package.name) (lib.importTOML context.cargoLockPath).package
+    );
+    packageBuildEnv = rawArgs.packageBuildEnv or {};
+    packageRustcArgs = rawArgs.packageRustcArgs or {};
+    unknownPackageKeyProblems = label: table:
+      map (
+        packageName: "${label}.${packageName} is not a package in Cargo.lock"
+      ) (filter (packageName: !(elem packageName cargoLockPackageNames)) (attrNames table));
+    packageTableProblems =
+      unknownPackageKeyProblems "packageBuildEnv" packageBuildEnv
+      ++ unknownPackageKeyProblems "packageRustcArgs" packageRustcArgs
+      ++ unknownPackageKeyProblems "packageTestInputs" packageTestInputs
+      ++ unknownPackageKeyProblems "packageTestEnv" packageTestEnv;
+
     # Every injected unit plus everything reachable from one through
     # `passthru.depUnits` (recorded by `mkPrebuiltLibraryUnit`), deduplicated
     # by derivation. A recorded dep whose unit key the caller explicitly
@@ -620,8 +651,7 @@
             packageTestInputs
             packageTestEnv
             ;
-          packageBuildEnv = rawArgs.packageBuildEnv or {};
-          packageRustcArgs = rawArgs.packageRustcArgs or {};
+          inherit packageBuildEnv packageRustcArgs;
           inherit extraRustcArgsForPlatform extraLinkRustcArgsForPlatform;
           # Manifest-derived flags come first so per-call `policy.clippy`
           # entries land later in argv and can override them. Cargo's
@@ -722,7 +752,16 @@
       ++ injectionUnitKeyMismatchProblems
       ++ depUnitConflictProblems;
 
-    units = assert lib.assertMsg (injectionProblems == []) (
+    units = assert lib.assertMsg (packageTableProblems == []) ''
+      cargoUnit.buildWorkspace: per-package table names package(s) that are not
+      in Cargo.lock:
+      ${lib.concatMapStringsSep "\n" (problem: "  - ${problem}") packageTableProblems}
+      A per-package table is looked up by Cargo package name, so an unknown key
+      is silently ignored and its value reaches no unit at all (ENG-10675).
+      Check the spelling against the crate's own `[package] name`, which need
+      not match the directory or the package registry id.
+    '';
+    assert lib.assertMsg (injectionProblems == []) (
       "cargoUnit.buildWorkspace: invalid prebuilt-unit injection:\n"
       + lib.concatStringsSep "\n" injectionProblems
     );
