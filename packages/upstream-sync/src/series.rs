@@ -5,13 +5,12 @@
 //! in its GitHub fork repo (`lib/fork-packages.nix` `forkRepo`/`bookmark`):
 //! every patch is a commit whose parents are its true dependencies, sealed by
 //! an "ix megamerge" commit whose tree is the full series applied linearly.
-//! This module opens a scratch commits-only clone, derives the series
-//! (bookmark ancestry minus the upstream base -- anchored on the registry's
-//! `upstreamRef` when the base sits off the default branch -- minus the
-//! seal), and exposes
-//! the ancestry closure that decides what an upstream contribution drags
-//! along. Patch identity is the commit SUBJECT: it survives jj rebases, and
-//! the intent map in the registry is keyed by it.
+//! This module opens a scratch commits-only clone, derives the series (see
+//! [`series`]: the read depends on whether the branch still carries a
+//! megamerge seal, and the base is anchored on the registry's `upstreamRef`
+//! when it sits off the default branch), and exposes the ancestry closure
+//! that decides what an upstream contribution drags along. Patch identity is
+//! the commit SUBJECT, and the intent map in the registry is keyed by it.
 
 use std::path::{Path, PathBuf};
 
@@ -277,11 +276,35 @@ fn default_branch(dir: &Path, fork: &str, url: &str) -> Result<String> {
         .ok_or_else(|| eyre!("{fork}: cannot discover the default branch of {url}"))
 }
 
-/// The series: bookmark ancestry minus the base, topo order, minus the
-/// megamerge seal commit (subject "ix megamerge: ..."), which is bookkeeping
-/// (tree = series applied linearly), not a patch.
+/// The series: the fork's patch commits between the base and the bookmark,
+/// topo order.
+///
+/// Two branch shapes exist and they need opposite reads, so the shape is
+/// detected rather than assumed.
+///
+/// A branch still in the jj megamerge shape ends in an "ix megamerge" seal
+/// whose PARENTS are the patches (5 of them on rust-clippy), and a patch there
+/// can itself be a merge commit, because a patch's parents are its declared
+/// dependencies. Neither `--first-parent` nor `--no-merges` is safe on that
+/// shape: both drop real patches. So it keeps the full-ancestry walk, minus
+/// the seal by subject.
+///
+/// A branch in the merge-forward shape the `forkBranches` doctrine mandates
+/// has no seal: patches are ordinary commits on it, upstream is merged in
+/// rather than rebased onto, and an earlier revision of a patch may be merged
+/// back so a rev some flake.lock pinned stays reachable. There the full walk
+/// reads the merge commits as patches (offering to upstream "Merge
+/// nix-community/home-manager master") and reads those earlier revisions as
+/// extra patches, which is fatal because patch identity is the subject and two
+/// revisions of one patch usually share one. `--first-parent --no-merges` is
+/// the branch's own line and the whole series, since a patch reaches the
+/// branch as a commit on it.
+///
+/// The megamerge arm is transitional: megamerges are banned, and it becomes
+/// dead code to delete once the last fork is migrated (ENG-11665).
 fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> {
-    let out = cmd::run_in(
+    let range = format!("^{base}");
+    let full = cmd::run_in(
         dir,
         "git",
         &[
@@ -290,13 +313,29 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
             "--reverse",
             "--format=%H%x1f%s",
             tip,
-            &format!("^{base}"),
+            &range,
         ],
     )?;
-    let series: Vec<Commit> = parse_log(&out)
-        .into_iter()
-        .filter(|c| !c.subject.starts_with("ix megamerge"))
-        .collect();
+    let all = parse_log(&full);
+    let series: Vec<Commit> = if all.iter().any(is_seal) {
+        all.into_iter().filter(|c| !is_seal(c)).collect()
+    } else {
+        let own = cmd::run_in(
+            dir,
+            "git",
+            &[
+                "log",
+                "--topo-order",
+                "--reverse",
+                "--first-parent",
+                "--no-merges",
+                "--format=%H%x1f%s",
+                tip,
+                &range,
+            ],
+        )?;
+        parse_log(&own)
+    };
 
     // Subjects are the patch identity (intent keys, branch slugs); a
     // duplicate would make every subject-keyed lookup ambiguous.
@@ -311,6 +350,13 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
         seen.push(&commit.subject);
     }
     Ok(series)
+}
+
+/// The megamerge seal: bookkeeping (tree = series applied linearly), not a
+/// patch. Its presence is also what says the branch is still in the megamerge
+/// shape.
+fn is_seal(commit: &Commit) -> bool {
+    commit.subject.starts_with("ix megamerge")
 }
 
 /// Parse `--format=%H%x1f%s` output.

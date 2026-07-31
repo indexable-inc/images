@@ -632,7 +632,13 @@
         `ix-patched` as an ordinary two-parent merge, resolving conflicts
         in the merge commit; never rebase onto the new base. The delta
         over upstream stays readable as
-        `git log upstream/main..ix-patched --no-merges`.
+        `git log upstream/main..ix-patched --first-parent --no-merges`.
+        Both flags are load-bearing, and dropping either is how
+        `upstream-sync` came to read three revisions of one home-manager
+        patch as three patches and die on their duplicate subject:
+        `--no-merges` drops the merge commits, and `--first-parent` drops
+        what those merges brought in, which includes any earlier revision of
+        a patch merged back to keep a rev some flake.lock pinned reachable.
         A force-push is therefore exceptional, and one still needs a
         permanent `refs/pins/<date>-<sha12>` ref for every rev a
         flake.lock has ever pinned, in the same operation, or GitHub
@@ -679,8 +685,8 @@
         for those rewrites. It also contradicted the derived-views
         doctrine, which forbids rebasing published history. Merge-forward
         keeps SHAs stable and deletes the compensation layer; the only
-        loss is a linear log, and the --no-merges delta answers the same
-        question.
+        loss is a linear log, and the --first-parent --no-merges delta
+        answers the same question.
       '';
     };
   }
