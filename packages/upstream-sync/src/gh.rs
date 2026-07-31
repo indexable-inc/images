@@ -359,10 +359,16 @@ pub enum Read {
 /// against the same API this probe uses, so an expired token is a live
 /// possibility, not a hypothetical.
 ///
+/// `absent_hint` is what a 404 or 422 MEANS for the caller's probe, printed as
+/// the warning's second half. It is a parameter because the two lanes read
+/// different repos: drift probes the UPSTREAM, where a megamerge sha legitimately
+/// resolves to nothing, while pin-drift probes our own fork repo, where the same
+/// status means something is missing that should be there.
+///
 /// # Errors
 /// Fails when `gh` cannot be spawned, and when the forge could not be
 /// reached or refused the read.
-pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Read> {
+pub fn read(ctx: &str, path: &str, jq: &str, absent_hint: &str) -> Result<Read> {
     let res = cmd::complete("gh", &["api", path, "--jq", jq])?;
     if res.ok() {
         return Ok(Read::Value(res.stdout.trim().to_owned()));
@@ -392,10 +398,7 @@ pub fn read(ctx: &str, path: &str, jq: &str) -> Result<Read> {
         paint(
             YELLOW,
             &format!(
-                "upstream-sync: {ctx}: `gh api {path}` answered HTTP {}: {}. The pinned \
-                 rev is not present upstream -- either the fork repo is not a GitHub fork of the \
-                 upstream (they share no object store, so a megamerge sha can never resolve \
-                 there) or the rev was garbage-collected. Cell left unknown.",
+                "upstream-sync: {ctx}: `gh api {path}` answered HTTP {}: {}. {absent_hint}",
                 absent.status, absent.detail
             )
         )

@@ -53,9 +53,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # `-e` is on by default in a workflow `run` shell (bash -e {0}), so a
+          # failing pin-drift would kill this step before the table reached the
+          # summary -- losing the report on exactly the runs that produce one.
+          # `|| rc=$?` is inside a compound the shell tolerates.
           set -uo pipefail
-          nix run .#upstream-sync -- pin-drift --markdown > "$RUNNER_TEMP/pins.md"
-          rc=$?
+          rc=0
+          nix run .#upstream-sync -- pin-drift --markdown > "$RUNNER_TEMP/pins.md" || rc=$?
           {
             echo "## Fork pins"
             echo ""
