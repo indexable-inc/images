@@ -39,6 +39,16 @@ pub struct Fork {
     /// discovered from its HEAD symref.
     #[serde(default)]
     pub upstream_ref: Option<String>,
+    /// Whether the fork-sync cron floats this input onto each rebase. A
+    /// floating input is legitimately off its bookmark between the rebase and
+    /// the rolling PR merging, which is the whole reason [`crate::pin`] gates
+    /// the two cases differently. Defaults to false, the stricter side, so an
+    /// entry that forgets the flag is gated rather than exempt.
+    #[serde(default)]
+    pub auto_update: bool,
+    /// A recorded, deliberate exception to the pin-on-bookmark rule.
+    #[serde(default)]
+    pub pin_divergence: Option<PinDivergence>,
     /// Per-patch intent keyed by the patch commit's SUBJECT line (the
     /// identity that survives jj rebases).
     #[serde(default)]
@@ -48,6 +58,22 @@ pub struct Fork {
 
 fn default_bookmark() -> String {
     "ix-patched".to_owned()
+}
+
+/// A recorded, deliberate exception to the pin-on-bookmark rule
+/// ([`crate::pin`]).
+///
+/// Keyed by `rev` and not by fork, because an exemption that outlives the thing
+/// it excused is how a gate stops gating: the next pin would inherit a waiver
+/// nobody re-examined. The gate fails on a waiver whose rev is no longer
+/// pinned, and on one whose fork is no longer diverged, so the only way to keep
+/// one is to keep meaning it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PinDivergence {
+    /// The full pinned rev this waiver covers.
+    pub rev: String,
+    /// Why it is not fixed yet, and what fixing it would mean.
+    pub reason: String,
 }
 
 /// Hand-written per-patch intent: `attempt` is the human gate that authorizes
@@ -265,6 +291,8 @@ impl Slug {
 ///   - an `autoContribute` with no reason leaves the stance unexplained, and
 ///     an unexplained gate is one the next person deletes or flips without
 ///     knowing what it defended.
+///   - a `pinDivergence` waiver with no rev cannot expire, and one with no
+///     reason is indistinguishable from an oversight the day someone reads it.
 ///
 /// # Errors
 /// Fails listing every problem found, not just the first: a registry edit
@@ -279,7 +307,22 @@ pub fn validate(forks: &[Fork]) -> Result<()> {
                 fork.name
             ));
         }
+        if let Some(waiver) = &fork.pin_divergence {
+            if waiver.rev.trim().is_empty() {
+                problems.push(format!(
+                    "{}: pinDivergence names no rev; it has to name the exact pinned rev it covers, so the waiver expires when the pin moves",
+                    fork.name
+                ));
+            }
+            if waiver.reason.trim().is_empty() {
+                problems.push(format!(
+                    "{}: pinDivergence states no reason; say why the pin is off the bookmark and what fixing it would mean",
+                    fork.name
+                ));
+            }
+        }
         for (subject, intent) in &fork.patches {
+
             let Some(stance) = intent.upstream.as_deref() else {
                 continue;
             };

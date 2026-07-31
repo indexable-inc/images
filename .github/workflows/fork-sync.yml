@@ -397,3 +397,30 @@ jobs:
           # The body (preamble + live fork-drift table) is assembled by the
           # "Fork drift report" step above; body-path keeps this step dumb.
           body-path: ${{ runner.temp }}/pr-body.md
+      # Nothing else in this repo compares a fork pin with the fork's OWN
+      # bookmark, and that gap is not benign: the fork push mints a permanent
+      # refs/pins/<date>-<sha12> ref in the same operation, so a pin left off the
+      # branch keeps fetching and building forever while the branch everyone
+      # reads describes a different tree. On 2026-07-31 nix-src sat 16 patches
+      # behind ix-patched AND was not an ancestor of it, with every check green
+      # (ENG-11630).
+      #
+      # LAST step in the job, and not one line earlier. The cron can only fix a
+      # floating fork; a rev-pinned pin off its bookmark needs a human. Gating
+      # before the rolling-branch push would let that human-shaped problem cancel
+      # the lock bump for every fork the cron CAN fix, which trades one stale pin
+      # for all of them.
+      - name: Fork pin gate
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          nix run .#upstream-sync -- pin-drift --markdown > "$RUNNER_TEMP/pins.md"
+          rc=$?
+          {
+            echo "## Fork pins"
+            echo ""
+            cat "$RUNNER_TEMP/pins.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
