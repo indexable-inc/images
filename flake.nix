@@ -202,30 +202,45 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # ix-patched f200a3a8d492 (72 patches on 2c6d06e9387c). This pin does NOT
-      # descend from the 0f356d7c it replaces: ix-patched was reflattened and
-      # reformatted after that megamerge commit, so the two share only the
-      # upstream base and the old rev survives as refs/pins/2026-07-29-0f356d7cf513
-      # (this one as refs/pins/2026-07-31-f200a3a8d492). The pin had drifted 16
-      # patches behind the branch before this bump, so it carries more than the
-      # 3 patches the bump was opened for: `nix invocation` post-hoc build
-      # introspection, a 384 MiB to 8 GiB initial GC heap cap, the settled end
-      # of the Darwin fast-exit pty work (drain from its own thread, reverted,
-      # relanded, then handshake-fd fix), remote build machine recording
-      # (ENG-11260) and the Mach-O page-hash reproducibility fix. Only nix's own
-      # tests gate those here; apart from the Mach-O fix, whose NACK this repo
-      # records (index#4344), they have no lib/fork-packages.nix intent entries
-      # and so default to `hold`, which cannot send them upstream.
+      # ix-patched 2d7585afe7b1 (43 commits on from f200a3a8d492, same branch,
+      # same 2c6d06e9387c base, still version 2.34.7, so the drop-in property
+      # the block above is about does not move). Previous pin survives as
+      # refs/pins/2026-07-31-f200a3a8d492, this one as
+      # refs/pins/2026-07-31-2d7585afe7b1.
       #
-      # The 3 deliberate ones: source paths under the store directory now carry
-      # a fingerprint, so `fetchToStore` stops re-hashing and re-copying the
-      # subtree on every eval (ENG-10821, indexable-inc/index#4323), and the jj
-      # workdir accessor consumes `jj file list` as exact paths rather than
-      # allow-list prefixes, so a listed entry that names a directory can no
-      # longer admit the whole subtree beneath it (ENG-11616) -- which had been
-      # baking a submodule's contents and its `gitdir:` pointer file into the
-      # store for a `jj+file` input nobody passed `submodules=1` to.
-      url = "github:indexable-inc/nix/f200a3a8d4921393547f93166cce8cebcb2b0e44";
+      # This range is where nine PRs merged inside a few minutes, and the pin
+      # deliberately sits after the three commits that made their union work
+      # rather than anywhere inside it. The union did not compile
+      # (nix-expr-tests, run 30664328290) because the parallel evaluator port
+      # took value.hh from the tree it was written against, which predates two
+      # upstream additions, so a textually clean merge reverted them. Fixing
+      # that exposed three more reversions underneath, none of them compile
+      # errors: `printFailed` rendering «failed» against its own comment, the
+      # evaluator's error positions with no expectation updates, and
+      # `Failed::rethrow()` losing the clone that stops a re-forced failure's
+      # trace mutating the cached exception. All five are ENG-11672. Anything
+      # pinned between the parallel-eval merge and 2d7585afe7b1 builds and runs
+      # but carries the last three as live regressions.
+      #
+      # What a consumer will notice. Infinite recursion and stack overflow are
+      # now reported at the site that forced the value rather than at the
+      # recursive thunk's own expression, because claiming a thunk overwrites
+      # the words that held its environment and expression; that is
+      # unconditional, not gated on `eval-cores`, and doc/manual/rl-next
+      # records it. The evaluator itself is off by default: `eval-cores`
+      # defaults to 1 and is admitted only with the `parallel-eval`
+      # experimental feature. The lazy-trees stack is untouched by the range
+      # (paths.cc is byte-identical across it), so indexable-inc/index#4297
+      # stands unchanged.
+      #
+      # Gated by nix's own tests only, which is the same caveat the previous
+      # bump recorded: run 30668180224 is green on this rev across both tests
+      # jobs, VM tests, flake checks, installer tests and the sanitizer
+      # configuration. Neither the parallel evaluator nor the read-set
+      # instrumentation series has a lib/fork-packages.nix intent entry, so
+      # both default to `hold` and cannot be sent upstream until someone
+      # classifies them.
+      url = "github:indexable-inc/nix/2d7585afe7b146f2bb07d834285ce8caefc7ba33";
       flake = false;
     };
 
