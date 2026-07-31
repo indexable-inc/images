@@ -95,8 +95,8 @@ in {
   services.openssh = {
     enable = true;
     settings = {
-      # This VM takes a public IPv4 (below), so it is reachable from the
-      # internet: keys only, and never root.
+      # The VM is reachable through `ix shell` and, where the client has IPv6,
+      # directly over its public IPv6 address: keys only, and never root.
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
       PermitRootLogin = "no";
@@ -128,13 +128,6 @@ in {
   '';
 
   ix.networking = {
-    # A public address, which is a real trade-off worth stating: mosh is UDP,
-    # and the two private paths to a VM do not carry it from this laptop --
-    # `ix net up <group>` is Linux-only, and `ix port-forward` is a debug
-    # tunnel for a single port rather than a session transport. A public IPv4
-    # plus key-only sshd is what makes one-command mosh work from a Mac.
-    ipv4 = true;
-
     expose = {
       # `firewall = false` because `services.openssh` opens 22 through its own
       # `openFirewall`; this entry is the port claim and the cross-node
