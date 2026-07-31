@@ -639,6 +639,10 @@ in {
     cargoLock
     units
     dashboardSite
+    # The devshell mirrors this into IX_VT_GHOSTTY_LIB_DIR (and darwin's
+    # DYLD_FALLBACK_LIBRARY_PATH) so plain `cargo test -p tui -p ix-vt`
+    # links and dlopens the same libghostty-vt the unit graph uses (#3118).
+    ghosttyLibDir
     ;
 
   /**

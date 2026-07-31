@@ -537,7 +537,7 @@
   dependency versions, and package builds. The filtered source keeps the Nix
   closure to Rust workspace inputs instead of the full repository.
 
-  `rustWorkspaceFor pkgs` returns `{ root; src; cargoLock; units; }` for the
+  `rustWorkspaceFor pkgs` returns `{ root; src; cargoLock; units; ghosttyLibDir; }` for the
   caller's package set. The default `rustWorkspace` uses the repo's
   `x86_64-linux` package set for image and module evaluation.
   */
