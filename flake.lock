@@ -220,17 +220,17 @@
     "jj-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1785487848,
-        "narHash": "sha256-PUbfsgaRMZmMHTPQP3Bbe0T/821Vdt+oW/7tRioBbyE=",
+        "lastModified": 1785490983,
+        "narHash": "sha256-+NPtSRz2kGjiDEEDqb7UnLFX+8X9Gjnnbf+E3pyIcvw=",
         "owner": "indexable-inc",
         "repo": "jj",
-        "rev": "13b0c7120ff86d66da9a86aa43be475a47c82f17",
+        "rev": "af48c0d50b540e7ff0b909e635098ffaefc2f007",
         "type": "github"
       },
       "original": {
         "owner": "indexable-inc",
         "repo": "jj",
-        "rev": "13b0c7120ff86d66da9a86aa43be475a47c82f17",
+        "rev": "af48c0d50b540e7ff0b909e635098ffaefc2f007",
         "type": "github"
       }
     },
