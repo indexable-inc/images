@@ -258,16 +258,24 @@
     costFloor = {
       topics = ["verification"];
       text = ''
-        Before calling something slow, derive its floor from the machine:
-        bytes moved over measured throughput, work units over cores times
-        measured per-unit cost. Report the floor and the ratio, not the
-        observed time. "872s against a 60s floor, 14x" says how much is
-        recoverable and when to stop; "872s" says neither, and near 1x there
-        is nothing to recover. Measure the constants on the device
-        (throughput to that disk and that endpoint, core count, memory
-        bandwidth), or the floor is a guess with arithmetic on it. Name the
-        resource you think is limiting: a floor from the wrong bottleneck is
-        worse than none, and an observed time below your floor means the
+        Before calling something slow or wasteful, derive the quantity it
+        should have had and report it beside the observed one, with the
+        ratio. A duration's floor comes from the machine: bytes moved over
+        measured throughput, work units over cores times measured per-unit
+        cost, with the constants measured on the device (throughput to that
+        disk and that endpoint, core count, memory bandwidth) or the floor
+        is a guess with arithmetic on it. A count's comes from the structure
+        and usually needs no run at all: how many derivations a four-file
+        change can reach, how many of those the cache already holds, how
+        many attributes get evaluated that the change cannot reach, how many
+        round trips and spawned processes. Compute the counts first, because
+        a profile apportions time inside the work that ran and is blind to
+        work that should not have run. "872s against a 60s floor, 14x" says
+        how much is recoverable and when to stop, and near 1x there is
+        nothing to recover; a count many times its expectation points at a
+        mechanism instead. Name the resource or the structural path you
+        think is binding: an expectation from the wrong model is worse than
+        none, and an observation on the impossible side of it means the
         model is wrong.
       '';
       reason = ''
@@ -275,11 +283,22 @@
         not separate a run near its physical limit from one with a defect,
         and neither could the agent that wrote the number. Sits beside
         nixPlanShape because that rule is this judgment applied to one tool,
-        and general before specific is the order a reader wants. Distinct
-        from firstPrinciples, which scopes itself to claims about behavior:
-        this one says which number to compute and report. Dropped a clause
-        asking for the breakdown as a stacked bar, since statusPageOutput
-        already owns the response surface.
+        and general before specific is the order a reader wants. Dropped a
+        clause asking for the breakdown as a stacked bar, since
+        statusPageOutput already owns the response surface.
+
+        Recast 2026-07-29 (ENG-11190) from a floor on time to an expectation
+        on any derived quantity, because the first version only covered time
+        against a rate. A count is the cheaper question and often the only
+        one that finds the defect: a change touching four files has a
+        computable set of dependents, so two thousand rebuilds is the finding
+        and no throughput analysis reaches it. Recast rather than added
+        beside, since a second rule restating this one is what the header
+        forbids. Still distinct from firstPrinciples: that rule says do not
+        inherit a claim about behavior from precedent, this one says which
+        number to compute and report. Merging them would put two unrelated
+        actions under one key and cost firstPrinciples its scope line against
+        style.
       '';
     };
   }
