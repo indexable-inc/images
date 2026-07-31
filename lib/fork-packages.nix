@@ -1205,6 +1205,25 @@
           upstream = "never";
           reason = "Fork-local test infrastructure, and specific to a test that exists only on this branch: it guards store-path-fingerprint.sh with TODO_NixOS because that lane gives the test no store directory it may write into, which its unregistered-content assertion requires. TODO_NixOS rather than needLocalStore because the fingerprint itself does work through a daemon store, measured on aarch64-darwin with 2.34.7+ix.gf200a3a8d492 against the live daemon under _NIX_TEST_BARF_ON_UNCACHEABLE=1: the cold eval copies once and a warm eval in a fresh process reports `cache hit in` on the same output path. So the index#4323 speedup does apply on daemon stores and no follow-up patch is owed on that axis. Verified on aarch64-darwin: store-path-fingerprint, fetchJj and jj-colocated all OK.";
         };
+        # The three commits below reconcile the in-process parallel evaluator
+        # with what it silently reverted when it was ported (ENG-11672). All
+        # three are `never` for the same underlying reason: they only make
+        # sense against a thunk protocol upstream does not have. The bug they
+        # describe does exist upstream OF THE PORT, in
+        # DeterminateSystems/nix-src, and goes there as a report a human sends,
+        # not as a PR this tool opens.
+        "libexpr: keep recoverable failures retryable after the parallel-eval port" = {
+          upstream = "never";
+          reason = "Reconciles upstream's recoverable errors (NixOS/nix 17f344cdd) with the ported parallel evaluator, whose value.hh predated them and reverted `mkFailed(exception_ptr, Value *)`, `Failed::recoveryValue` and the three `EvalState::handleEval*` helpers. Upstream already has the feature and has no pending/awaited thunk protocol to integrate it with, so there is nothing to send; the recovery is rebuilt as a fresh equivalent thunk carried on the finished `tFailed` value because `waitOnThunk()` asserts three times that a pending thunk never becomes a thunk again. Verified by nix_api_expr's nix_expr_thunk_re_evaluation_after_deployment passing again in both CI configurations (run 30668180224).";
+        };
+        "libexpr: rethrow a memoised failure as a clone again" = {
+          upstream = "never";
+          reason = "Restores `Value::Failed::rethrow()`, which upstream already carries and only this fork lost, via the same port: a bare `std::rethrow_exception` hands every force the one cached exception object, and adding a trace mutates it by reference, so a shared failing thunk accumulates a frame per attempt. Nothing to send upstream. DeterminateSystems/nix-src has the identical defect and commits the mutated trace as its expected output; that report is drafted and goes by hand (ENG-11672).";
+        };
+        "tests/functional: take the parallel evaluator's error positions" = {
+          upstream = "never";
+          reason = "Fork-local expectations for a fork-local evaluator: claiming a thunk overwrites the words holding its environment and expression, so an infinite recursion or stack overflow is reported at the forcing site rather than the recursive thunk's own expression. Five .err.exp files plus two misc.sh greps, each taken from DeterminateSystems/nix-src byte for byte after checking it against what our build printed. Upstream's positions are unchanged, so upstream would reject these. Ownership measured rather than assumed: 75202ed78 with no fix on top fails the same five tests in both configurations.";
+        };
       };
     }
     {
