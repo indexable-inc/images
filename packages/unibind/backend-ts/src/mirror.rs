@@ -73,19 +73,18 @@ pub fn render_mirror(record: &ir::Record, ctx: &TyCtx<'_>) -> Result<TokenStream
         });
 
         let read = quote!(value.#ident);
-        from.push(
-            convert::outward(&field.ty, ctx, &read).map_or_else(
-                || quote!(#ident: #read,),
-                |converted| quote!(#ident: #converted,),
-            ),
+        let widened = convert::outward(&field.ty, ctx, &read).map_or_else(
+            || quote!(#ident: #read,),
+            |converted| quote!(#ident: #converted,),
         );
+        from.push(widened);
+
         let take = quote!(self.#ident);
-        into.push(
-            convert::inward(&field.ty, ctx, &take).map_or_else(
-                || quote!(#ident: #take,),
-                |converted| quote!(#ident: #converted?,),
-            ),
+        let narrowed = convert::inward(&field.ty, ctx, &take).map_or_else(
+            || quote!(#ident: #take,),
+            |converted| quote!(#ident: #converted?,),
         );
+        into.push(narrowed);
     }
 
     Ok(quote! {

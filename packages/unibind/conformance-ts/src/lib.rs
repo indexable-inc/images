@@ -156,9 +156,7 @@ mod conformance {
 
     /// Sum unsigned amounts: the `Vec<u64>` argument position.
     pub fn sum_u64(values: Vec<u64>) -> u64 {
-        values
-            .iter()
-            .fold(0, |total, value| total.wrapping_add(*value))
+        values.into_iter().fold(0, u64::wrapping_add)
     }
 
     /// Echo an optional wide integer, defaulting to one past 2^53 when

@@ -159,10 +159,11 @@ pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
         return TokenStream::new();
     }
     let narrowers = kinds.iter().map(|kind| narrow_fn(*kind));
-    // A width can be reachable only through a record the interface declares
-    // but never mentions in a signature, whose conversions are then uncalled
-    // (see [`crate::mirror`]); that is the user's business, not dead glue to
-    // report.
+    // The `allow(dead_code)` here and on each narrower covers one shape: a
+    // width reachable only through a record the interface declares but never
+    // mentions in a signature, whose conversions are then legitimately
+    // uncalled (see `crate::mirror`). That is the user's business, not dead
+    // glue to report at them.
     quote! {
         /// A `bigint` JavaScript sent that the declared Rust width cannot
         /// hold. Deliberately not a `__unibind__:` reason: this is a caller
@@ -206,11 +207,7 @@ fn inbound_kinds(interface: &ir::Interface, mirrored: &[String]) -> Vec<ir::IntK
     }
     BIGINT_KINDS
         .into_iter()
-        .filter(|kind| {
-            found
-                .iter()
-                .any(|seen| seen.rust_name() == kind.rust_name())
-        })
+        .filter(|kind| found.iter().any(|seen| seen.rust_name() == kind.rust_name()))
         .collect()
 }
 
@@ -270,6 +267,7 @@ fn narrow_fn(kind: ir::IntKind) -> TokenStream {
     };
     quote! {
         #[doc = #doc]
+        #[allow(dead_code)]
         fn #name(value: ::napi::bindgen_prelude::BigInt) -> ::napi::Result<#target> {
             #read
             if !__unibind_exact {

@@ -214,6 +214,11 @@ crosses through a `#[napi(object)]` mirror struct the glue owns. The
 JavaScript shape and key names are identical either way; records that
 mention no 64-bit integer keep `#[napi(object)]` on the user's struct.
 
+One consequence to plan for on the JavaScript side: `JSON.stringify` throws
+on a `bigint`. A caller serializing a record with 64-bit fields needs a
+replacer (`String(value)` is the usual choice), which is the honest cost of
+not rounding the value in the first place.
+
 Phase 1 changes nothing in this table: the `.pyi` emitter renders these same
 rules (argument vs return position included) from the untouched IR.
 
