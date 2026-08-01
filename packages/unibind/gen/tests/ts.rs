@@ -288,10 +288,23 @@ fn bigint_only_integers_are_rejected() {
     assert!(error.message.contains("BigInt"), "{}", error.message);
 }
 
+/// A non-resource object with no constructor: instances only ever come from
+/// the export that returns them.
+fn returned_object(name: &str, doc: &str, methods: Vec<ir::Function>) -> ir::Object {
+    ir::Object {
+        name: name.to_owned(),
+        names: names(None, None),
+        docs: docs(&[doc]),
+        resource: false,
+        constructor: None,
+        methods,
+    }
+}
+
 /// An object whose methods stream and hand back another object: the shapes
-/// the ix SDK's `VmHandle` and `client.keys().create(...)` need, kept off
-/// the shared fixture so this states the rule rather than restating a
-/// snapshot.
+/// the ix SDK's `VmHandle` and `client.keys().create(...)` need. Kept off
+/// the shared fixture so these tests state their rule instead of restating
+/// a snapshot.
 fn namespaced_interface() -> ir::Interface {
     let meta = ir::Record {
         name: "Meta".to_owned(),
@@ -302,7 +315,7 @@ fn namespaced_interface() -> ir::Interface {
     let row = ir::Record {
         name: "Row".to_owned(),
         names: names(None, None),
-        docs: docs(&["A row, composing another record two ways."]),
+        docs: docs(&["A row composing another record two ways."]),
         fields: vec![
             field("meta", None, &[], ir::Type::Option(Box::new(named("Meta")))),
             field(
@@ -320,14 +333,6 @@ fn namespaced_interface() -> ir::Interface {
         ret: Some(owned_string()),
         ..function("create", None, &["Mint a key."], Vec::new())
     };
-    let keys = ir::Object {
-        name: "Keys".to_owned(),
-        names: names(None, None),
-        docs: docs(&["The keys namespace."]),
-        resource: false,
-        constructor: None,
-        methods: vec![create],
-    };
     let watch = ir::Function {
         ret: Some(ir::Type::Stream(Box::new(owned_string()))),
         ..function("watch", None, &["Every event, as a pull stream."], Vec::new())
@@ -336,16 +341,11 @@ fn namespaced_interface() -> ir::Interface {
         ret: Some(named("Keys")),
         ..function("keys", None, &["This client's keys namespace."], Vec::new())
     };
-    let client = ir::Object {
-        name: "Client".to_owned(),
-        names: names(None, None),
-        docs: docs(&["A client."]),
-        resource: false,
-        constructor: None,
-        methods: vec![watch, namespace],
-    };
     ir::Interface {
-        objects: vec![keys, client],
+        objects: vec![
+            returned_object("Keys", "The keys namespace.", vec![create]),
+            returned_object("Client", "A client.", vec![watch, namespace]),
+        ],
         records: vec![meta, row],
         functions: Vec::new(),
         errors: Vec::new(),
@@ -353,56 +353,39 @@ fn namespaced_interface() -> ir::Interface {
     }
 }
 
-/// The two host files for `interface`, keyed by the paths the emitter
-/// promises.
+/// The two host files for `interface`, in the order the emitter promises.
 fn emit(interface: &ir::Interface) -> (String, String) {
     let emitter = TsEmitter {
         addon: "sample_ts".to_owned(),
     };
     let files = emitter.emit(interface).expect("emits");
-    let read = |path: &str| {
-        let file = files
-            .iter()
-            .position(|file| file.path == path)
-            .unwrap_or_else(|| panic!("{path} was not emitted"));
-        files[file].contents.clone()
+    let [dts, js] = &files[..] else {
+        panic!("the ts emitter writes exactly index.d.ts and index.js");
     };
-    (read("index.d.ts"), read("index.js"))
+    (dts.contents.clone(), js.contents.clone())
 }
 
-/// A stream method types as `UnibindStream<T>` and pulls the shared stream
-/// declaration in, even though no free function streams.
+/// What an object's methods hand back. A stream types as the shared
+/// `UnibindStream<T>` (and pulls its declaration in even though no free
+/// function streams), and an object return arrives as the wrapper class:
+/// a bare native handle decodes no errors and has no disposal, so the
+/// `.d.ts` would be declaring something the runtime never produced.
 #[test]
-fn a_stream_method_types_and_wraps_like_a_stream_function() {
+fn object_methods_wrap_their_stream_and_object_returns() {
     let (dts, js) = emit(&namespaced_interface());
-    assert!(
-        dts.contains("export interface UnibindStream<T> extends AsyncIterable<T>"),
-        "a method-only stream did not pull in the stream declaration:\n{dts}"
-    );
-    assert!(
-        dts.contains("  watch(): UnibindStream<string>;"),
-        "the stream method is mistyped:\n{dts}"
-    );
-    assert!(
-        js.contains("return wrapStream(this.#handle.watch(...args));"),
-        "the stream method hands back the raw native handle:\n{js}"
-    );
-}
-
-/// A method returning an object hands back the wrapper class, not the bare
-/// native handle: the handle decodes no errors and has no disposal, so
-/// `index.d.ts` would be declaring something the runtime never produced.
-#[test]
-fn a_method_returning_an_object_hands_back_the_wrapper_class() {
-    let (dts, js) = emit(&namespaced_interface());
-    assert!(
-        dts.contains("  keys(): Keys;"),
-        "the namespacing method is mistyped:\n{dts}"
-    );
-    assert!(
-        js.contains("return new Keys(nativeHandle, this.#handle.keys(...args));"),
-        "the namespacing method hands back the raw native handle:\n{js}"
-    );
+    for declared in [
+        "export interface UnibindStream<T> extends AsyncIterable<T>",
+        "  watch(): UnibindStream<string>;",
+        "  keys(): Keys;",
+    ] {
+        assert!(dts.contains(declared), "`{declared}` is missing:\n{dts}");
+    }
+    for wrapped in [
+        "return wrapStream(this.#handle.watch(...args));",
+        "return new Keys(nativeHandle, this.#handle.keys(...args));",
+    ] {
+        assert!(js.contains(wrapped), "`{wrapped}` is missing:\n{js}");
+    }
 }
 
 /// Records compose: another record under `Option` (optional in both
@@ -410,12 +393,7 @@ fn a_method_returning_an_object_hands_back_the_wrapper_class() {
 #[test]
 fn records_compose_under_option_and_as_map_values() {
     let (dts, _) = emit(&namespaced_interface());
-    assert!(
-        dts.contains("  meta?: Meta | null;"),
-        "an optional record field is mistyped:\n{dts}"
-    );
-    assert!(
-        dts.contains("  metaByKey: Record<string, Meta>;"),
-        "a record-valued map is mistyped:\n{dts}"
-    );
+    for declared in ["  meta?: Meta | null;", "  metaByKey: Record<string, Meta>;"] {
+        assert!(dts.contains(declared), "`{declared}` is missing:\n{dts}");
+    }
 }
