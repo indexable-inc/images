@@ -106,9 +106,46 @@ In index, put the pinned driver on PATH directly:
 nix build .#llm-clippy --no-link --print-out-paths   # then PATH=<out>/bin:$PATH
 ```
 
-ix exposes no such output -- `just lint` does not cover Rust there at all
-(clippy runs in the `rust` CI phase, per cargo-unit crate). Reach it through
-the unit build rather than a bare `cargo clippy`.
+ix exposes no such output, and `just lint` does not cover Rust there at all.
+
+### On ix, clippy does not gate ix's own crates
+
+Do not reach for `nix build .#ciChecks.<system>.rust-<crate>.clippy` on ix. The
+attribute evaluates and builds, so it looks like the gate, and nothing in the
+required job set realizes it. An agent who runs it gets a real answer to a
+question CI never asks, and an agent who skips it loses nothing.
+
+Unrealized by construction rather than by accident, in
+`nix/packages/workspace-rust-ci.nix`:
+
+```nix
+clippyChecksByPackage = allBuildWorkspace.clippyByPackage;   # :497, computed
+
+pkgs.runCommand "rust-workspace-build" {
+  deps = allMainAndBinaryRoots ++ builtins.attrValues allTestChecksByTarget;
+}                                                            # :769, no clippy
+
+checks = { rust-checks-all = build; } // kvmChecks;          # :820
+```
+
+`clippyChecksByPackage` is computed and exported in the top-level `inherit`
+(:801) and never appears in `build.deps`. So `rust-checks-all`, the required
+Rust gate, carries 442 `cargo-unit-nextest-*` derivations and zero clippy runs.
+The only clippy in its closure is the driver itself,
+`clippy-preview-...-nightly` and its tarball: fetched into the build
+environment, never invoked.
+
+**index's crates are covered, and by a mechanism worth copying rather than
+reinventing.** ix#9288 folded `index.requiredGateRoots` into ix's required set,
+and each `index-rust-<crate>` aggregate pulls that crate's clippy in as a build
+dependency. That is why an `ix2nix-clippy` or `roots-clippy` failure can block a
+pull request while an ix-owned crate's clippy runs nowhere. The vendored tree
+has better Rust coverage than the repo vendoring it.
+
+Practical consequence while that stands: for an ix-owned crate, a local run is
+the only clippy anyone will do. That does not make a stock `cargo clippy` into
+evidence, for the reasons above, but it does mean the differential is worth
+running rather than deferring to a gate that is not there.
 
 ## A green `nix run .#lint` does not mean the clone gate is green
 
