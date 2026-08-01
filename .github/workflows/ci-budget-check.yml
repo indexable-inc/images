@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # ensure-tools resolves `nixpkgs#` attrs through the runner's nix client,
+  # which needs the flake CLI enabled. Only those two features: this job does
+  # not evaluate this repo's flake.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+
 jobs:
   classify:
     permissions:
@@ -23,10 +30,18 @@ jobs:
 
   test:
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-ci-budget-check', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # The hosted image shipped both interpreters; the ix-ci-run runner PATH
+      # is bash, coreutils, dash, git, github-runner, tar, gzip, nix and unzip,
+      # so the two `run:` steps below would die 127 without this. `node=nodejs`
+      # because the command and the nixpkgs attr differ.
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: python3 node=nodejs
       - name: Check read-only workflow output
         env:
           BIG_CHANGE: ${{ needs.classify.outputs.big_change }}

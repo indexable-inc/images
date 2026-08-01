@@ -30,7 +30,10 @@ concurrency:
 
 jobs:
   heartbeat:
-    runs-on: ubuntu-latest
+    # Both steps are JavaScript actions, which the runner binary supplies its
+    # own node for, so this needs nothing from the runner PATH and the claim is
+    # the whole change.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-scheduled-workflow-heartbeat', github.run_id, github.run_attempt) }}"]
     # One API sweep over ~10 workflows; the sibling watchdogs of this shape run
     # well under a minute. 10m floor.
     timeout-minutes: 10
