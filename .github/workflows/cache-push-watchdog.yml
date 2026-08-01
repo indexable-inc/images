@@ -84,6 +84,13 @@ permissions:
   actions: write
   issues: write
 
+env:
+  # The `nix build` below resolves a `nixpkgs#` attr through the runner's nix
+  # client, which needs the flake CLI enabled. Only those two features: this job
+  # does not evaluate this repo's flake.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+
 concurrency:
   # One watchdog at a time; a slow API pass must not overlap the next tick and
   # double-cancel. cancel-in-progress keeps the newest check authoritative --
@@ -96,7 +103,12 @@ concurrency:
 jobs:
   watch:
     name: watch (${{ matrix.workflow }})
-    runs-on: ubuntu-latest
+    # Suffix deliberately extends past `-cache-push`: the dispatcher grants the
+    # ix-public push credential on `label.ends_with("-cache-push")` (see
+    # ci-dispatcher spawn.rs / credential_gate.rs, and the error text in
+    # cache-push.yml that depends on it), and a watchdog that only reads run
+    # state and files an issue has no business holding a fleet signing key.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-cache-push-watchdog', github.run_id, github.run_attempt) }}"]
     timeout-minutes: 10
     strategy:
       # A wedged lane must not cancel the sweep of the healthy one.
@@ -140,6 +152,22 @@ jobs:
       - name: Detect and heal publish-lane wedges
         run: |
           set -euo pipefail
+
+          # The ix-ci-run runner PATH carries bash, coreutils, dash, git,
+          # github-runner, tar, gzip, nix and unzip -- no gh and no jq, both of
+          # which this step uses throughout. Fetched inline rather than through
+          # ./.github/actions/ensure-tools because this job deliberately has no
+          # checkout step, so a local composite action is out of reach.
+          #
+          # Assigned first, then read: a process substitution's exit status is
+          # invisible to `set -e`, so a failed `nix build` would leave PATH
+          # untouched and surface later as `gh: command not found` -- and this
+          # watchdog reports health, so a tool it cannot find must not read as
+          # a healthy lane.
+          tools="$(nix build --no-link --print-out-paths nixpkgs#gh nixpkgs#jq)"
+          while read -r tool; do
+            PATH="${tool}/bin:${PATH}"
+          done <<<"${tools}"
 
           issue_marker="<!-- ${MARKER} -->"
           issue_title="cache-push watchdog: ${WORKFLOW_FILE} pipeline wedged"
