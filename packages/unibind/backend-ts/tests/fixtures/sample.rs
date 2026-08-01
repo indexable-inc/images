@@ -4,13 +4,6 @@ mod sample_ts {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
-    /// Row provenance.
-    #[unibind::record]
-    #[derive(Clone)]
-    pub struct Meta {
-        pub source: String,
-    }
-
     /// A row.
     #[unibind::record(ts(name = "SampleRow"))]
     #[derive(Clone)]
@@ -23,10 +16,6 @@ mod sample_ts {
         pub weights: HashMap<String, f64>,
         pub blob: Vec<u8>,
         pub home: Option<PathBuf>,
-        /// A record inside a record, optional on both sides.
-        pub meta: Option<Meta>,
-        /// Records as map values.
-        pub meta_by_key: HashMap<String, Meta>,
     }
 
     /// Boundary failures.
@@ -129,30 +118,6 @@ mod sample_ts {
         #[unibind(ts(name = "addSlowly"))]
         pub async fn add(&self, amount: i64) -> Result<i64, SampleError> {
             Ok(self.total.fetch_add(amount, Ordering::Relaxed) + amount)
-        }
-
-        /// Every value the counter takes.
-        pub fn watch(&self) -> unibind_runtime::UniStream<i64> {
-            unibind_runtime::UniStream::new(futures::stream::iter(Vec::new()))
-        }
-
-        /// Labels under `prefix` (async, throwing, renamed).
-        #[unibind(ts(name = "tailRows"))]
-        pub async fn tail(
-            &self,
-            prefix: String,
-            #[unibind(default = 10)] limit: u32,
-        ) -> Result<unibind_runtime::UniStream<String>, SampleError> {
-            let labels = (0..limit).map(move |index| format!("{prefix}{index}"));
-            Ok(unibind_runtime::UniStream::new(futures::stream::iter(labels)))
-        }
-
-        /// Fork a counter.
-        pub fn fork(&self) -> Counter {
-            Counter {
-                total: AtomicI64::new(self.value()),
-                open: AtomicBool::new(true),
-            }
         }
 
         /// Release the counter.

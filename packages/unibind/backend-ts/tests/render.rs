@@ -3,6 +3,11 @@
 //! on drift the test prints the new content to copy over the snapshot file.
 //! (trybuild/macrotest would invoke cargo at test runtime, which the nix
 //! test sandbox cannot do, so the render output is snapshotted directly.)
+//!
+//! Rules that hold across interfaces -- how a class is named, what a return
+//! is wrapped in -- are asserted on their own small lowered modules instead,
+//! so the rule is stated where it is checked rather than left for a reader
+//! to infer from a 300-line snapshot.
 
 use unibind_core::ir;
 use unibind_test_support::{assert_ir_json_snapshot, assert_render_snapshot, lower_module_source};
@@ -30,30 +35,81 @@ fn napi_glue_snapshot() {
     assert_render_snapshot!(interface, rendered, GLUE_SNAPSHOT, "sample.ts.rs");
 }
 
-/// Every stream-returning export gets its own handle class, scoped by its
-/// owner: the fixture's free `tail` and `Counter::tail` are both streams,
-/// and one class named for both would silently misbind them.
+/// The rendered glue as readable Rust, for tests that assert on one item
+/// rather than on the whole committed snapshot.
+fn glue_source(source: &str) -> String {
+    let interface = lower_module_source(source);
+    let rendered = unibind_backend_ts::render(&interface).expect("renders");
+    let file: syn::File = syn::parse2(rendered.glue).expect("glue parses");
+    prettyplease::unparse(&file)
+}
+
+/// Every stream-returning export gets its own handle class, named for its
+/// owner. A free `tail` and a `Store::tail` are both streams, and one class
+/// serving both would silently misbind them.
 #[test]
 fn stream_classes_are_owner_scoped() {
-    let glue = unibind_backend_ts::render(&interface())
-        .expect("renders")
-        .glue
-        .to_string();
-    for class in [
-        "__UnibindStreamTail",
-        "__UnibindStreamTailLater",
-        "__UnibindStreamCounterWatch",
-        "__UnibindStreamCounterTail",
-    ] {
-        // The declaration, not the bare name: `__UnibindStreamTail` is a
-        // prefix of `__UnibindStreamTailLater`, so a bare `contains` would
-        // pass on the wrong class.
+    let glue = glue_source(
+        "mod m {
+            #[unibind::object]
+            pub struct Store {}
+
+            impl Store {
+                pub fn tail(&self) -> unibind_runtime::UniStream<i64> {
+                    todo!()
+                }
+            }
+
+            pub fn tail() -> unibind_runtime::UniStream<i64> {
+                todo!()
+            }
+        }",
+    );
+    for class in ["__UnibindStreamTail", "__UnibindStreamStoreTail"] {
+        // The declaration, not the bare name: one class name can be a
+        // prefix of another, and a bare `contains` would pass on the wrong
+        // one.
         let declaration = format!("pub struct {class} {{");
         assert!(
             glue.contains(&declaration),
-            "`{class}` is missing from the glue"
+            "`{class}` is missing from the glue:\n{glue}"
         );
     }
+    assert!(
+        glue.contains("__UnibindStreamStoreTail::__unibind_from"),
+        "the method does not wrap its stream in the owner-scoped class:\n{glue}"
+    );
+}
+
+/// A method returning another object crosses as that object's handle
+/// class, which is what makes `client.keys().create(...)` chain.
+#[test]
+fn a_method_returning_an_object_crosses_as_its_handle() {
+    let glue = glue_source(
+        "mod m {
+            #[unibind::object]
+            pub struct Keys {}
+
+            impl Keys {
+                pub fn create(&self) -> String {
+                    todo!()
+                }
+            }
+
+            #[unibind::object]
+            pub struct Client {}
+
+            impl Client {
+                pub fn keys(&self) -> Keys {
+                    todo!()
+                }
+            }
+        }",
+    );
+    assert!(
+        glue.contains("__UnibindObjectKeys::__unibind_from"),
+        "`Client::keys` does not wrap its return in the Keys handle:\n{glue}"
+    );
 }
 
 /// The ts backend names its unsupported surface instead of miscompiling.

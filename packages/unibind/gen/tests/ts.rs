@@ -40,14 +40,6 @@ fn named(name: &str) -> ir::Type {
     ir::Type::Named(name.to_owned())
 }
 
-/// The only map shape the ts backend carries: string keys.
-fn string_map(value: ir::Type) -> ir::Type {
-    ir::Type::Map {
-        key: Box::new(owned_string()),
-        value: Box::new(value),
-    }
-}
-
 fn sample_functions() -> Vec<ir::Function> {
     let rows = ir::Function {
         ret: Some(ir::Type::Vec(Box::new(named("Row")))),
@@ -149,13 +141,7 @@ fn sample_functions() -> Vec<ir::Function> {
 }
 
 fn sample_records() -> Vec<ir::Record> {
-    let meta = ir::Record {
-        name: "Meta".to_owned(),
-        names: names(None, None),
-        docs: docs(&["Row provenance."]),
-        fields: vec![field("source", None, &[], owned_string())],
-    };
-    let row = ir::Record {
+    vec![ir::Record {
         name: "Row".to_owned(),
         names: names(None, Some("SampleRow")),
         docs: docs(&["A row."]),
@@ -172,7 +158,10 @@ fn sample_records() -> Vec<ir::Record> {
                 "weights",
                 None,
                 &[],
-                string_map(ir::Type::Float(ir::FloatKind::F64)),
+                ir::Type::Map {
+                    key: Box::new(owned_string()),
+                    value: Box::new(ir::Type::Float(ir::FloatKind::F64)),
+                },
             ),
             field("blob", None, &[], ir::Type::Bytes { owned: true }),
             field(
@@ -181,11 +170,8 @@ fn sample_records() -> Vec<ir::Record> {
                 &[],
                 ir::Type::Option(Box::new(ir::Type::Path { owned: true })),
             ),
-            field("meta", None, &[], ir::Type::Option(Box::new(named("Meta")))),
-            field("meta_by_key", None, &[], string_map(named("Meta"))),
         ],
-    };
-    vec![meta, row]
+    }]
 }
 
 fn sample_errors() -> Vec<ir::ErrorType> {
@@ -239,32 +225,6 @@ fn sample_objects() -> Vec<ir::Object> {
             vec![arg("amount", ir::Type::Int(ir::IntKind::I64), None)],
         )
     };
-    let watch = ir::Function {
-        ret: Some(ir::Type::Stream(Box::new(ir::Type::Int(ir::IntKind::I64)))),
-        ..function("watch", None, &["Every value the counter takes."], Vec::new())
-    };
-    let tail = ir::Function {
-        asyncness: ir::Asyncness::Async,
-        ret: Some(ir::Type::Stream(Box::new(owned_string()))),
-        throws: Some("SampleError".to_owned()),
-        ..function(
-            "tail",
-            Some("tailRows"),
-            &["Labels under `prefix` (async, throwing, renamed)."],
-            vec![
-                arg("prefix", owned_string(), None),
-                arg(
-                    "limit",
-                    ir::Type::Int(ir::IntKind::U32),
-                    Some(ir::Literal::Int(10)),
-                ),
-            ],
-        )
-    };
-    let fork = ir::Function {
-        ret: Some(named("Counter")),
-        ..function("fork", None, &["Fork a counter."], Vec::new())
-    };
     let close = ir::Function {
         asyncness: ir::Asyncness::Async,
         ..function("close", None, &["Release the counter."], Vec::new())
@@ -275,7 +235,7 @@ fn sample_objects() -> Vec<ir::Object> {
         docs: docs(&["A counter resource."]),
         resource: true,
         constructor: Some(constructor),
-        methods: vec![value, add, watch, tail, fork, close],
+        methods: vec![value, add, close],
     }]
 }
 
@@ -326,4 +286,136 @@ fn bigint_only_integers_are_rejected() {
     };
     let error = emitter.emit(&bad).expect_err("u64 must not emit");
     assert!(error.message.contains("BigInt"), "{}", error.message);
+}
+
+/// An object whose methods stream and hand back another object: the shapes
+/// the ix SDK's `VmHandle` and `client.keys().create(...)` need, kept off
+/// the shared fixture so this states the rule rather than restating a
+/// snapshot.
+fn namespaced_interface() -> ir::Interface {
+    let meta = ir::Record {
+        name: "Meta".to_owned(),
+        names: names(None, None),
+        docs: docs(&["Row provenance."]),
+        fields: vec![field("source", None, &[], owned_string())],
+    };
+    let row = ir::Record {
+        name: "Row".to_owned(),
+        names: names(None, None),
+        docs: docs(&["A row, composing another record two ways."]),
+        fields: vec![
+            field("meta", None, &[], ir::Type::Option(Box::new(named("Meta")))),
+            field(
+                "meta_by_key",
+                None,
+                &[],
+                ir::Type::Map {
+                    key: Box::new(owned_string()),
+                    value: Box::new(named("Meta")),
+                },
+            ),
+        ],
+    };
+    let create = ir::Function {
+        ret: Some(owned_string()),
+        ..function("create", None, &["Mint a key."], Vec::new())
+    };
+    let keys = ir::Object {
+        name: "Keys".to_owned(),
+        names: names(None, None),
+        docs: docs(&["The keys namespace."]),
+        resource: false,
+        constructor: None,
+        methods: vec![create],
+    };
+    let watch = ir::Function {
+        ret: Some(ir::Type::Stream(Box::new(owned_string()))),
+        ..function("watch", None, &["Every event, as a pull stream."], Vec::new())
+    };
+    let namespace = ir::Function {
+        ret: Some(named("Keys")),
+        ..function("keys", None, &["This client's keys namespace."], Vec::new())
+    };
+    let client = ir::Object {
+        name: "Client".to_owned(),
+        names: names(None, None),
+        docs: docs(&["A client."]),
+        resource: false,
+        constructor: None,
+        methods: vec![watch, namespace],
+    };
+    ir::Interface {
+        objects: vec![keys, client],
+        records: vec![meta, row],
+        functions: Vec::new(),
+        errors: Vec::new(),
+        ..interface()
+    }
+}
+
+/// The two host files for `interface`, keyed by the paths the emitter
+/// promises.
+fn emit(interface: &ir::Interface) -> (String, String) {
+    let emitter = TsEmitter {
+        addon: "sample_ts".to_owned(),
+    };
+    let files = emitter.emit(interface).expect("emits");
+    let read = |path: &str| {
+        let file = files
+            .iter()
+            .position(|file| file.path == path)
+            .unwrap_or_else(|| panic!("{path} was not emitted"));
+        files[file].contents.clone()
+    };
+    (read("index.d.ts"), read("index.js"))
+}
+
+/// A stream method types as `UnibindStream<T>` and pulls the shared stream
+/// declaration in, even though no free function streams.
+#[test]
+fn a_stream_method_types_and_wraps_like_a_stream_function() {
+    let (dts, js) = emit(&namespaced_interface());
+    assert!(
+        dts.contains("export interface UnibindStream<T> extends AsyncIterable<T>"),
+        "a method-only stream did not pull in the stream declaration:\n{dts}"
+    );
+    assert!(
+        dts.contains("  watch(): UnibindStream<string>;"),
+        "the stream method is mistyped:\n{dts}"
+    );
+    assert!(
+        js.contains("return wrapStream(this.#handle.watch(...args));"),
+        "the stream method hands back the raw native handle:\n{js}"
+    );
+}
+
+/// A method returning an object hands back the wrapper class, not the bare
+/// native handle: the handle decodes no errors and has no disposal, so
+/// `index.d.ts` would be declaring something the runtime never produced.
+#[test]
+fn a_method_returning_an_object_hands_back_the_wrapper_class() {
+    let (dts, js) = emit(&namespaced_interface());
+    assert!(
+        dts.contains("  keys(): Keys;"),
+        "the namespacing method is mistyped:\n{dts}"
+    );
+    assert!(
+        js.contains("return new Keys(nativeHandle, this.#handle.keys(...args));"),
+        "the namespacing method hands back the raw native handle:\n{js}"
+    );
+}
+
+/// Records compose: another record under `Option` (optional in both
+/// directions) and as a map value.
+#[test]
+fn records_compose_under_option_and_as_map_values() {
+    let (dts, _) = emit(&namespaced_interface());
+    assert!(
+        dts.contains("  meta?: Meta | null;"),
+        "an optional record field is mistyped:\n{dts}"
+    );
+    assert!(
+        dts.contains("  metaByKey: Record<string, Meta>;"),
+        "a record-valued map is mistyped:\n{dts}"
+    );
 }
