@@ -239,35 +239,6 @@ mod __unibind_ts_sample_ts {
         let value = super::sample_ts::tail(store.as_str());
         __UnibindStreamTail::__unibind_from(value)
     }
-    ///Pull handle over the stream returned by `tail`.
-    #[::napi_derive::napi(js_name = "TailStream")]
-    pub struct __UnibindStreamTail {
-        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
-    }
-    impl __UnibindStreamTail {
-        fn __unibind_from(
-            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
-        ) -> Self {
-            Self {
-                stream: ::unibind_runtime::PullStream::new(stream),
-            }
-        }
-    }
-    #[::napi_derive::napi]
-    impl __UnibindStreamTail {
-        /// The next element, or `null` once the stream ends or closes.
-        #[::napi_derive::napi]
-        pub async fn next(&self) -> ::std::option::Option<__UnibindRecordRow> {
-            let value = self.stream.next().await?;
-            ::std::option::Option::Some(__UnibindRecordRow::__unibind_from(value))
-        }
-        /// Drop the stream early; a pull in flight resolves `null`, and
-        /// the producer sees its stream dropped.
-        #[::napi_derive::napi]
-        pub fn close(&self) {
-            self.stream.close();
-        }
-    }
     ///Tail rows once the store opens (an async stream function).
     #[::napi_derive::napi]
     pub async fn tail_later(
@@ -288,35 +259,6 @@ mod __unibind_ts_sample_ts {
             ::std::result::Result::Err(error) => {
                 ::std::result::Result::Err(::napi::Error::from(error))
             }
-        }
-    }
-    ///Pull handle over the stream returned by `tail_later`.
-    #[::napi_derive::napi(js_name = "TailLaterStream")]
-    pub struct __UnibindStreamTailLater {
-        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
-    }
-    impl __UnibindStreamTailLater {
-        fn __unibind_from(
-            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
-        ) -> Self {
-            Self {
-                stream: ::unibind_runtime::PullStream::new(stream),
-            }
-        }
-    }
-    #[::napi_derive::napi]
-    impl __UnibindStreamTailLater {
-        /// The next element, or `null` once the stream ends or closes.
-        #[::napi_derive::napi]
-        pub async fn next(&self) -> ::std::option::Option<__UnibindRecordRow> {
-            let value = self.stream.next().await?;
-            ::std::option::Option::Some(__UnibindRecordRow::__unibind_from(value))
-        }
-        /// Drop the stream early; a pull in flight resolves `null`, and
-        /// the producer sees its stream dropped.
-        #[::napi_derive::napi]
-        pub fn close(&self) {
-            self.stream.close();
         }
     }
     ///Open a counter from a free function (the non-constructor path).
@@ -413,6 +355,64 @@ mod __unibind_ts_sample_ts {
             if !self.closed.load(::std::sync::atomic::Ordering::SeqCst) {
                 ::std::eprintln!("unclosed Counter: call close() or use `await using`");
             }
+        }
+    }
+    ///Pull handle over the stream returned by `tail`.
+    #[::napi_derive::napi(js_name = "TailStream")]
+    pub struct __UnibindStreamTail {
+        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
+    }
+    impl __UnibindStreamTail {
+        fn __unibind_from(
+            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
+        ) -> Self {
+            Self {
+                stream: ::unibind_runtime::PullStream::new(stream),
+            }
+        }
+    }
+    #[::napi_derive::napi]
+    impl __UnibindStreamTail {
+        /// The next element, or `null` once the stream ends or closes.
+        #[::napi_derive::napi]
+        pub async fn next(&self) -> ::std::option::Option<__UnibindRecordRow> {
+            let value = self.stream.next().await?;
+            ::std::option::Option::Some(__UnibindRecordRow::__unibind_from(value))
+        }
+        /// Drop the stream early; a pull in flight resolves `null`, and
+        /// the producer sees its stream dropped.
+        #[::napi_derive::napi]
+        pub fn close(&self) {
+            self.stream.close();
+        }
+    }
+    ///Pull handle over the stream returned by `tail_later`.
+    #[::napi_derive::napi(js_name = "TailLaterStream")]
+    pub struct __UnibindStreamTailLater {
+        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
+    }
+    impl __UnibindStreamTailLater {
+        fn __unibind_from(
+            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
+        ) -> Self {
+            Self {
+                stream: ::unibind_runtime::PullStream::new(stream),
+            }
+        }
+    }
+    #[::napi_derive::napi]
+    impl __UnibindStreamTailLater {
+        /// The next element, or `null` once the stream ends or closes.
+        #[::napi_derive::napi]
+        pub async fn next(&self) -> ::std::option::Option<__UnibindRecordRow> {
+            let value = self.stream.next().await?;
+            ::std::option::Option::Some(__UnibindRecordRow::__unibind_from(value))
+        }
+        /// Drop the stream early; a pull in flight resolves `null`, and
+        /// the producer sees its stream dropped.
+        #[::napi_derive::napi]
+        pub fn close(&self) {
+            self.stream.close();
         }
     }
 }
