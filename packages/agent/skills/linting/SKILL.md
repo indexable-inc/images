@@ -78,6 +78,28 @@ function over the hundred-line limit.
 So check the exit code, never the absence of a string in a log. `grep -c error`
 returning zero is not a pass when the exit code was 101.
 
+### And an empty run is the good case; the bad one is a full one
+
+On 2026-08-01 the same command produced the opposite shape, which is worse. An
+agent ran `cargo clippy -p ix2nix -- -D clippy::doc_markdown` to confirm a CI
+clippy failure was fixed. Stock clippy raised `E0602` for both fork lints, as
+above, **and then emitted fourteen `doc_markdown` findings anyway**, in
+`lib.rs`, `ty.rs`, `map.rs`, `checker.rs` and `schema.rs`.
+
+The crate's CI clippy check was green before that day's change, so the forked
+driver flags none of those fourteen. They are the stock driver's findings for a
+lint both drivers implement and disagree about.
+
+So the abort does not reliably leave you with nothing. It can leave you with a
+plausible, non-empty, entirely irrelevant report, and a report is far more
+convincing than silence. An agent reading it would either chase fourteen
+phantom defects or, having fixed the real one, conclude from the remaining
+thirteen that the fix had failed.
+
+The rule that survives both shapes: a stock clippy run is not evidence about
+this repo's clippy, whatever it prints. Only the forked driver or the per-crate
+gate answers the question.
+
 In index, put the pinned driver on PATH directly:
 
 ```sh
