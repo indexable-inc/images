@@ -353,8 +353,14 @@ fn namespaced_interface() -> ir::Interface {
     }
 }
 
-/// The two host files for `interface`, in the order the emitter promises.
-fn emit(interface: &ir::Interface) -> (String, String) {
+/// The two host files the ts emitter writes for one interface.
+struct HostFiles {
+    dts: String,
+    js: String,
+}
+
+/// Emit `interface`, in the file order the emitter promises.
+fn emit(interface: &ir::Interface) -> HostFiles {
     let emitter = TsEmitter {
         addon: "sample_ts".to_owned(),
     };
@@ -362,7 +368,10 @@ fn emit(interface: &ir::Interface) -> (String, String) {
     let [dts, js] = &files[..] else {
         panic!("the ts emitter writes exactly index.d.ts and index.js");
     };
-    (dts.contents.clone(), js.contents.clone())
+    HostFiles {
+        dts: dts.contents.clone(),
+        js: js.contents.clone(),
+    }
 }
 
 /// What an object's methods hand back. A stream types as the shared
@@ -372,7 +381,7 @@ fn emit(interface: &ir::Interface) -> (String, String) {
 /// `.d.ts` would be declaring something the runtime never produced.
 #[test]
 fn object_methods_wrap_their_stream_and_object_returns() {
-    let (dts, js) = emit(&namespaced_interface());
+    let HostFiles { dts, js } = emit(&namespaced_interface());
     for declared in [
         "export interface UnibindStream<T> extends AsyncIterable<T>",
         "  watch(): UnibindStream<string>;",
@@ -392,7 +401,7 @@ fn object_methods_wrap_their_stream_and_object_returns() {
 /// directions) and as a map value.
 #[test]
 fn records_compose_under_option_and_as_map_values() {
-    let (dts, _) = emit(&namespaced_interface());
+    let HostFiles { dts, .. } = emit(&namespaced_interface());
     for declared in ["  meta?: Meta | null;", "  metaByKey: Record<string, Meta>;"] {
         assert!(dts.contains(declared), "`{declared}` is missing:\n{dts}");
     }
