@@ -321,6 +321,62 @@ impl Fixture {
         Self::with_redirects(root, upstream, fork)
     }
 
+    /// The home-manager shape that a naive second-parent walk gets wrong: the
+    /// patch on the branch has been RETITLED since the revision a flake.lock
+    /// still pins, and that revision is merged back for ancestry alone with
+    /// `-s ours`.
+    ///
+    /// [`Fixture::merge_forwarded`] gives the merged-back revision the same
+    /// subject as the branch's, so a subject filter alone hides it. Real
+    /// home-manager does not: the branch says "files: batch link creation and
+    /// target checks" where the pinned revision says "files: batch symlink
+    /// creation and target checks in activation". Only the merge's TREE
+    /// distinguishes them, and reading them as patches is ENG-11646.
+    pub fn retitled_pinned_revision(root: &Path, old: (&str, &str), new: (&str, &str)) -> Self {
+        let upstream = init_upstream(root);
+        let fork = root.join("fork");
+        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
+        let base = git(&fork, &["rev-parse", "main"]);
+
+        // The revision a lock still pins, under the subject it had then.
+        let (subject, body) = old;
+        git(&fork, &["checkout", "--quiet", "-b", "pinned", &base]);
+        fs::write(fork.join("patch.txt"), format!("{subject}\nearlier\n")).unwrap();
+        git(&fork, &["add", "."]);
+        git(
+            &fork,
+            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
+        );
+        let pinned = git(&fork, &["rev-parse", "HEAD"]);
+
+        // The branch's own copy, retitled.
+        let (subject, body) = new;
+        git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
+        fs::write(fork.join("patch.txt"), format!("{subject}\n")).unwrap();
+        git(&fork, &["add", "."]);
+        git(
+            &fork,
+            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
+        );
+
+        // `-s ours` keeps the branch's tree, which is what reconciling an
+        // equivalent revision does and what makes this merge ancestry-only.
+        git(
+            &fork,
+            &[
+                "merge",
+                "--quiet",
+                "--no-ff",
+                "-s",
+                "ours",
+                &pinned,
+                "-m",
+                "Merge the revision a lock still pins (ancestry only)",
+            ],
+        );
+        Self::with_redirects(root, upstream, fork)
+    }
+
     /// The scratch global gitconfig that redirects the https URLs the binaries
     /// use at the local fixture repos.
     fn with_redirects(root: &Path, upstream: PathBuf, fork: PathBuf) -> Self {
