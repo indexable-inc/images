@@ -79,7 +79,11 @@ test("records compose: a record under Option, and records as map values", () => 
     sourceBlob: [],
     byPath: {},
   });
-  assert.equal(headless.head, null, "an omitted Option<Record> reads back as null");
+  // napi returns `None` as an absent property, not an explicit null, which
+  // is why `index.d.ts` declares the field optional (`head?:`) rather than
+  // only nullable.
+  assert.equal(headless.head, undefined, "an omitted Option<Record> came back set");
+  assert.equal(Object.hasOwn(headless, "head"), false, "the absent field was materialized");
   assert.deepEqual(headless.byPath, {}, "an empty record map stays empty");
 });
 

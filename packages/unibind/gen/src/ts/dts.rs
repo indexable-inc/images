@@ -81,9 +81,11 @@ fn record_decl(
         doc_block(out, "  ", &field.docs);
         let name = value_name(&field.name, &field.names);
         let entry = match &field.ty {
-            // napi reads a missing property as `None` and writes `None`
-            // back as `null`, so `Option` fields are optional in both
-            // directions.
+            // napi reads a missing property (or an explicit null) as
+            // `None`, and returns `None` as an absent property -- not as an
+            // explicit null, which the conformance suite pins. So the
+            // declaration needs both halves: `?` for what comes back, and
+            // `| null` for what a caller may pass in.
             ir::Type::Option(inner) => {
                 format!(
                     "{name}?: {} | null",
