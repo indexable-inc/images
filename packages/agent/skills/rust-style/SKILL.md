@@ -31,6 +31,54 @@ nix eval --json .#ciChecks.x86_64-linux \
   --apply 'cs: builtins.filter (n: cs.${n} ? clippy) (builtins.attrNames cs)'
 ```
 
+### When a lint is right about the facts and wrong about the intent
+
+A lint can be correct in every particular and still recommend the wrong thing.
+That is a different situation from a false positive and it needs a different
+response, because there is nothing to dispute: the diagnosis reads as correct
+all the way to the recommendation, so the natural move is to comply, and
+complying reintroduces the bug.
+
+The worked example. `cve-scan`'s `tests/roots.rs` holds a `MutexGuard` in a test
+fixture so one thread cannot write an executable while another forks, which on
+Linux causes `ETXTBSY` at exec. `clippy::significant_drop_tightening` fires:
+the guard is held longer than the scope requires, and it says so accurately.
+Its advice, drop the value earlier, releases the guard before the exec and
+restores the race. The "unnecessary resource contention" it warns about is the
+contention that fixes the bug.
+
+Three rules follow, and none of them are specific to that lint.
+
+**Suppress with the consequence, not the lint name.** "Why is this allowed" is
+answerable from the name; "what breaks if you remove this" is not, and the
+second is the question a reader actually has. Write the reason as the failure:
+
+```rust
+#![expect(
+    clippy::significant_drop_tightening,
+    reason = "dropping FakeNix earlier releases FAKE_NIX before export_roots execs \
+the fake nix, which reopens the ETXTBSY race this file was failing on"
+)]
+```
+
+**Prefer a suppression that expires.** `expect` fails when the lint stops
+firing, so the fence reports its own obsolescence: remove the guard and the
+expectation goes unfulfilled and the build breaks, instead of a stale `allow`
+outliving the thing it compensated for. Almost nothing else in a codebase does
+that for free. Reach for `allow` only where the lint genuinely may not fire, and
+say why.
+
+**A bare `allow` is the wrong claim.** It says the lint does not apply, when the
+truth is that it applies and loses. The comment belongs on the intent conflict,
+not on the mechanism, because the lint already explains the mechanism better
+than a comment will. What it cannot know is which of two correct goals wins
+here.
+
+One practical note: a platform-specific fix carries platform-specific lint
+consequences. The lint above fires on a guard that exists only because of a
+Linux-only race, so no amount of local care on a Mac would have produced it. The
+first honest signal is the per-unit clippy in CI.
+
 Prefer names that preserve the concept's path. Local aliases may shorten noisy
 source paths only when the shape remains visible at the call site. Keep singular
 names for single values and plural names for bags of constructors, helpers, or
