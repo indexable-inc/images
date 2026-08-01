@@ -54,6 +54,20 @@ same check name. When the output is mixed, inspect
 the latest run for the current head SHA rather than the oldest failure in the
 list.
 
+A check that is ABSENT is not a check that failed, and it is not a check that
+passed. "Has not been dispatched yet" and "will never be dispatched" produce the
+identical observation, and the only thing that separates them is waiting longer.
+So an absence is not evidence until you know how long that check takes when it
+works: a required context missing from a docs-only PR looks exactly like a path
+filter that will never fire, and has twice turned out to be a five-minute runner
+queue. Before reporting a check as structurally unreachable, find a merged PR of
+the same shape and read how long it waited.
+
+The same rule covers the opposite direction: do not read a required check as
+passing because you did not find a failure. Require the names you expect to be
+present AND successful, since a check that was never dispatched satisfies any
+test written as the absence of red.
+
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
 
