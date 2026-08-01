@@ -6,7 +6,9 @@
 //! only in this process's memory for as long as it takes to copy it to
 //! git's stdin.
 
+use std::fs;
 use std::io::{self, BufReader, Write};
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
@@ -111,10 +113,19 @@ fn fetch(path: &Path, request: &Message) -> Result<Message, Failure> {
     }
 
     let mut stream = UnixStream::connect(path).map_err(|error| {
-        // Connecting is the only way to tell these apart; stat cannot. A
-        // socket inode whose listener is gone refuses the connect, while a
-        // path holding an ordinary file is not connectable at all.
-        if error.raw_os_error() == Some(libc::ENOTSOCK) {
+        // Which failure this is cannot come from the errno, because the two
+        // platforms disagree. Linux answers ECONNREFUSED for both a dead
+        // socket and an ordinary file; macOS separates them with ENOTSOCK.
+        // Keying on ENOTSOCK therefore classified every non-socket on Linux
+        // as a stale loan and told the operator to reconnect, which cannot
+        // help when the path holds a regular file.
+        //
+        // Ask the inode what it is instead. stat still cannot tell a live
+        // socket from a stale one, which is what the connect above is for,
+        // but it does tell a socket from anything else, identically on both
+        // platforms.
+        let not_a_socket = fs::metadata(path).is_ok_and(|meta| !meta.file_type().is_socket());
+        if not_a_socket {
             Failure::NotASocket
         } else if error.kind() == io::ErrorKind::ConnectionRefused {
             Failure::Stale

@@ -17,7 +17,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 ix-usage-core.workspace = true
-rusqlite.workspace = true
 tempfile.workspace = true
 
 [[bin]]

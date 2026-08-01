@@ -17,7 +17,6 @@ anyhow.workspace = true
 audio-blob.workspace = true
 audio-clock.workspace = true
 audio-engine.workspace = true
-audio-instrument.workspace = true
 audio-net.workspace = true
 audio-score.workspace = true
 tempfile.workspace = true

@@ -1,8 +1,11 @@
 //! Step definitions binding `features/account.feature` to the crate API.
 //!
-//! Runs under the normal libtest harness (cucumber's suggested
-//! `harness = false` is only about output ordering), so nextest and
-//! cargo-unit treat it like any other test.
+//! Runs under the normal libtest harness, so nextest and cargo-unit treat it
+//! like any other test. That costs one thing: libtest forwards its own
+//! filter arguments to the process, and cucumber's `World::run` parses
+//! `std::env::args` itself, so `--exact account_features` reaches cucumber's
+//! clap parser and is rejected. `with_default_cli` is the documented way to
+//! skip that parse, and it is what makes a per-#[test] runner work here.
 
 use core::str::FromStr;
 
@@ -147,8 +150,9 @@ fn fails_non_positive(world: &mut AccountWorld) {
 
 #[test]
 fn account_features() {
-    futures::executor::block_on(AccountWorld::run(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/features"
-    )));
+    futures::executor::block_on(
+        AccountWorld::cucumber()
+            .with_default_cli()
+            .run_and_exit(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features")),
+    );
 }
