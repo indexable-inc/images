@@ -74,3 +74,5 @@ export declare function tailLater(store: string, signal?: AbortSignal): Promise<
 
 /** Open a counter from a free function. */
 export declare function openCounter(start?: number): Counter;
+
+// UNIBIND-SNAPSHOT-PROBE

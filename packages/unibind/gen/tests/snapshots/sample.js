@@ -240,3 +240,5 @@ module.exports.SampleError = SampleError;
 module.exports.StoreGoneError = StoreGoneError;
 module.exports.Invalid = Invalid;
 module.exports.Counter = Counter;
+
+// UNIBIND-SNAPSHOT-PROBE
