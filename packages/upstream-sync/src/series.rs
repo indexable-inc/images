@@ -298,8 +298,13 @@ fn default_branch(dir: &Path, fork: &str, url: &str) -> Result<String> {
 /// nix-community/home-manager master") and reads those earlier revisions as
 /// extra patches, which is fatal because patch identity is the subject and two
 /// revisions of one patch usually share one. `--first-parent --no-merges` is
-/// the branch's own line and the whole series, since a patch reaches the
-/// branch as a commit on it.
+/// the branch's own line, and it is the whole series only while every patch
+/// reaches the branch as a commit ON it.
+///
+/// That last condition does not hold, so the branch's own line is the SPINE
+/// and [`recover_merged_patches`] adds back the patches that arrived on a
+/// merge's second parent. Both flags stay: dropping either is what read three
+/// revisions of one home-manager patch as three patches (ENG-11646).
 ///
 /// The megamerge arm is transitional: megamerges are banned, and it becomes
 /// dead code to delete once the last fork is migrated (ENG-11665).
@@ -335,9 +340,24 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
                 &range,
             ],
         )?;
-        let own = parse_log(&out);
-        report_invisible_patches(dir, fork, tip, &range, &all, &own)?;
-        own
+        let spine = parse_log(&out);
+        let recovered = recover_merged_patches(dir, fork, tip, &range, &all, &spine)?;
+        if recovered.is_empty() {
+            spine
+        } else {
+            let keep: HashSet<&str> = spine
+                .iter()
+                .chain(&recovered)
+                .map(|c| c.sha.as_str())
+                .collect();
+            // Filtering the full walk rather than concatenating puts each
+            // recovered patch in its real topological place among the
+            // branch's own commits, which is the order the series promises.
+            all.iter()
+                .filter(|c| keep.contains(c.sha.as_str()))
+                .cloned()
+                .collect()
+        }
     };
 
     // Subjects are the patch identity (intent keys, branch slugs); a
@@ -355,60 +375,73 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
     Ok(series)
 }
 
-/// Warn about patches the merge-forward walk cannot see.
+/// The patches that reached the branch on a merge's second parent, which the
+/// spine walk cannot see.
 ///
-/// `--first-parent --no-merges` is the branch's own line, which is the whole
-/// series only while every patch reaches the branch as a commit on it. A patch
-/// that arrived as a merged pull request sits on a second parent, so the walk
-/// never reaches it. Such a patch is absent rather than unclassified, which is
-/// the worse of the two: an unclassified patch defaults to `hold` and one
-/// intent entry fixes it, while an entry naming an absent one is an orphaned
-/// key that `ensure_no_orphaned_intent` rejects, so the gap resists being
-/// documented. On indexable-inc/nix that is 22 patches (ENG-11686).
+/// A patch that arrived as a merged pull request sits off the branch's own
+/// line, so `--first-parent` never reaches it and `--no-merges` drops the
+/// merge that would have led there. It is then absent rather than
+/// unclassified, which is the worse of the two: an unclassified patch defaults
+/// to `hold` and one intent entry fixes it, while an entry naming an absent
+/// one is an orphaned key that `ensure_no_orphaned_intent` rejects, so the gap
+/// resists being documented. On indexable-inc/nix that is 22 patches across 7
+/// merged pull requests, and on indexable-inc/jj 11 across 5 (ENG-11686).
 ///
-/// Two deliberate choices. The delta is computed by comparing the walks rather
-/// than by asserting a count, so this cannot pass because both walks returned
-/// the same wrong thing. And it warns rather than fails: forks have been in
-/// this state for as long as pull requests have been merged into them, and a
-/// second hard failure here would be turned off, which is exactly how the
-/// orphaned-key path made the gap uncorrectable.
-fn report_invisible_patches(
+/// Recovering them cannot mean walking second parents generally, which is the
+/// fence `--first-parent` puts up and ENG-11646 paid for. Three filters keep
+/// it, and each one is load-bearing on a fork we actually have:
+///
+///  1. Only merges that CHANGED THE TREE. The doctrine's merge-back of an
+///     earlier revision, so a rev some flake.lock still pins stays reachable,
+///     is a `-s ours` merge whose tree equals its first parent's: it carried
+///     ancestry, not a patch. home-manager has two, and reading them as
+///     patches is what ENG-11646 was.
+///  2. Nothing already on the spine, by SHA.
+///  3. Nothing whose SUBJECT is already on the spine. An earlier revision
+///     under a merge that did change the tree still is not a second patch;
+///     the branch's own copy represents it. indexable-inc/git has exactly
+///     this, and the two commits share a patch-id.
+///
+/// Upstream's own commits need no filter: `base` is `merge-base(tip,
+/// upstream)`, so everything upstream merged forward is already behind it.
+///
+/// The set is derived by COMPARING THE WALKS rather than by asserting a
+/// count, so this cannot pass by both walks returning the same wrong thing.
+/// It warns as well as recovering, because the shape is against
+/// `forkBranches` -- a change is meant to land as a commit on the branch --
+/// and a silently absorbed merge is one nobody stops producing.
+fn recover_merged_patches(
     dir: &Path,
     fork: &str,
     tip: &str,
     range: &str,
     all: &[Commit],
-    series: &[Commit],
-) -> Result<()> {
+    spine: &[Commit],
+) -> Result<Vec<Commit>> {
     let merges = cmd::run_in(dir, "git", &["rev-list", "--merges", tip, range])?;
     let merge_shas: HashSet<&str> = merges.split_whitespace().collect();
-    let seen_shas: HashSet<&str> = series.iter().map(|c| c.sha.as_str()).collect();
-    let seen_subjects: HashSet<&str> = series.iter().map(|c| c.subject.as_str()).collect();
+    let spine_shas: HashSet<&str> = spine.iter().map(|c| c.sha.as_str()).collect();
+    let spine_subjects: HashSet<&str> = spine.iter().map(|c| c.subject.as_str()).collect();
+    let brought = commits_a_merge_brought_in(dir, tip, range)?;
 
-    let mut invisible: Vec<&str> = all
+    let recovered: Vec<Commit> = all
         .iter()
         .filter(|c| {
-            !seen_shas.contains(c.sha.as_str())
+            brought.contains(c.sha.as_str())
+                && !spine_shas.contains(c.sha.as_str())
                 && !merge_shas.contains(c.sha.as_str())
-                // An earlier revision of a patch that IS in the series was
-                // merged in for ancestry alone, so a lock pinning it stays
-                // reachable. It shares its subject with the revision on the
-                // branch, is represented by it, and is not a lost patch.
-                && !seen_subjects.contains(c.subject.as_str())
+                && !spine_subjects.contains(c.subject.as_str())
         })
-        .map(|c| c.subject.as_str())
+        .cloned()
         .collect();
-    if invisible.is_empty() {
-        return Ok(());
+    if recovered.is_empty() {
+        return Ok(recovered);
     }
-    invisible.sort_unstable();
 
-    let seen = series.len();
-    let total = all.len();
-    let lost = invisible.len();
-    let listed = invisible
+    let found = recovered.len();
+    let listed = recovered
         .iter()
-        .map(|subject| format!("  - {subject}"))
+        .map(|c| format!("  - {}", c.subject))
         .collect::<Vec<_>>()
         .join("\n");
     eprintln!(
@@ -416,13 +449,45 @@ fn report_invisible_patches(
         paint(
             YELLOW,
             &format!(
-                "upstream-sync: {fork}: the series is {seen} of {total} commits, and {lost} patch(es) \
-                 reached the branch on a merge commit's second parent, so nothing can classify them \
-                 and nothing will ever offer them upstream (ENG-11686):\n{listed}"
+                "upstream-sync: {fork}: {found} patch(es) reached the branch on a merge commit's \
+                 second parent rather than as a commit on it, which is against `forkBranches`. \
+                 They are in the series, so they can be classified and offered upstream, but land \
+                 the next one as a commit on the branch (ENG-11686):\n{listed}"
             )
         )
     );
-    Ok(())
+    Ok(recovered)
+}
+
+/// The commits each merge on the branch's own line brought in with it,
+/// skipping the merges that brought in no content.
+///
+/// A merge whose tree equals its first parent's changed nothing, so its second
+/// parent is ancestry rather than a patch: that is the `-s ours` merge-back
+/// keeping a pinned revision reachable. Only merges on the FIRST-PARENT line
+/// are walked; a merge deeper in is already inside the range one of those
+/// contributes.
+fn commits_a_merge_brought_in(dir: &Path, tip: &str, range: &str) -> Result<HashSet<String>> {
+    let merges = cmd::run_in(
+        dir,
+        "git",
+        &["rev-list", "--first-parent", "--merges", tip, range],
+    )?;
+    let mut brought = HashSet::new();
+    for merge in merges.split_whitespace() {
+        let tree = cmd::run_in(dir, "git", &["rev-parse", &format!("{merge}^{{tree}}")])?;
+        let first = cmd::run_in(dir, "git", &["rev-parse", &format!("{merge}^1^{{tree}}")])?;
+        if tree == first {
+            continue;
+        }
+        let side = cmd::run_in(
+            dir,
+            "git",
+            &["rev-list", &format!("{merge}^2"), &format!("^{merge}^1")],
+        )?;
+        brought.extend(side.split_whitespace().map(ToOwned::to_owned));
+    }
+    Ok(brought)
 }
 
 /// The megamerge seal: bookkeeping (tree = series applied linearly), not a
