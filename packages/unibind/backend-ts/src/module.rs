@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use unibind_core::ir;
-use unibind_core::render::{RenderError, RenderedInterface, name_ident};
+use unibind_core::render::{self, RenderError, RenderedInterface, name_ident};
 
 use crate::ty::TyCtx;
 use crate::{convert, error, function, mirror, object, record, stream};
@@ -13,8 +13,8 @@ use crate::{convert, error, function, mirror, object, record, stream};
 /// # Errors
 ///
 /// Fails for surface the ts backend does not implement yet (data enums,
-/// integer-keyed maps, stream-returning methods) and for renames that
-/// cannot become identifiers.
+/// integer-keyed maps, streams of objects) and for renames that cannot
+/// become identifiers.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(RenderError::new(format!(
@@ -50,15 +50,18 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     let wrappers = interface
         .functions
         .iter()
-        .map(|func| match &func.ret {
-            Some(ir::Type::Stream(element)) => stream::render_stream_fn(func, element, &ctx),
-            _ => function::render_fn(func, &ctx),
-        })
+        .map(|func| function::render_fn(func, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let objects = interface
         .objects
         .iter()
         .map(|obj| object::render_object(obj, &ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Every stream class renders here rather than next to its export: a
+    // method's class cannot live inside the object's `#[napi] impl`.
+    let streams = render::stream_exports(interface)
+        .iter()
+        .map(|export| stream::render(export, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let signal = needs_signal(interface).then(abort_signal);
     let module_docs = function::doc_attrs(&interface.docs);
@@ -74,6 +77,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
             #(#conversions)*
             #(#wrappers)*
             #(#objects)*
+            #(#streams)*
         }
     };
     let records = interface

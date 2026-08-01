@@ -128,17 +128,32 @@ fn named_type_name<'a>(interface: &'a ir::Interface, name: &'a str) -> &'a str {
         .map_or(name, |object| type_name(&object.names, &object.name))
 }
 
-/// Whether any signature spells `Buffer`, which pulls the `node:buffer`
-/// type import into `index.d.ts`.
-pub fn uses_buffer(interface: &ir::Interface) -> bool {
+/// Every callable the host files render a signature for: the free
+/// functions and each object's methods.
+fn callables(interface: &ir::Interface) -> impl Iterator<Item = &ir::Function> {
     let methods = interface
         .objects
         .iter()
         .flat_map(|object| object.methods.iter());
-    interface.functions.iter().chain(methods).any(|function| {
+    interface.functions.iter().chain(methods)
+}
+
+/// Whether any signature spells `Buffer`, which pulls the `node:buffer`
+/// type import into `index.d.ts`.
+pub fn uses_buffer(interface: &ir::Interface) -> bool {
+    callables(interface).any(|function| {
         function.args.iter().any(|arg| top_level_bytes(&arg.ty))
             || function.ret.as_ref().is_some_and(top_level_bytes)
     })
+}
+
+/// Whether any export returns a stream, which pulls the `UnibindStream`
+/// declaration into `index.d.ts` and the `wrapStream` helper into
+/// `index.js`. Methods count here: the ts backend renders stream methods,
+/// where `ir::Interface::has_streams` answers the free-function-only
+/// question the backends that reject them ask.
+pub fn has_streams(interface: &ir::Interface) -> bool {
+    callables(interface).any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
 }
 
 fn top_level_bytes(ty: &ir::Type) -> bool {
