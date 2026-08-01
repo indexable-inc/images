@@ -532,6 +532,87 @@
           "throws": "SampleError"
         },
         {
+          "name": "watch",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Every value the counter takes, as a pull stream."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": {
+            "Stream": {
+              "Int": "I64"
+            }
+          },
+          "throws": null
+        },
+        {
+          "name": "tail",
+          "names": {
+            "py": null,
+            "ts": "tailRows"
+          },
+          "docs": [
+            "Labels under `prefix` (an async, throwing, renamed stream",
+            "method, whose handle class is scoped by its owner)."
+          ],
+          "asyncness": "Async",
+          "blocking": false,
+          "args": [
+            {
+              "name": "prefix",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "String": {
+                  "owned": true
+                }
+              },
+              "default": null
+            },
+            {
+              "name": "limit",
+              "names": {
+                "py": null
+              },
+              "ty": {
+                "Int": "U32"
+              },
+              "default": {
+                "Int": 10
+              }
+            }
+          ],
+          "ret": {
+            "Stream": {
+              "String": {
+                "owned": true
+              }
+            }
+          },
+          "throws": "SampleError"
+        },
+        {
+          "name": "fork",
+          "names": {
+            "py": null
+          },
+          "docs": [
+            "Fork a counter: a method handing back another object handle."
+          ],
+          "asyncness": "Sync",
+          "blocking": false,
+          "args": [],
+          "ret": {
+            "Named": "Counter"
+          },
+          "throws": null
+        },
+        {
           "name": "close",
           "names": {
             "py": null

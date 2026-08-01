@@ -337,6 +337,48 @@ mod __unibind_ts_sample_ts {
                 }
             }
         }
+        ///Every value the counter takes, as a pull stream.
+        #[::napi_derive::napi]
+        pub fn watch(&self) -> __UnibindStreamCounterWatch {
+            let value = self.inner.watch();
+            __UnibindStreamCounterWatch::__unibind_from(value)
+        }
+        ///Labels under `prefix` (an async, throwing, renamed stream
+        ///method, whose handle class is scoped by its owner).
+        #[::napi_derive::napi(js_name = "tailRows")]
+        pub async fn tail(
+            &self,
+            prefix: ::std::string::String,
+            limit: ::std::option::Option<u32>,
+            __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
+        ) -> ::napi::Result<__UnibindStreamCounterTail> {
+            let value = __unibind_with_abort(
+                    __unibind_signal,
+                    {
+                        let __unibind_inner = ::std::sync::Arc::clone(&self.inner);
+                        async move {
+                            __unibind_inner.tail(prefix, limit.unwrap_or(10)).await
+                        }
+                    },
+                )
+                .await?;
+            match value {
+                ::std::result::Result::Ok(value) => {
+                    ::std::result::Result::Ok(
+                        __UnibindStreamCounterTail::__unibind_from(value),
+                    )
+                }
+                ::std::result::Result::Err(error) => {
+                    ::std::result::Result::Err(::napi::Error::from(error))
+                }
+            }
+        }
+        ///Fork a counter: a method handing back another object handle.
+        #[::napi_derive::napi]
+        pub fn fork(&self) -> __UnibindObjectCounter {
+            let value = self.inner.fork();
+            __UnibindObjectCounter::__unibind_from(value)
+        }
         ///Release the counter.
         #[::napi_derive::napi]
         pub async fn close(&self) -> ::napi::Result<()> {
@@ -407,6 +449,64 @@ mod __unibind_ts_sample_ts {
         pub async fn next(&self) -> ::std::option::Option<__UnibindRecordRow> {
             let value = self.stream.next().await?;
             ::std::option::Option::Some(__UnibindRecordRow::__unibind_from(value))
+        }
+        /// Drop the stream early; a pull in flight resolves `null`, and
+        /// the producer sees its stream dropped.
+        #[::napi_derive::napi]
+        pub fn close(&self) {
+            self.stream.close();
+        }
+    }
+    ///Pull handle over the stream returned by `Counter.watch`.
+    #[::napi_derive::napi(js_name = "CounterWatchStream")]
+    pub struct __UnibindStreamCounterWatch {
+        stream: ::unibind_runtime::PullStream<i64>,
+    }
+    impl __UnibindStreamCounterWatch {
+        fn __unibind_from(stream: ::unibind_runtime::UniStream<i64>) -> Self {
+            Self {
+                stream: ::unibind_runtime::PullStream::new(stream),
+            }
+        }
+    }
+    #[::napi_derive::napi]
+    impl __UnibindStreamCounterWatch {
+        /// The next element, or `null` once the stream ends or closes.
+        #[::napi_derive::napi]
+        pub async fn next(
+            &self,
+        ) -> ::std::option::Option<::napi::bindgen_prelude::BigInt> {
+            let value = self.stream.next().await?;
+            ::std::option::Option::Some(::napi::bindgen_prelude::BigInt::from(value))
+        }
+        /// Drop the stream early; a pull in flight resolves `null`, and
+        /// the producer sees its stream dropped.
+        #[::napi_derive::napi]
+        pub fn close(&self) {
+            self.stream.close();
+        }
+    }
+    ///Pull handle over the stream returned by `Counter.tail`.
+    #[::napi_derive::napi(js_name = "CounterTailRowsStream")]
+    pub struct __UnibindStreamCounterTail {
+        stream: ::unibind_runtime::PullStream<::std::string::String>,
+    }
+    impl __UnibindStreamCounterTail {
+        fn __unibind_from(
+            stream: ::unibind_runtime::UniStream<::std::string::String>,
+        ) -> Self {
+            Self {
+                stream: ::unibind_runtime::PullStream::new(stream),
+            }
+        }
+    }
+    #[::napi_derive::napi]
+    impl __UnibindStreamCounterTail {
+        /// The next element, or `null` once the stream ends or closes.
+        #[::napi_derive::napi]
+        pub async fn next(&self) -> ::std::option::Option<::std::string::String> {
+            let value = self.stream.next().await?;
+            ::std::option::Option::Some(value)
         }
         /// Drop the stream early; a pull in flight resolves `null`, and
         /// the producer sees its stream dropped.

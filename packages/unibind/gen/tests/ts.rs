@@ -225,6 +225,32 @@ fn sample_objects() -> Vec<ir::Object> {
             vec![arg("amount", ir::Type::Int(ir::IntKind::I64), None)],
         )
     };
+    let watch = ir::Function {
+        ret: Some(ir::Type::Stream(Box::new(ir::Type::Int(ir::IntKind::I64)))),
+        ..function("watch", None, &["Every value the counter takes."], Vec::new())
+    };
+    let tail = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        ret: Some(ir::Type::Stream(Box::new(owned_string()))),
+        throws: Some("SampleError".to_owned()),
+        ..function(
+            "tail",
+            Some("tailRows"),
+            &["Labels under `prefix` (async, throwing, renamed)."],
+            vec![
+                arg("prefix", owned_string(), None),
+                arg(
+                    "limit",
+                    ir::Type::Int(ir::IntKind::U32),
+                    Some(ir::Literal::Int(10)),
+                ),
+            ],
+        )
+    };
+    let fork = ir::Function {
+        ret: Some(named("Counter")),
+        ..function("fork", None, &["Fork a counter."], Vec::new())
+    };
     let close = ir::Function {
         asyncness: ir::Asyncness::Async,
         ..function("close", None, &["Release the counter."], Vec::new())
@@ -235,7 +261,7 @@ fn sample_objects() -> Vec<ir::Object> {
         docs: docs(&["A counter resource."]),
         resource: true,
         constructor: Some(constructor),
-        methods: vec![value, add, close],
+        methods: vec![value, add, watch, tail, fork, close],
     }]
 }
 
