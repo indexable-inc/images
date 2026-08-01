@@ -5,18 +5,30 @@ use quote::quote;
 use unibind_core::ir;
 use unibind_core::render::{RenderError, name_ident, pascal_case};
 
+use crate::convert;
+
 /// Interface-wide context the type mapping needs: the exported module's
-/// identifier (named types resolve through `super::<user>::`) and the
-/// declared objects (which map to generated handle classes, not user
-/// structs).
+/// identifier (named types resolve through `super::<user>::`), the declared
+/// objects (which map to generated handle classes, not user structs), and
+/// the records that cross through a generated mirror struct.
 pub struct TyCtx<'a> {
     pub user: &'a Ident,
     pub objects: &'a [ir::Object],
+    pub mirrored: &'a [String],
 }
 
 impl TyCtx<'_> {
     pub fn object(&self, name: &str) -> Option<&ir::Object> {
         self.objects.iter().find(|object| object.name == name)
+    }
+
+    /// The mirror struct standing in for record `name`, when it has one
+    /// (see [`crate::mirror`]).
+    pub fn mirror(&self, name: &str) -> Option<Ident> {
+        self.mirrored
+            .iter()
+            .any(|mirrored| mirrored == name)
+            .then(|| convert::mirror_ident(name))
     }
 }
 
@@ -35,17 +47,6 @@ pub enum Level {
 /// tokens so failures name the follow-up instead of miscompiling.
 pub fn check(ty: &ir::Type, what: &str) -> Result<(), RenderError> {
     match ty {
-        ir::Type::Int(kind) => match kind {
-            ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => {
-                Err(RenderError::new(format!(
-                    "{what} is `{}`, which napi only carries as a BigInt; \
-                     BigInt mapping is a stage 2 follow-up of issue #1993, so \
-                     use i64 (IEEE-double safe range) or u32 for now",
-                    kind.rust_name(),
-                )))
-            }
-            _ => Ok(()),
-        },
         ir::Type::Map { key, value } => {
             if !matches!(**key, ir::Type::String { .. }) {
                 return Err(RenderError::new(format!(
@@ -60,6 +61,7 @@ pub fn check(ty: &ir::Type, what: &str) -> Result<(), RenderError> {
             check(inner, what)
         }
         ir::Type::Bool
+        | ir::Type::Int(_)
         | ir::Type::Float(_)
         | ir::Type::String { .. }
         | ir::Type::Path { .. }
@@ -99,6 +101,8 @@ pub fn decl(ty: &ir::Type, ctx: &TyCtx<'_>, level: Level) -> Result<TokenStream,
             if let Some(object) = ctx.object(name) {
                 let handle = object_handle_ident(object);
                 quote!(#handle)
+            } else if let Some(mirror) = ctx.mirror(name) {
+                quote!(#mirror)
             } else {
                 let user = ctx.user;
                 let name = name_ident(name)?;
@@ -135,8 +139,13 @@ pub fn pass(ty: &ir::Type, expr: &TokenStream) -> TokenStream {
 }
 
 /// Adapt the user's return value to the wrapper's declared return type:
-/// wrap bytes into `Buffer`, wrap constructed objects into their handle.
+/// widen 64-bit integers (and the records holding them) into their `BigInt`
+/// shape, wrap bytes into `Buffer`, wrap constructed objects into their
+/// handle.
 pub fn ret(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> TokenStream {
+    if let Some(converted) = convert::outward(ty, ctx, expr) {
+        return converted;
+    }
     match ty {
         ir::Type::Bytes { .. } => quote!(::napi::bindgen_prelude::Buffer::from(#expr)),
         ir::Type::Option(inner) if matches!(**inner, ir::Type::Bytes { .. }) => {
@@ -170,15 +179,14 @@ pub fn stream_class_ident(name: &str) -> Ident {
     )
 }
 
+/// A 64-bit integer is declared as napi's `BigInt` in both directions;
+/// `crate::convert` owns the adaptation to and from the user's own width.
+/// Everything narrower crosses as its own Rust type, which napi carries as
+/// a JavaScript `number`.
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
-    match kind {
-        // Rejected by `check` before any of these spell into a signature.
-        ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => quote!(
-            ::core::compile_error!("unreachable: BigInt-only integers are rejected at render time")
-        ),
-        supported => {
-            let ident = Ident::new(supported.rust_name(), Span::call_site());
-            quote!(#ident)
-        }
+    if convert::is_bigint(kind) {
+        return quote!(::napi::bindgen_prelude::BigInt);
     }
+    let ident = Ident::new(kind.rust_name(), Span::call_site());
+    quote!(#ident)
 }

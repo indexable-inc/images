@@ -6,15 +6,15 @@ use unibind_core::ir;
 use unibind_core::render::{RenderError, RenderedInterface, name_ident};
 
 use crate::ty::TyCtx;
-use crate::{error, function, object, record, stream};
+use crate::{convert, error, function, mirror, object, record, stream};
 
 /// Render `napi-rs` glue for one interface.
 ///
 /// # Errors
 ///
 /// Fails for surface the ts backend does not implement yet (data enums,
-/// BigInt-only integers, integer-keyed maps, stream-returning methods) and
-/// for renames that cannot become identifiers.
+/// integer-keyed maps, stream-returning methods) and for renames that
+/// cannot become identifiers.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(RenderError::new(format!(
@@ -24,15 +24,24 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     }
 
     let user = name_ident(&interface.name)?;
+    let mirrored = mirror::mirrored_records(&interface.records);
     let ctx = TyCtx {
         user: &user,
         objects: &interface.objects,
+        mirrored: &mirrored,
     };
     let glue_ident = format_ident!("__unibind_ts_{}", interface.name.trim_start_matches('_'));
 
     for rec in &interface.records {
         record::check_record(rec)?;
     }
+    let bigint = convert::helpers(interface, &mirrored);
+    let mirrors = interface
+        .records
+        .iter()
+        .filter(|record| mirrored.iter().any(|name| *name == record.name))
+        .map(|record| mirror::render_mirror(record, &ctx))
+        .collect::<Result<Vec<_>, _>>()?;
     let conversions = interface
         .errors
         .iter()
@@ -60,12 +69,18 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
         mod #glue_ident {
             #signal
+            #bigint
+            #(#mirrors)*
             #(#conversions)*
             #(#wrappers)*
             #(#objects)*
         }
     };
-    let records = interface.records.iter().map(record::record_attrs).collect();
+    let records = interface
+        .records
+        .iter()
+        .map(|record| record::record_attrs(record, &mirrored))
+        .collect();
     Ok(RenderedInterface { glue, records })
 }
 

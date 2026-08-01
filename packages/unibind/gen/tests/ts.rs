@@ -274,16 +274,41 @@ fn ts_host_files_snapshot() {
     );
 }
 
+/// Every width past an IEEE double's exact range declares as `bigint`, and
+/// only those: the narrower ones stay `number`, which is what keeps the
+/// common case ergonomic.
 #[test]
-fn bigint_only_integers_are_rejected() {
-    let mut bad = interface();
-    bad.functions.push(ir::Function {
-        ret: Some(ir::Type::Int(ir::IntKind::U64)),
-        ..function("total", None, &[], Vec::new())
+fn wide_integers_declare_as_bigint() {
+    let mut wide = interface();
+    for (name, kind) in [
+        ("total", ir::IntKind::U64),
+        ("offset", ir::IntKind::Isize),
+        ("size", ir::IntKind::Usize),
+    ] {
+        wide.functions.push(ir::Function {
+            ret: Some(ir::Type::Int(kind)),
+            ..function(name, None, &[], Vec::new())
+        });
+    }
+    wide.functions.push(ir::Function {
+        ret: Some(ir::Type::Int(ir::IntKind::U32)),
+        ..function("narrow", None, &[], Vec::new())
     });
     let emitter = TsEmitter {
         addon: "sample_ts".to_owned(),
     };
-    let error = emitter.emit(&bad).expect_err("u64 must not emit");
-    assert!(error.message.contains("BigInt"), "{}", error.message);
+    let files = emitter.emit(&wide).expect("emits");
+    let dts = &files
+        .iter()
+        .find(|file| file.path == "index.d.ts")
+        .expect("index.d.ts")
+        .contents;
+    for declaration in [
+        "export declare function total(): bigint;",
+        "export declare function offset(): bigint;",
+        "export declare function size(): bigint;",
+        "export declare function narrow(): number;",
+    ] {
+        assert!(dts.contains(declaration), "{dts}");
+    }
 }

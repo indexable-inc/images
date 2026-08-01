@@ -50,9 +50,9 @@ pub fn type_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
 ///
 /// # Errors
 ///
-/// Fails for the surface the compiled glue also rejects (BigInt-only
-/// integers, integer-keyed maps, nested streams), so it only trips on IR
-/// that never compiled through the ts macro backend.
+/// Fails for the surface the compiled glue also rejects (integer-keyed
+/// maps, nested streams), so it only trips on IR that never compiled
+/// through the ts macro backend.
 pub fn ts_type(
     interface: &ir::Interface,
     ty: &ir::Type,
@@ -60,15 +60,12 @@ pub fn ts_type(
 ) -> Result<String, EmitError> {
     Ok(match ty {
         ir::Type::Bool => "boolean".to_owned(),
+        // A `number` is an IEEE double, exact only to 2^53, so the widths
+        // past that cross as `bigint` -- in every position, including
+        // record fields and container elements, matching the glue.
         ir::Type::Int(kind) => match kind {
-            ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => {
-                return Err(EmitError {
-                    message: format!(
-                        "`{}` only crosses as a BigInt; the ts backend rejects it \
-                         until BigInt lands (issue #1993)",
-                        kind.rust_name()
-                    ),
-                });
+            ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize => {
+                "bigint".to_owned()
             }
             _ => "number".to_owned(),
         },

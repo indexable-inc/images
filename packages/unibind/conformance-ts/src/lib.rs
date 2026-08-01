@@ -3,15 +3,14 @@
 //! One `#[unibind::export]` module exercising every construct the ts
 //! backend renders: records, error enums, defaulted and optional
 //! arguments, async functions with cancellation, pull streams (sync and
-//! async producers), and a constructible resource object. It mirrors the
-//! shapes of the shared Python conformance surface
-//! (`packages/unibind/conformance`), which cannot compile under the ts
-//! backend itself because its py-shaped types (u64, usize) are
-//! BigInt-territory the ts backend still rejects. The committed Node
-//! suite (`tests/node/conformance.test.mjs`) drives the built addon end
-//! to end; the atomic counters below exist so that suite can observe
-//! Rust-side effects (dropped futures, producer progress, live and closed
-//! handles) from JavaScript.
+//! async producers), a constructible resource object, and the 64-bit
+//! integers that only a JavaScript `bigint` can carry exactly. It mirrors
+//! the shapes of the shared Python conformance surface
+//! (`packages/unibind/conformance`). The committed Node suite
+//! (`tests/node/conformance.test.mjs`) drives the built addon end to end;
+//! the atomic counters below exist so that suite can observe Rust-side
+//! effects (dropped futures, producer progress, live and closed handles)
+//! from JavaScript.
 
 #![allow(
     clippy::must_use_candidate,
@@ -39,8 +38,9 @@ mod conformance {
     /// Sessions whose `close` ran (at most once each).
     static CLOSED_SESSIONS: AtomicI64 = AtomicI64::new(0);
 
-    /// One symbol occurrence in one file (a trimmed `scipql` shape; the
-    /// offsets are `i64` because `usize` would need BigInt).
+    /// One symbol occurrence in one file (a trimmed `scipql` shape). The
+    /// `i64` offsets make this a record the glue crosses through a mirror
+    /// struct, and `Facts` below inherits that through its `Vec`.
     #[unibind::record]
     #[derive(Clone)]
     pub struct Occurrence {
@@ -91,9 +91,90 @@ mod conformance {
         }
     }
 
+    /// A ledger row: the shape an SDK crosses once amounts are 64-bit.
+    /// Every wide position the backend has to adapt sits in this one record
+    /// -- bare, inside a `Vec`, under an `Option`, and as a map value -- so
+    /// one echo exercises the mirror's whole field-by-field narrowing.
+    #[unibind::record]
+    #[derive(Clone)]
+    pub struct Ledger {
+        /// Signed balance in the smallest unit.
+        pub balance: i64,
+        /// Monotonic sequence number.
+        pub sequence: u64,
+        /// A pointer-sized count.
+        pub entries: usize,
+        /// Per-entry deltas.
+        pub deltas: Vec<i64>,
+        /// An optional ceiling.
+        pub ceiling: Option<i64>,
+        /// Totals keyed by account.
+        pub totals: HashMap<String, u64>,
+    }
+
     /// Echo facts through the boundary unchanged.
     pub fn echo_facts(facts: Facts) -> Facts {
         facts
+    }
+
+    /// Echo a ledger unchanged; every field must survive bit for bit.
+    pub fn echo_ledger(ledger: Ledger) -> Ledger {
+        ledger
+    }
+
+    /// Round-trip a signed 64-bit integer.
+    pub fn echo_i64(value: i64) -> i64 {
+        value
+    }
+
+    /// Round-trip an unsigned 64-bit integer.
+    pub fn echo_u64(value: u64) -> u64 {
+        value
+    }
+
+    /// Round-trip a pointer-sized count.
+    pub fn echo_usize(value: usize) -> usize {
+        value
+    }
+
+    /// The signed range's own endpoints, so the suite compares against
+    /// Rust's constants instead of restating them in JavaScript.
+    pub fn i64_bounds() -> Vec<i64> {
+        vec![i64::MIN, i64::MAX]
+    }
+
+    /// The unsigned range's top, for the same reason.
+    pub fn u64_max() -> u64 {
+        u64::MAX
+    }
+
+    /// Add, wrapping. A caller working past 2^53 proves both operands
+    /// arrived exact, which a `number` boundary could not deliver.
+    pub fn add_i64(a: i64, #[unibind(default = 1)] b: i64) -> i64 {
+        a.wrapping_add(b)
+    }
+
+    /// Sum unsigned amounts: the `Vec<u64>` argument position.
+    pub fn sum_u64(values: Vec<u64>) -> u64 {
+        values
+            .iter()
+            .fold(0, |total, value| total.wrapping_add(*value))
+    }
+
+    /// Echo an optional wide integer, defaulting to one past 2^53 when
+    /// JavaScript omits it: the `Option`-with-a-default argument position.
+    pub fn echo_optional_i64(
+        #[unibind(default = 9_007_199_254_740_993)] value: Option<i64>,
+    ) -> Option<i64> {
+        value
+    }
+
+    /// Yield `count` amounts from `start`: the stream element position,
+    /// where each item crosses on its own pull.
+    pub fn wide_stream(start: i64, count: i64) -> unibind_runtime::UniStream<i64> {
+        unibind_runtime::UniStream::new(futures::stream::iter(
+            (0..count.max(0)).map(move |index| start.wrapping_add(index)),
+        ))
     }
 
     /// Build `count` occurrences of `symbol`, all with `role`.

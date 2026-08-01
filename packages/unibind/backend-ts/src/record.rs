@@ -5,6 +5,11 @@
 //! both directions with no constructor to register. Unrenamed fields follow
 //! napi's own camelCase convention; `ts(name = ...)` renames pin an exact
 //! key.
+//!
+//! A record carrying a 64-bit integer is the exception: napi would read the
+//! user's own field type, which cannot carry one faithfully, so the glue
+//! renders a mirror struct instead (see [`crate::mirror`]) and the user's
+//! struct gains no attributes at all.
 
 use syn::parse_quote;
 use unibind_core::ir;
@@ -14,8 +19,15 @@ use crate::ty;
 
 /// The attributes the exported struct gains: `#[napi(object)]` on the item
 /// and a `js_name` per renamed field. The bare `napi` field attributes are
-/// consumed (and stripped) by the outer `napi(object)` expansion.
-pub fn record_attrs(record: &ir::Record) -> RenderedRecord {
+/// consumed (and stripped) by the outer `napi(object)` expansion. A
+/// mirrored record gains none: its mirror carries them.
+pub fn record_attrs(record: &ir::Record, mirrored: &[String]) -> RenderedRecord {
+    if mirrored.iter().any(|name| *name == record.name) {
+        return RenderedRecord {
+            outer: Vec::new(),
+            fields: record.fields.iter().map(|_| Vec::new()).collect(),
+        };
+    }
     let outer: syn::Attribute = record.names.ts.as_ref().map_or_else(
         || parse_quote!(#[::napi_derive::napi(object)]),
         |name| parse_quote!(#[::napi_derive::napi(object, js_name = #name)]),

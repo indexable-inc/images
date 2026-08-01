@@ -171,16 +171,17 @@ Crates:
   consuming crate depends on `napi` (`napi6` + `tokio_rt`), `napi-derive`,
   `tokio` (`sync` + `macros`), and `unibind-runtime`, and builds a cdylib
   with `napi_build::setup()`. `blocking` renders as a plain sync export
-  (there is no GIL to release). BigInt-only integers (u64, usize, isize) and
-  integer-keyed maps reject at render time until BigInt lands.
+  (there is no GIL to release). Integers wider than an IEEE double holds
+  exactly (`i64`, `u64`, `isize`, `usize`) cross as JavaScript `bigint`;
+  integer-keyed maps still reject at render time.
 
 ## Type mapping (phase 0)
 
 | Rust                  | IR              | Python        | TypeScript |
 | --------------------- | --------------- | ------------- | ---------- |
 | `bool`                | `Bool`          | `bool`        | `boolean`  |
-| `i8..i64`, `u8..u32`  | `Int`           | `int`         | `number`   |
-| `u64`, `usize`, `isize` | `Int`         | `int`         | rejected until BigInt lands (follow-up of #1993) |
+| `i8..i32`, `u8..u32`  | `Int`           | `int`         | `number`   |
+| `i64`, `u64`, `isize`, `usize` | `Int`  | `int`         | `bigint`, everywhere (see below) |
 | `f32`, `f64`          | `Float`         | `float`       | `number`   |
 | `String` / `&str`     | `String`        | `str`         | `string`   |
 | `PathBuf` / `&Path`   | `Path`          | accepts `str \| os.PathLike`, returns `str` | `string` |
@@ -188,7 +189,7 @@ Crates:
 | `Option<T>`           | `Option`        | `T \| None`   | `T \| null` (omission accepted) |
 | `Vec<T>`              | `Vec`           | `list[T]`     | `Array<T>` |
 | `HashMap<K, V>`       | `Map`           | `dict[K, V]`  | `Record<string, V>` (string keys only) |
-| `#[unibind::record]`  | `Named`         | native class  | plain object via `napi(object)` |
+| `#[unibind::record]`  | `Named`         | native class  | plain object via `napi(object)` (a record holding a 64-bit integer crosses through a generated mirror struct) |
 | `#[unibind::object]`  | `Named` (return only) | wrapped handle class | wrapped handle class, `await using` on resources |
 | `UniStream<T>` return | `Stream`        | async iterator | `UnibindStream<T>` (`AsyncIterable<T>` + `next`/`close`) |
 | `async fn`            | `Asyncness::Async` | asyncio coroutine | `Promise<T>`, trailing optional `AbortSignal` |
@@ -196,6 +197,22 @@ Crates:
 
 Borrowed forms (`&str`, `&Path`, `&[u8]`, including under `Option`) are
 argument-only; returns and record fields own their data.
+
+A JavaScript `number` is an IEEE double, so it holds integers exactly only
+up to 2^53. The four widths past that cross as `bigint` in *every* position
+-- argument, return, `Array` element, `Record` value, record field, and
+stream item -- rather than only at the top level, so a value never changes
+representation as it moves between them. Inbound the glue narrows
+losslessly: a `bigint` outside the declared Rust width is refused with a
+plain napi error (not one of the generated error classes, because it is a
+caller mistake rather than a boundary failure the interface declared), and a
+`number` passed where a `bigint` is declared is refused rather than coerced.
+Records are the one place this is not free: napi derives a record's
+conversions from the user's own field types, which cannot carry a `u64` at
+all and would carry an `i64` as a lossy `number`, so a record holding one
+crosses through a `#[napi(object)]` mirror struct the glue owns. The
+JavaScript shape and key names are identical either way; records that
+mention no 64-bit integer keep `#[napi(object)]` on the user's struct.
 
 Phase 1 changes nothing in this table: the `.pyi` emitter renders these same
 rules (argument vs return position included) from the untouched IR.
@@ -258,9 +275,9 @@ live/dropped guard counts around `task.cancel()`, produced-vs-consumed
 stream counters, exactly one `ResourceWarning` per leaked resource, and
 `ctypes.addressof` equality for zero-copy buffers. It runs in CI as
 `checks.<system>.unibind-conformance-run`. Its TypeScript twin,
-`packages/unibind/conformance-ts`, mirrors those shapes with ts-compatible
-types (the shared crate's `u64`/`usize` surface is BigInt-territory the ts
-backend still rejects) and runs as
+`packages/unibind/conformance-ts`, mirrors those shapes -- including the
+64-bit integers that only a `bigint` carries exactly, round-tripped past
+2^53 and at `i64::MIN`/`i64::MAX`/`u64::MAX` -- and runs as
 `checks.<system>.unibind-conformance-ts-node-conformance`.
 
 `packages/unibind/conformance-jvm` is the same idea for the jvm backend: a

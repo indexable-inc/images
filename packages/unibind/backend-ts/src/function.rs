@@ -5,20 +5,36 @@ use quote::quote;
 use unibind_core::ir;
 use unibind_core::render::{RenderError, name_ident};
 
-use crate::defaults;
 use crate::ty::{self, Level, TyCtx};
+use crate::{convert, defaults};
 
 /// The pieces of one callable's wrapper signature and call, shared between
 /// free functions, object methods, and constructors.
 pub struct Wrapper {
     /// `name: Type` parameter list entries, defaults already `Option`-ized.
     pub params: Vec<TokenStream>,
+    /// Statements rebinding the arguments whose boundary shape differs from
+    /// the user's own type (see [`crate::convert`]), run before the call.
+    /// A non-empty prologue can refuse a value, so it also decides whether
+    /// the wrapper returns a `napi::Result` where the user's function does
+    /// not: the JavaScript surface is the same either way, since napi
+    /// throws on `Err` and hands back the value on `Ok`.
+    pub prologue: Vec<TokenStream>,
     /// Call-site expressions, index-aligned with the user's parameters.
     pub exprs: Vec<TokenStream>,
 }
 
+/// How one argument reaches the user's call: the statement that adapts what
+/// JavaScript sent (only where the two sides spell the value differently)
+/// and the expression the call site passes.
+pub struct Binding {
+    pub prologue: Option<TokenStream>,
+    pub expr: TokenStream,
+}
+
 pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper, RenderError> {
     let mut params = Vec::new();
+    let mut prologue = Vec::new();
     let mut exprs = Vec::new();
     for arg in &function.args {
         ty::check(
@@ -27,26 +43,46 @@ pub fn wrapper_parts(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<Wrapper
         )?;
         let ident = name_ident(&arg.name)?;
         let declared = ty::decl(&arg.ty, ctx, Level::Top)?;
-        match &arg.default {
+        let binding = match &arg.default {
             // An `Option` argument is already optional from JavaScript;
             // its default (implicit or explicit) substitutes in place.
             Some(default) if !matches!(arg.ty, ir::Type::Option(_)) => {
                 params.push(quote!(#ident: ::std::option::Option<#declared>));
-                exprs.push(defaults::substituted(arg, default, &ident, function)?);
+                defaults::defaulted(arg, default, &ident, function, ctx)?
             }
             Some(default) => {
                 params.push(quote!(#ident: #declared));
-                exprs.push(defaults::option_substituted(
-                    arg, default, &ident, function,
-                )?);
+                defaults::optional_defaulted(arg, default, &ident, function, ctx)?
             }
             None => {
                 params.push(quote!(#ident: #declared));
-                exprs.push(ty::pass(&arg.ty, &quote!(#ident)));
+                bind_plain(arg, &ident, ctx)
             }
-        }
+        };
+        prologue.extend(binding.prologue);
+        exprs.push(binding.expr);
     }
-    Ok(Wrapper { params, exprs })
+    Ok(Wrapper {
+        params,
+        prologue,
+        exprs,
+    })
+}
+
+/// An argument with no declared default. Every adapted type crosses by
+/// value, so the rebinding is the whole adaptation and `ty::pass` (which
+/// only reborrows) has nothing left to add.
+fn bind_plain(arg: &ir::Arg, ident: &proc_macro2::Ident, ctx: &TyCtx<'_>) -> Binding {
+    let Some(converted) = convert::inward(&arg.ty, ctx, &quote!(#ident)) else {
+        return Binding {
+            prologue: None,
+            expr: ty::pass(&arg.ty, &quote!(#ident)),
+        };
+    };
+    Binding {
+        prologue: Some(quote!(let #ident = #converted?;)),
+        expr: quote!(#ident),
+    }
 }
 
 /// Render one exported free function, including stream returns (whose
@@ -104,10 +140,12 @@ pub fn render_callable(
     let shape = CallShape {
         name: &name,
         params,
+        prologue: &wrapper.prologue,
         receiver,
         call,
         ok_decl: &ok_decl,
         throws: function.throws.is_some(),
+        fallible: !wrapper.prologue.is_empty(),
     };
     let body_and_ret = match function.asyncness {
         ir::Asyncness::Sync => sync_body(&shape, &adapt(&quote!(value))),
@@ -135,20 +173,24 @@ struct BodyAndRet {
 struct CallShape<'a> {
     name: &'a proc_macro2::Ident,
     params: &'a [TokenStream],
+    prologue: &'a [TokenStream],
     receiver: Option<&'a TokenStream>,
     call: &'a TokenStream,
     ok_decl: &'a TokenStream,
     throws: bool,
+    fallible: bool,
 }
 
 fn sync_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
     let CallShape {
         name,
         params,
+        prologue,
         receiver,
         call,
         ok_decl,
         throws,
+        fallible,
     } = shape;
     let header = quote!(pub fn #name(#receiver #(#params),*));
     if *throws {
@@ -156,12 +198,23 @@ fn sync_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
             header,
             ret: quote!(::napi::Result<#ok_decl>),
             body: quote! {
+                #(#prologue)*
                 match #call {
                     ::std::result::Result::Ok(value) => ::std::result::Result::Ok(#value),
                     ::std::result::Result::Err(error) => {
                         ::std::result::Result::Err(::napi::Error::from(error))
                     }
                 }
+            },
+        }
+    } else if *fallible {
+        BodyAndRet {
+            header,
+            ret: quote!(::napi::Result<#ok_decl>),
+            body: quote! {
+                #(#prologue)*
+                let value = #call;
+                ::std::result::Result::Ok(#value)
             },
         }
     } else {
@@ -184,10 +237,12 @@ fn async_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
     let CallShape {
         name,
         params,
+        prologue,
         receiver,
         call,
         ok_decl,
         throws,
+        fallible: _,
     } = shape;
     let settle = if *throws {
         quote! {
@@ -211,6 +266,7 @@ fn async_body(shape: &CallShape<'_>, value: &TokenStream) -> BodyAndRet {
         },
         ret: quote!(::napi::Result<#ok_decl>),
         body: quote! {
+            #(#prologue)*
             let value = __unibind_with_abort(__unibind_signal, #call).await?;
             #settle
         },

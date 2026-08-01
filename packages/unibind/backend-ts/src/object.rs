@@ -126,6 +126,7 @@ fn render_constructor(
     let docs = doc_attrs(&ctor.docs);
     let wrapper = wrapper_parts(ctor, ctx)?;
     let params = &wrapper.params;
+    let prologue = &wrapper.prologue;
     let exprs = &wrapper.exprs;
     let call = quote!(super::#user::#object_ident::#ctor_name(#(#exprs),*));
     let body = if ctor.throws.is_some() {
@@ -146,6 +147,7 @@ fn render_constructor(
         #docs
         #[::napi_derive::napi(constructor)]
         pub fn #ctor_name(#(#params),*) -> ::napi::Result<Self> {
+            #(#prologue)*
             #body
         }
     })

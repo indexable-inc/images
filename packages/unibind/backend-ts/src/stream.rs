@@ -11,7 +11,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
-use unibind_core::render::{RenderError, pascal_case};
+use unibind_core::render::{Ownership, RenderError, pascal_case, rust_type};
 
 use crate::function::{self, doc_attrs};
 use crate::ty::{self, Level, TyCtx};
@@ -43,9 +43,10 @@ pub fn render_stream_fn(
         "{}Stream",
         pascal_case(function.names.ts.as_deref().unwrap_or(&function.name))
     );
-    // Storage spells the user's own element type; only the value handed to
-    // JavaScript picks up the top-level `Buffer` shape.
-    let element_decl = ty::decl(element, ctx, Level::Nested)?;
+    // Storage spells the user's own element type, which is what the
+    // producer yields; only the value handed to JavaScript picks up the
+    // boundary shapes (`Buffer`, `BigInt`, a record's mirror).
+    let element_decl = rust_type(element, ctx.user, Ownership::Owned);
     let element_top = ty::decl(element, ctx, Level::Top)?;
     let element_ret = ty::ret(element, ctx, &quote!(value));
 

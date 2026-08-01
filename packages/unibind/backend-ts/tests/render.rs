@@ -34,14 +34,14 @@ fn napi_glue_snapshot() {
 #[test]
 fn unsupported_surface_is_named() {
     for (source, needle) in [
-        ("mod m { pub fn go(count: u64) {} }", "BigInt"),
         (
             "mod m { use std::collections::HashMap; pub fn go(map: HashMap<u32, bool>) {} }",
             "non-string keys",
         ),
         (
-            "mod m { #[unibind::record] pub struct R { pub size: usize } }",
-            "BigInt",
+            "mod m { use std::collections::HashMap; \
+             #[unibind::record] pub struct R { pub m: HashMap<u32, bool> } }",
+            "non-string keys",
         ),
     ] {
         let interface = lower_module_source(source);
@@ -49,5 +49,30 @@ fn unsupported_surface_is_named() {
             panic!("ts render accepts unsupported surface");
         };
         assert!(error.message.contains(needle), "{}", error.message);
+    }
+}
+
+/// Every 64-bit width renders, in both directions, as napi's `BigInt`:
+/// nothing on this surface is rejected any more, and nothing on it is
+/// declared as a plain Rust integer the boundary would truncate.
+#[test]
+fn wide_integers_render_as_bigint() {
+    for source in [
+        "mod m { pub fn go(count: u64) {} }",
+        "mod m { pub fn go() -> usize { 0 } }",
+        "mod m { pub fn go(offset: isize) -> i64 { 0 } }",
+        "mod m { pub fn go(counts: Vec<u64>) -> Option<i64> { None } }",
+        "mod m { #[unibind::record] pub struct R { pub size: usize } }",
+    ] {
+        let interface = lower_module_source(source);
+        let rendered = unibind_backend_ts::render(&interface).expect("renders");
+        let glue = rendered.glue.to_string();
+        assert!(glue.contains("BigInt"), "{glue}");
+        for width in ["u64", "usize", "isize"] {
+            assert!(
+                !glue.contains(&format!(": {width}")),
+                "{width} reached a signature: {glue}"
+            );
+        }
     }
 }

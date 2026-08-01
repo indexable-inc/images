@@ -15,10 +15,16 @@
 //! generated `index.js` (`unibind-gen ts`) decodes it into real `Error`
 //! subclasses, wraps stream handles into `AsyncIterable`s, and
 //! materializes the enriched `.d.ts` from the embedded IR.
+//!
+//! Integers wider than an IEEE double holds exactly (`i64`, `u64`, `isize`,
+//! `usize`) cross as JavaScript `bigint` in every position; `convert` owns
+//! that adaptation and `mirror` the record twins it needs.
 
+mod convert;
 mod defaults;
 mod error;
 mod function;
+mod mirror;
 mod module;
 mod object;
 mod record;
