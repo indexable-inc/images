@@ -149,10 +149,22 @@ pub enum Ownership {
 /// The Rust spelling of a boundary type, as the wrapper signatures use it.
 ///
 /// `user` is the exported module's identifier; named types resolve through
-/// `super::<user>::`. Backends that reject part of this surface (bytes,
-/// streams) run their own checks before spelling anything.
+/// `super::<user>::`, which is right for a backend whose glue is a plain
+/// sibling module. A backend whose items get relocated by another macro
+/// needs [`rust_type_in`] instead. Backends that reject part of this surface
+/// (bytes, streams) run their own checks before spelling anything.
 #[must_use]
 pub fn rust_type(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStream {
+    rust_type_in(ty, &quote!(super::#user), ownership)
+}
+
+/// [`rust_type`], with the module path spelled by the caller.
+///
+/// The ts backend passes an alias it binds at its glue module's own scope:
+/// napi-derive relocates the items it expands into generated helper modules,
+/// where a `super::` hop resolves one level short of the crate root.
+#[must_use]
+pub fn rust_type_in(ty: &ir::Type, user: &TokenStream, ownership: Ownership) -> TokenStream {
     match ty {
         ir::Type::Bool => quote!(bool),
         ir::Type::Int(kind) => int_tokens(*kind),
@@ -180,24 +192,24 @@ pub fn rust_type(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStre
             }
         }
         ir::Type::Option(inner) => {
-            let inner = rust_type(inner, user, ownership);
+            let inner = rust_type_in(inner, user, ownership);
             quote!(::std::option::Option<#inner>)
         }
         ir::Type::Vec(inner) => {
-            let inner = rust_type(inner, user, ownership);
+            let inner = rust_type_in(inner, user, ownership);
             quote!(::std::vec::Vec<#inner>)
         }
         ir::Type::Map { key, value } => {
-            let key = rust_type(key, user, ownership);
-            let value = rust_type(value, user, ownership);
+            let key = rust_type_in(key, user, ownership);
+            let value = rust_type_in(value, user, ownership);
             quote!(::std::collections::HashMap<#key, #value>)
         }
         ir::Type::Named(name) => {
             let name = Ident::new(name, Span::call_site());
-            quote!(super::#user::#name)
+            quote!(#user::#name)
         }
         ir::Type::Stream(item) => {
-            let item = rust_type(item, user, ownership);
+            let item = rust_type_in(item, user, ownership);
             quote!(::unibind_runtime::UniStream<#item>)
         }
     }

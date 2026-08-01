@@ -17,7 +17,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use unibind_core::ir;
-use unibind_core::render::{Ownership, RenderError, StreamExport, pascal_case, rust_type};
+use unibind_core::render::{Ownership, RenderError, StreamExport, pascal_case, rust_type_in};
 
 use crate::function::doc_attrs;
 use crate::ty::{self, Level, TyCtx};
@@ -46,7 +46,8 @@ pub fn render(export: &StreamExport<'_>, ctx: &TyCtx<'_>) -> Result<TokenStream,
     // Storage spells the user's own element type, which is what the
     // producer yields; only the value handed to JavaScript picks up the
     // boundary shapes (`Buffer`, `BigInt`, a record's mirror).
-    let element_decl = rust_type(export.item, ctx.user, Ownership::Owned);
+    let user = ctx.user;
+    let element_decl = rust_type_in(export.item, &quote!(#user), Ownership::Owned);
     let element_top = ty::decl(export.item, ctx, Level::Top)?;
     let element_ret = ty::ret(export.item, ctx, &quote!(value));
     let class_docs = doc_attrs(&[format!(

@@ -7,11 +7,14 @@ use unibind_core::render::{RenderError, name_ident, pascal_case};
 
 use crate::convert;
 
-/// Interface-wide context the type mapping needs: the exported module's
-/// identifier (named types resolve through `super::<user>::`), the declared
-/// objects (which map to generated handle classes, not user structs), and
-/// the records that cross through a generated mirror struct.
+/// Interface-wide context the type mapping needs: the alias the glue binds
+/// to the exported module (named types resolve through `<user>::`), the
+/// declared objects (which map to generated handle classes, not user
+/// structs), and the records that cross through a generated mirror struct.
 pub struct TyCtx<'a> {
+    /// The glue-level alias for the user's module, never `super::<module>`
+    /// directly: see the binding in [`crate::module`] for why the hop
+    /// cannot survive napi-derive's helper modules.
     pub user: &'a Ident,
     pub objects: &'a [ir::Object],
     pub mirrored: &'a [String],
@@ -106,7 +109,7 @@ pub fn decl(ty: &ir::Type, ctx: &TyCtx<'_>, level: Level) -> Result<TokenStream,
             } else {
                 let user = ctx.user;
                 let name = name_ident(name)?;
-                quote!(super::#user::#name)
+                quote!(#user::#name)
             }
         }
         ir::Type::Stream(_) => {

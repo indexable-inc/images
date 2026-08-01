@@ -61,12 +61,12 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
         #docs
         #[::napi_derive::napi(js_name = #js_name)]
         pub struct #handle {
-            inner: ::std::sync::Arc<super::#user::#name>,
+            inner: ::std::sync::Arc<#user::#name>,
             #closed_field
         }
 
         impl #handle {
-            fn __unibind_from(value: super::#user::#name) -> Self {
+            fn __unibind_from(value: #user::#name) -> Self {
                 Self {
                     inner: ::std::sync::Arc::new(value),
                     #closed_init
@@ -126,7 +126,7 @@ fn render_constructor(
     let params = &wrapper.params;
     let prologue = &wrapper.prologue;
     let exprs = &wrapper.exprs;
-    let call = quote!(super::#user::#object_ident::#ctor_name(#(#exprs),*));
+    let call = quote!(#user::#object_ident::#ctor_name(#(#exprs),*));
     let body = if ctor.throws.is_some() {
         quote! {
             match #call {

@@ -99,14 +99,14 @@ pub fn render_mirror(record: &ir::Record, ctx: &TyCtx<'_>) -> Result<TokenStream
         #[allow(dead_code)]
         impl #mirror {
             /// The record as JavaScript sees it.
-            fn __unibind_from(value: super::#user::#name) -> Self {
+            fn __unibind_from(value: #user::#name) -> Self {
                 Self { #(#from)* }
             }
 
             /// The record as the user's code takes it; a `bigint` outside a
             /// field's declared width is refused here rather than truncated.
-            fn __unibind_into(self) -> ::napi::Result<super::#user::#name> {
-                ::std::result::Result::Ok(super::#user::#name { #(#into)* })
+            fn __unibind_into(self) -> ::napi::Result<#user::#name> {
+                ::std::result::Result::Ok(#user::#name { #(#into)* })
             }
         }
     })

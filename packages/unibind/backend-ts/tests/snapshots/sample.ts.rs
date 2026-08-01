@@ -10,6 +10,8 @@
 #[doc(hidden)]
 #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
 mod __unibind_ts_sample_ts {
+    #[allow(unused_imports)]
+    use super::sample_ts as __unibind_user;
     /// One trailing optional argument on every async export; `undefined`
     /// (or omission) crosses as `None`.
     pub struct __UnibindAbortSignal {
@@ -101,7 +103,7 @@ mod __unibind_ts_sample_ts {
     #[allow(dead_code)]
     impl __UnibindRecordRow {
         /// The record as JavaScript sees it.
-        fn __unibind_from(value: super::sample_ts::Row) -> Self {
+        fn __unibind_from(value: __unibind_user::Row) -> Self {
             Self {
                 id: ::napi::bindgen_prelude::BigInt::from(value.id),
                 name: value.name,
@@ -113,8 +115,8 @@ mod __unibind_ts_sample_ts {
         }
         /// The record as the user's code takes it; a `bigint` outside a
         /// field's declared width is refused here rather than truncated.
-        fn __unibind_into(self) -> ::napi::Result<super::sample_ts::Row> {
-            ::std::result::Result::Ok(super::sample_ts::Row {
+        fn __unibind_into(self) -> ::napi::Result<__unibind_user::Row> {
+            ::std::result::Result::Ok(__unibind_user::Row {
                 id: __unibind_bigint_to_i64(self.id)?,
                 name: self.name,
                 tags: self.tags,
@@ -125,18 +127,18 @@ mod __unibind_ts_sample_ts {
         }
     }
     ///Map `SampleError` onto a decodable napi rejection reason, message from `Display`.
-    impl ::std::convert::From<super::sample_ts::SampleError> for ::napi::Error {
-        fn from(error: super::sample_ts::SampleError) -> Self {
+    impl ::std::convert::From<__unibind_user::SampleError> for ::napi::Error {
+        fn from(error: __unibind_user::SampleError) -> Self {
             let message = ::std::string::ToString::to_string(&error);
             match error {
-                super::sample_ts::SampleError::StoreGone { .. } => {
+                __unibind_user::SampleError::StoreGone { .. } => {
                     ::napi::Error::from_reason(
                         ::std::format!(
                             "{}{}", "__unibind__:err:SampleError:StoreGone:", message
                         ),
                     )
                 }
-                super::sample_ts::SampleError::Invalid { .. } => {
+                __unibind_user::SampleError::Invalid { .. } => {
                     ::napi::Error::from_reason(
                         ::std::format!(
                             "{}{}", "__unibind__:err:SampleError:Invalid:", message
@@ -155,7 +157,7 @@ mod __unibind_ts_sample_ts {
         limit: ::std::option::Option<u32>,
         root: ::std::option::Option<::std::string::String>,
     ) -> ::napi::Result<::std::vec::Vec<__UnibindRecordRow>> {
-        match super::sample_ts::rows(
+        match __unibind_user::rows(
             store.as_str(),
             limit.unwrap_or(10),
             root.as_deref(),
@@ -182,7 +184,7 @@ mod __unibind_ts_sample_ts {
         ratio: ::std::option::Option<f64>,
         note: ::std::option::Option<::std::string::String>,
     ) -> bool {
-        let value = super::sample_ts::touch(
+        let value = __unibind_user::touch(
             path.as_path(),
             data.as_ref(),
             ratio.unwrap_or(0.5),
@@ -194,7 +196,7 @@ mod __unibind_ts_sample_ts {
     ///plain sync export for JavaScript.
     #[::napi_derive::napi]
     pub fn checksum(data: ::napi::bindgen_prelude::Buffer) -> u32 {
-        let value = super::sample_ts::checksum(data.as_ref());
+        let value = __unibind_user::checksum(data.as_ref());
         value
     }
     ///Add, slowly.
@@ -208,7 +210,7 @@ mod __unibind_ts_sample_ts {
         let b = __unibind_bigint_to_i64(b)?;
         let value = __unibind_with_abort(
                 __unibind_signal,
-                super::sample_ts::slow_add(a, b),
+                __unibind_user::slow_add(a, b),
             )
             .await?;
         ::std::result::Result::Ok(::napi::bindgen_prelude::BigInt::from(value))
@@ -219,10 +221,7 @@ mod __unibind_ts_sample_ts {
         store: ::std::string::String,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
     ) -> ::napi::Result<__UnibindRecordRow> {
-        let value = __unibind_with_abort(
-                __unibind_signal,
-                super::sample_ts::fetch(store),
-            )
+        let value = __unibind_with_abort(__unibind_signal, __unibind_user::fetch(store))
             .await?;
         match value {
             ::std::result::Result::Ok(value) => {
@@ -236,7 +235,7 @@ mod __unibind_ts_sample_ts {
     ///Tail rows as a pull stream.
     #[::napi_derive::napi]
     pub fn tail(store: ::std::string::String) -> __UnibindStreamTail {
-        let value = super::sample_ts::tail(store.as_str());
+        let value = __unibind_user::tail(store.as_str());
         __UnibindStreamTail::__unibind_from(value)
     }
     ///Tail rows once the store opens (an async stream function).
@@ -247,7 +246,7 @@ mod __unibind_ts_sample_ts {
     ) -> ::napi::Result<__UnibindStreamTailLater> {
         let value = __unibind_with_abort(
                 __unibind_signal,
-                super::sample_ts::tail_later(store),
+                __unibind_user::tail_later(store),
             )
             .await?;
         match value {
@@ -267,17 +266,17 @@ mod __unibind_ts_sample_ts {
         start: ::napi::bindgen_prelude::BigInt,
     ) -> ::napi::Result<__UnibindObjectCounter> {
         let start = __unibind_bigint_to_i64(start)?;
-        let value = super::sample_ts::open_counter(start);
+        let value = __unibind_user::open_counter(start);
         ::std::result::Result::Ok(__UnibindObjectCounter::__unibind_from(value))
     }
     ///A counter resource.
     #[::napi_derive::napi(js_name = "Counter")]
     pub struct __UnibindObjectCounter {
-        inner: ::std::sync::Arc<super::sample_ts::Counter>,
+        inner: ::std::sync::Arc<__unibind_user::Counter>,
         closed: ::std::sync::atomic::AtomicBool,
     }
     impl __UnibindObjectCounter {
-        fn __unibind_from(value: super::sample_ts::Counter) -> Self {
+        fn __unibind_from(value: __unibind_user::Counter) -> Self {
             Self {
                 inner: ::std::sync::Arc::new(value),
                 closed: ::std::sync::atomic::AtomicBool::new(false),
@@ -295,7 +294,7 @@ mod __unibind_ts_sample_ts {
                 ::std::option::Option::Some(start) => __unibind_bigint_to_i64(start)?,
                 ::std::option::Option::None => 0,
             };
-            match super::sample_ts::Counter::new(start) {
+            match __unibind_user::Counter::new(start) {
                 ::std::result::Result::Ok(value) => {
                     ::std::result::Result::Ok(Self::__unibind_from(value))
                 }
@@ -402,11 +401,11 @@ mod __unibind_ts_sample_ts {
     ///Pull handle over the stream returned by `tail`.
     #[::napi_derive::napi(js_name = "TailStream")]
     pub struct __UnibindStreamTail {
-        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
+        stream: ::unibind_runtime::PullStream<__unibind_user::Row>,
     }
     impl __UnibindStreamTail {
         fn __unibind_from(
-            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
+            stream: ::unibind_runtime::UniStream<__unibind_user::Row>,
         ) -> Self {
             Self {
                 stream: ::unibind_runtime::PullStream::new(stream),
@@ -431,11 +430,11 @@ mod __unibind_ts_sample_ts {
     ///Pull handle over the stream returned by `tail_later`.
     #[::napi_derive::napi(js_name = "TailLaterStream")]
     pub struct __UnibindStreamTailLater {
-        stream: ::unibind_runtime::PullStream<super::sample_ts::Row>,
+        stream: ::unibind_runtime::PullStream<__unibind_user::Row>,
     }
     impl __UnibindStreamTailLater {
         fn __unibind_from(
-            stream: ::unibind_runtime::UniStream<super::sample_ts::Row>,
+            stream: ::unibind_runtime::UniStream<__unibind_user::Row>,
         ) -> Self {
             Self {
                 stream: ::unibind_runtime::PullStream::new(stream),

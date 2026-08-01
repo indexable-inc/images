@@ -27,7 +27,7 @@ pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, 
         let variant_ident = name_ident(&variant.name)?;
         let reason = format!("{REASON_PREFIX}:err:{}:{}:", error.name, variant.name);
         arms.push(quote! {
-            super::#user::#rust_name::#variant_ident { .. } => {
+            #user::#rust_name::#variant_ident { .. } => {
                 ::napi::Error::from_reason(::std::format!("{}{}", #reason, message))
             }
         });
@@ -39,8 +39,8 @@ pub fn render_error(error: &ir::ErrorType, user: &Ident) -> Result<TokenStream, 
     )]);
     Ok(quote! {
         #from_docs
-        impl ::std::convert::From<super::#user::#rust_name> for ::napi::Error {
-            fn from(error: super::#user::#rust_name) -> Self {
+        impl ::std::convert::From<#user::#rust_name> for ::napi::Error {
+            fn from(error: #user::#rust_name) -> Self {
                 let message = ::std::string::ToString::to_string(&error);
                 match error {
                     #(#arms)*

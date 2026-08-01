@@ -23,7 +23,19 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         )));
     }
 
-    let user = name_ident(&interface.name)?;
+    // Every reference to the user's module goes through one alias bound
+    // here, at the glue module's own scope. napi-derive relocates the items
+    // it expands into generated helper modules, and a `super::` written
+    // inside one of those resolves one level short of the crate root -- the
+    // failure an adopter cannot work around, since nothing can inject items
+    // into a generated module. A single-segment path through this alias
+    // resolves at any depth, because the helper modules `use super::*`.
+    let module = name_ident(&interface.name)?;
+    let user = format_ident!("__unibind_user");
+    let user_alias = quote! {
+        #[allow(unused_imports)]
+        use super::#module as #user;
+    };
     let mirrored = mirror::mirrored_records(&interface.records);
     let ctx = TyCtx {
         user: &user,
@@ -71,6 +83,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[doc(hidden)]
         #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
         mod #glue_ident {
+            #user_alias
             #signal
             #bigint
             #(#mirrors)*

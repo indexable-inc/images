@@ -158,3 +158,32 @@ fn wide_integers_render_as_bigint() {
         }
     }
 }
+
+/// The glue reaches the user's module through exactly one alias, bound at
+/// the glue module's own scope, and never writes `super::` anywhere else.
+///
+/// napi-derive relocates the items it expands into generated helper modules
+/// (`mod __napi_helper__<name>`), and a `super::` written inside one of
+/// those resolves one level short of the crate root: `cannot find <module>
+/// in super`. It bit the first real adopter on every object whose
+/// constructor or method mentions a user type, and an adopter cannot work
+/// around it, because nothing can inject items into a generated module. The
+/// alias survives the relocation, since the helper modules `use super::*`.
+#[test]
+fn the_glue_reaches_the_user_module_only_through_its_alias() {
+    let glue = glue_source(include_str!("fixtures/sample.rs"));
+    let hops: Vec<&str> = glue
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("super::"))
+        .collect();
+    assert_eq!(
+        hops,
+        vec!["use super::sample_ts as __unibind_user;"],
+        "the glue must spell `super::` only in its own alias binding"
+    );
+    assert!(
+        glue.contains("__unibind_user::Row"),
+        "named types must resolve through the alias:\n{glue}"
+    );
+}

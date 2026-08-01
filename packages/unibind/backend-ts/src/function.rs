@@ -123,7 +123,7 @@ pub fn render_fn(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream
     let wrapper = wrapper_parts(function, ctx)?;
     let call = {
         let exprs = &wrapper.exprs;
-        quote!(super::#user::#name(#(#exprs),*))
+        quote!(#user::#name(#(#exprs),*))
     };
     render_callable(function, ctx, &wrapper, &call, Callee::Free)
 }
