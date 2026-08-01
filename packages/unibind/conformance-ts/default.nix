@@ -3,8 +3,8 @@
   pkgs ? ix.pkgs,
 }:
 # The ts-backend conformance package through `ix.unibind.build`: the npm
-# package (native addon + generated index.js/index.d.ts) is the package,
-# with the Node end-to-end suite attached as the `node-conformance`
+# package (native addon + generated index.js/index.d.ts/schemas.ts) is the
+# package, with the Node end-to-end suite attached as the `node-conformance`
 # passthru check. Gate for issue #1993's conformance matrix.
 let
   built = ix.unibind.build {

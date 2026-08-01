@@ -114,7 +114,8 @@ Phase 1 ships that out-of-process half. `unibind-gen` (the `gen` crate) reads
 the section back and renders host files through a small
 `HostFile`/`HostEmitter` seam -- Python (`<module>.pyi`, `py.typed`, and a
 wrapper `__init__.py` unless the package hands one in) and TypeScript
-(`index.d.ts` plus the CommonJS `index.js` wrapper, `unibind-gen ts`); the
+(`index.d.ts`, the Zod `schemas.ts`, plus the CommonJS `index.js` wrapper,
+`unibind-gen ts`); the
 `.ex` (#1995) emitter implements the same seam. On the nix side,
 `unibind.lib.build { crate; targets; }` (`ix.unibind` / `index.lib.unibind`,
 packages/unibind/nix) glues it in. For `py`: the cdylib comes from the shared
@@ -246,7 +247,7 @@ rules (argument vs return position included) from the untouched IR.
 ## The TypeScript surface
 
 `unibind-gen ts --artifact <cdylib-or-.node> --addon <basename> --out <dir>`
-emits the two host files next to the addon (`./native/<basename>.node`):
+emits the host files next to the addon (`./native/<basename>.node`):
 
 - `index.d.ts`: TSDoc from the IR's doc comments on every export; defaulted
   and `Option` arguments are optional; async exports take a trailing
@@ -254,6 +255,10 @@ emits the two host files next to the addon (`./native/<basename>.node`):
   `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`); objects are
   classes with real constructors (when declared) and, for resources,
   `close()` plus `[Symbol.asyncDispose]()`.
+- `schemas.ts`: one Zod schema per record, for the callers who need the
+  boundary's shapes checked at runtime and not only at compile time (parsing
+  a config file, an HTTP body, or anything else that reaches a binding as
+  `unknown`). See the section below.
 - `index.js` (CommonJS): decodes the glue's `__unibind__:` rejection reasons
   into real classes -- one `Error` subclass per error enum (each variant a
   subclass, `code` = the variant class name) and `__unibind__:aborted` into
@@ -270,6 +275,59 @@ warning on stderr when a resource was never closed.
 `packages/unibind/conformance-ts/tests/node/conformance.test.mjs` proves all
 of it against the built addon, including backpressure through the pull
 stream's bounded channel.
+
+### Zod schemas
+
+A `.d.ts` is erased at runtime, so anything reaching a binding as `unknown`
+(a parsed config file, an HTTP body, a message off a queue) still needs a
+check. `schemas.ts` is that check, and it is generated rather than
+hand-written for the reason the types are: it comes out of the same IR
+through the same type mapping, so a schema cannot drift from the type it
+validates.
+
+```ts
+import { SampleRow } from "@scope/pkg/schemas";
+
+const row = SampleRow.parse(JSON.parse(body)); // typed as SampleRow
+```
+
+One `export const <Record>` per record, plus `export type <Record> =
+z.infer<typeof <Record>>` so the schema and its type share a name. Doc
+comments become `.describe(...)`, which (unlike a TSDoc comment) survives
+into the schema at runtime and into a JSON Schema conversion; zod 4 prefers
+`.meta({ description })` for new code, but `.describe()` is the spelling
+both majors accept. The mapping is the `.d.ts` mapping, one row per line
+above:
+
+| IR | `index.d.ts` | `schemas.ts` |
+| -- | ------------ | ------------ |
+| `Bool` | `boolean` | `z.boolean()` |
+| `Int` (`i8..i32`, `u8..u32`) | `number` | `z.number().int()` |
+| `Int` (`i64`, `u64`, `isize`, `usize`) | `bigint` | `z.bigint()` |
+| `Float` | `number` | `z.number()` |
+| `String`, `Path` | `string` | `z.string()` |
+| `Bytes` (always nested in a record) | `Array<number>` | `z.array(z.number().int())` |
+| `Option<T>` field | `name?: T \| null` | `.nullable().optional()` |
+| `Vec<T>` | `Array<T>` | `z.array(T)` |
+| `Map<String, V>` | `Record<string, V>` | `z.record(z.string(), V)` |
+| `Named` (a record) | the record's type | the record's schema |
+
+The two integer rows read from one list (`ts::types::crosses_as_bigint`), so
+a schema cannot end up checking a `number` where the declared type promises
+a `bigint`.
+
+`zod` is a peer dependency of a generated package: the file imports `z` and
+nothing else, in the two-argument `z.record` spelling that means the same
+thing on zod 3 and zod 4. A record-less interface gets no `schemas.ts` at
+all, so a package that declares no record never needs the dependency.
+
+Two shapes refuse rather than emit a file that cannot compile: a record
+graph with a reference cycle (a schema is a `const` that reads the schemas
+it references while it initializes, and `z.infer` on a self-referential
+schema has nothing to infer), and a record field naming an
+`#[unibind::object]` (a handle crosses by reference; its fields never leave
+Rust). Lowering already rejects the second, and it has never produced the
+first.
 
 ## Conformance suite
 

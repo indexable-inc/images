@@ -253,12 +253,27 @@ fn interface() -> ir::Interface {
     }
 }
 
+fn emitter() -> TsEmitter {
+    TsEmitter {
+        addon: "sample_ts".to_owned(),
+    }
+}
+
+/// The `schemas.ts` an interface emits, which every schema assertion below
+/// reads instead of re-deriving the file's position in the emit order.
+fn schemas(interface: &ir::Interface) -> String {
+    emitter()
+        .emit(interface)
+        .expect("emits")
+        .into_iter()
+        .find(|file| file.path == "schemas.ts")
+        .expect("schemas.ts is emitted")
+        .contents
+}
+
 #[test]
 fn ts_host_files_snapshot() {
-    let emitter = TsEmitter {
-        addon: "sample_ts".to_owned(),
-    };
-    let files = emitter.emit(&interface()).expect("emits");
+    let files = emitter().emit(&interface()).expect("emits");
     assert_host_snapshots(
         files
             .iter()
@@ -269,46 +284,142 @@ fn ts_host_files_snapshot() {
                 "sample.d.ts",
                 include_str!("snapshots/sample.d.ts"),
             ),
+            (
+                "schemas.ts",
+                "sample.schemas.ts",
+                include_str!("snapshots/sample.schemas.ts"),
+            ),
             ("index.js", "sample.js", include_str!("snapshots/sample.js")),
         ],
     );
 }
 
-/// Every width past an IEEE double's exact range declares as `bigint`, and
-/// only those: the narrower ones stay `number`, which is what keeps the
-/// common case ergonomic.
+/// Every width past an IEEE double's exact range is `bigint` on both
+/// surfaces, and only those: the narrower ones stay `number`, which is what
+/// keeps the common case ergonomic. One table drives both assertions because
+/// one list (`ts::types::crosses_as_bigint`) drives both renderers -- a
+/// change to one of them that missed the other would leave a schema checking
+/// a `number` where the declared type promises a `bigint`, and that is the
+/// failure this catches.
 #[test]
-fn wide_integers_declare_as_bigint() {
+fn wide_integers_are_bigint_in_the_types_and_the_schemas() {
+    let widths = [
+        ("total", ir::IntKind::U64, "bigint", "z.bigint()"),
+        ("offset", ir::IntKind::Isize, "bigint", "z.bigint()"),
+        ("size", ir::IntKind::Usize, "bigint", "z.bigint()"),
+        ("count", ir::IntKind::I64, "bigint", "z.bigint()"),
+        ("narrow", ir::IntKind::U32, "number", "z.number().int()"),
+    ];
     let mut wide = interface();
-    for (name, kind) in [
-        ("total", ir::IntKind::U64),
-        ("offset", ir::IntKind::Isize),
-        ("size", ir::IntKind::Usize),
-    ] {
+    for (name, kind, _, _) in widths {
+        // Both positions: a bare return, and a record field, which is where
+        // the mirror-struct half of the mapping lands.
         wide.functions.push(ir::Function {
             ret: Some(ir::Type::Int(kind)),
             ..function(name, None, &[], Vec::new())
         });
+        wide.records[0]
+            .fields
+            .push(field(name, None, &[], ir::Type::Int(kind)));
     }
-    wide.functions.push(ir::Function {
-        ret: Some(ir::Type::Int(ir::IntKind::U32)),
-        ..function("narrow", None, &[], Vec::new())
-    });
-    let emitter = TsEmitter {
-        addon: "sample_ts".to_owned(),
+
+    let files = emitter().emit(&wide).expect("emits");
+    let emitted = |path: &str| {
+        files
+            .iter()
+            .find(|file| file.path == path)
+            .expect("the file is emitted")
+            .contents
+            .clone()
     };
-    let files = emitter.emit(&wide).expect("emits");
-    let dts = &files
-        .iter()
-        .find(|file| file.path == "index.d.ts")
-        .expect("index.d.ts")
-        .contents;
-    for declaration in [
-        "export declare function total(): bigint;",
-        "export declare function offset(): bigint;",
-        "export declare function size(): bigint;",
-        "export declare function narrow(): number;",
-    ] {
-        assert!(dts.contains(declaration), "{dts}");
+    let dts = emitted("index.d.ts");
+    let schemas = emitted("schemas.ts");
+    for (name, _, declared, schema) in widths {
+        assert!(
+            dts.contains(&format!("export declare function {name}(): {declared};")),
+            "{dts}"
+        );
+        assert!(schemas.contains(&format!("{name}: {schema},")), "{schemas}");
     }
+}
+
+/// A record-less interface would get a `schemas.ts` holding nothing but an
+/// unused `zod` import, so it gets no file at all.
+#[test]
+fn an_interface_without_records_emits_no_schemas_file() {
+    let mut bare = interface();
+    bare.records = Vec::new();
+    bare.objects = Vec::new();
+    bare.errors = Vec::new();
+    bare.functions = vec![function("ping", None, &["Ping."], Vec::new())];
+    let files = emitter().emit(&bare).expect("emits");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["index.d.ts", "index.js"]);
+}
+
+/// `const` bindings are not hoisted, so a record referencing one declared
+/// later reads it through a thunk, and one referencing an earlier record
+/// reads the binding directly.
+#[test]
+fn a_forward_record_reference_defers_through_lazy() {
+    let head = ir::Record {
+        name: "Head".to_owned(),
+        names: names(None, None),
+        docs: docs(&[]),
+        fields: vec![field("row", None, &[], named("Row"))],
+    };
+
+    let mut forward = interface();
+    forward.records.insert(0, head.clone());
+    let rendered = schemas(&forward);
+    assert!(
+        rendered.contains("row: z.lazy(() => SampleRow),"),
+        "{rendered}"
+    );
+
+    let mut backward = interface();
+    backward.records.push(head);
+    let rendered = schemas(&backward);
+    assert!(rendered.contains("row: SampleRow,"), "{rendered}");
+}
+
+/// A cyclic record graph has no emission order that binds every schema
+/// before it is read, so it refuses by name instead of landing a file that
+/// cannot evaluate.
+#[test]
+fn a_record_reference_cycle_is_rejected() {
+    let mut cyclic = interface();
+    cyclic.records.push(ir::Record {
+        name: "Node".to_owned(),
+        names: names(None, None),
+        docs: docs(&[]),
+        fields: vec![field(
+            "kids",
+            None,
+            &[],
+            ir::Type::Vec(Box::new(named("Node"))),
+        )],
+    });
+    let error = emitter().emit(&cyclic).expect_err("a cycle must not emit");
+    assert!(
+        error.message.contains("Node -> Node") && error.message.contains("reference cycle"),
+        "{}",
+        error.message
+    );
+}
+
+/// An object handle crosses by reference; its fields never leave Rust, so
+/// there is nothing for a schema to validate.
+#[test]
+fn a_record_field_naming_an_object_is_rejected() {
+    let mut bad = interface();
+    bad.records[0]
+        .fields
+        .push(field("counter", None, &[], named("Counter")));
+    let error = emitter().emit(&bad).expect_err("an object has no schema");
+    assert!(
+        error.message.contains("is not a record"),
+        "{}",
+        error.message
+    );
 }

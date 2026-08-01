@@ -46,6 +46,26 @@ pub fn type_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
     names.ts.as_deref().unwrap_or(name)
 }
 
+/// The integer widths that cross as a JavaScript `BigInt`: a `number` is an
+/// IEEE double, exact only to 2^53, so the widths past that cross as
+/// `bigint` in every position, including record fields and container
+/// elements, matching the glue. Every TypeScript renderer asks here, so the
+/// declared type in `index.d.ts` and the Zod schema in `schemas.ts` cannot
+/// disagree about a width.
+pub const fn crosses_as_bigint(kind: ir::IntKind) -> bool {
+    matches!(
+        kind,
+        ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize
+    )
+}
+
+/// The shared refusal for a map the ts backend cannot key.
+pub fn integer_keyed_map() -> EmitError {
+    EmitError {
+        message: "integer-keyed maps are not part of the ts backend yet (issue #1993)".to_owned(),
+    }
+}
+
 /// The TypeScript type of a value crossing at `level`.
 ///
 /// # Errors
@@ -60,15 +80,13 @@ pub fn ts_type(
 ) -> Result<String, EmitError> {
     Ok(match ty {
         ir::Type::Bool => "boolean".to_owned(),
-        // A `number` is an IEEE double, exact only to 2^53, so the widths
-        // past that cross as `bigint` -- in every position, including
-        // record fields and container elements, matching the glue.
-        ir::Type::Int(kind) => match kind {
-            ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize => {
+        ir::Type::Int(kind) => {
+            if crosses_as_bigint(*kind) {
                 "bigint".to_owned()
+            } else {
+                "number".to_owned()
             }
-            _ => "number".to_owned(),
-        },
+        }
         ir::Type::Float(_) => "number".to_owned(),
         ir::Type::String { .. } | ir::Type::Path { .. } => "string".to_owned(),
         ir::Type::Bytes { .. } => match level {
@@ -81,11 +99,7 @@ pub fn ts_type(
         }
         ir::Type::Map { key, value } => {
             if !matches!(**key, ir::Type::String { .. }) {
-                return Err(EmitError {
-                    message: "integer-keyed maps are not part of the ts backend yet \
-                              (issue #1993)"
-                        .to_owned(),
-                });
+                return Err(integer_keyed_map());
             }
             format!(
                 "Record<string, {}>",
