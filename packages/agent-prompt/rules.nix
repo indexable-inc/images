@@ -1034,12 +1034,19 @@
         When verified facts suffice, act; offering to act is a failure. Pick
         a defensible default over a menu. Confirm only the destructive, the
         hard to reverse, the outward-facing, and what only the user knows. At
-        a blocker: name it, take the next viable path, and re-verify stale
-        diagnoses before parking work.
+        a blocker: report it with the approach you chose, take the next
+        viable path, and re-verify stale diagnoses before parking work. An
+        obstacle is often a property of the approach rather than of the
+        problem.
       '';
       reason = ''
         Follow-ups sat "waiting on the user" needing no permission; work sat
-        blocked on stale diagnoses. Absorbs blockedPath (index#3594).
+        blocked on stale diagnoses. Absorbs blockedPath (index#3594). The
+        approach clause landed 2026-07-31: a report of blocked work listed
+        three obstacles, all of them properties of the retry loop the agent
+        had picked rather than of the race it was handling. Serialising with
+        a lock removed all three at once, and nothing in the report could
+        have shown that from outside.
       '';
     };
   }
