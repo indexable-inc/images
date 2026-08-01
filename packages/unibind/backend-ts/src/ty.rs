@@ -161,13 +161,22 @@ pub fn object_handle_ident(object: &ir::Object) -> Ident {
     )
 }
 
-/// The Rust identifier of the generated stream class for the function
-/// `name`.
-pub fn stream_class_ident(name: &str) -> Ident {
-    Ident::new(
-        &format!("__UnibindStream{}", pascal_case(name)),
-        Span::call_site(),
-    )
+/// The Rust identifier of the generated stream class for one
+/// stream-returning export: `__UnibindStreamTail` for a free `tail`,
+/// `__UnibindStreamCounterTail` for `Counter::tail`.
+///
+/// Export names are unique per scope (Rust enforces it), so classes cannot
+/// collide within a scope; a free function named exactly like an
+/// object+method concatenation would collide across scopes, and fails
+/// loudly as a duplicate item in the glue module rather than silently
+/// misbinding.
+pub fn stream_class_ident(owner: Option<&str>, export: &str) -> Ident {
+    let export = pascal_case(export);
+    let name = owner.map_or_else(
+        || format!("__UnibindStream{export}"),
+        |object| format!("__UnibindStream{object}{export}"),
+    );
+    Ident::new(&name, Span::call_site())
 }
 
 fn int_tokens(kind: ir::IntKind) -> TokenStream {

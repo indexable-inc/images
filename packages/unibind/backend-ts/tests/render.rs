@@ -30,6 +30,32 @@ fn napi_glue_snapshot() {
     assert_render_snapshot!(interface, rendered, GLUE_SNAPSHOT, "sample.ts.rs");
 }
 
+/// Every stream-returning export gets its own handle class, scoped by its
+/// owner: the fixture's free `tail` and `Counter::tail` are both streams,
+/// and one class named for both would silently misbind them.
+#[test]
+fn stream_classes_are_owner_scoped() {
+    let glue = unibind_backend_ts::render(&interface())
+        .expect("renders")
+        .glue
+        .to_string();
+    for class in [
+        "__UnibindStreamTail",
+        "__UnibindStreamTailLater",
+        "__UnibindStreamCounterWatch",
+        "__UnibindStreamCounterTail",
+    ] {
+        // The declaration, not the bare name: `__UnibindStreamTail` is a
+        // prefix of `__UnibindStreamTailLater`, so a bare `contains` would
+        // pass on the wrong class.
+        let declaration = format!("pub struct {class} {{");
+        assert!(
+            glue.contains(&declaration),
+            "`{class}` is missing from the glue"
+        );
+    }
+}
+
 /// The ts backend names its unsupported surface instead of miscompiling.
 #[test]
 fn unsupported_surface_is_named() {

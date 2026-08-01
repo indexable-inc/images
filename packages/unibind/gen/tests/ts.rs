@@ -141,7 +141,13 @@ fn sample_functions() -> Vec<ir::Function> {
 }
 
 fn sample_records() -> Vec<ir::Record> {
-    vec![ir::Record {
+    let meta = ir::Record {
+        name: "Meta".to_owned(),
+        names: names(None, None),
+        docs: docs(&["Row provenance."]),
+        fields: vec![field("source", None, &[], owned_string())],
+    };
+    let row = ir::Record {
         name: "Row".to_owned(),
         names: names(None, Some("SampleRow")),
         docs: docs(&["A row."]),
@@ -170,8 +176,24 @@ fn sample_records() -> Vec<ir::Record> {
                 &[],
                 ir::Type::Option(Box::new(ir::Type::Path { owned: true })),
             ),
+            field(
+                "meta",
+                None,
+                &["A record inside a record, optional on both sides."],
+                ir::Type::Option(Box::new(named("Meta"))),
+            ),
+            field(
+                "meta_by_key",
+                None,
+                &["Records as map values."],
+                ir::Type::Map {
+                    key: Box::new(owned_string()),
+                    value: Box::new(named("Meta")),
+                },
+            ),
         ],
-    }]
+    };
+    vec![meta, row]
 }
 
 fn sample_errors() -> Vec<ir::ErrorType> {
@@ -225,6 +247,35 @@ fn sample_objects() -> Vec<ir::Object> {
             vec![arg("amount", ir::Type::Int(ir::IntKind::I64), None)],
         )
     };
+    let watch = ir::Function {
+        ret: Some(ir::Type::Stream(Box::new(ir::Type::Int(ir::IntKind::I64)))),
+        ..function(
+            "watch",
+            None,
+            &["Every value the counter takes, as a pull stream."],
+            Vec::new(),
+        )
+    };
+    let tail = ir::Function {
+        asyncness: ir::Asyncness::Async,
+        ret: Some(ir::Type::Stream(Box::new(named("Row")))),
+        throws: Some("SampleError".to_owned()),
+        ..function(
+            "tail",
+            Some("tailRows"),
+            &["Tail one store's rows (an async, throwing, renamed stream method)."],
+            vec![arg("store", owned_string(), None)],
+        )
+    };
+    let fork = ir::Function {
+        ret: Some(named("Counter")),
+        ..function(
+            "fork",
+            None,
+            &["A method returning another object handle."],
+            Vec::new(),
+        )
+    };
     let close = ir::Function {
         asyncness: ir::Asyncness::Async,
         ..function("close", None, &["Release the counter."], Vec::new())
@@ -235,7 +286,7 @@ fn sample_objects() -> Vec<ir::Object> {
         docs: docs(&["A counter resource."]),
         resource: true,
         constructor: Some(constructor),
-        methods: vec![value, add, close],
+        methods: vec![value, add, watch, tail, fork, close],
     }]
 }
 

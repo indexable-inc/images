@@ -165,9 +165,11 @@ Crates:
   (async ones take a trailing optional `AbortSignal` whose abort drops the
   Rust future via `tokio::select!`), `#[napi(object)]` records, error enums
   as `napi::Error` reasons under the machine-decodable
-  `__unibind__:err:<Enum>:<Variant>:<message>` prefix, pull-stream handle
-  classes (`next`/`close`), and object classes with napi constructors and an
-  idempotent resource `close()` plus an unclosed-leak warning on drop. The
+  `__unibind__:err:<Enum>:<Variant>:<message>` prefix, one pull-stream
+  handle class (`next`/`close`) per stream-returning export -- free
+  functions and object methods alike, the class named for its owner -- and
+  object classes with napi constructors and an idempotent resource
+  `close()` plus an unclosed-leak warning on drop. The
   consuming crate depends on `napi` (`napi6` + `tokio_rt`), `napi-derive`,
   `tokio` (`sync` + `macros`), and `unibind-runtime`, and builds a cdylib
   with `napi_build::setup()`. `blocking` renders as a plain sync export
@@ -229,9 +231,11 @@ emits the two host files next to the addon (`./native/<basename>.node`):
 - `index.d.ts`: TSDoc from the IR's doc comments on every export; defaulted
   and `Option` arguments are optional; async exports take a trailing
   `signal?: AbortSignal` and return `Promise<T>`; stream returns are
-  `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`); objects are
-  classes with real constructors (when declared) and, for resources,
-  `close()` plus `[Symbol.asyncDispose]()`.
+  `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`), from object
+  methods as well as free functions; objects are classes with real
+  constructors (when declared) and, for resources, `close()` plus
+  `[Symbol.asyncDispose]()`. A method returning an object hands back that
+  object's wrapper class, so `client.keys().create(...)` chains.
 - `index.js` (CommonJS): decodes the glue's `__unibind__:` rejection reasons
   into real classes -- one `Error` subclass per error enum (each variant a
   subclass, `code` = the variant class name) and `__unibind__:aborted` into

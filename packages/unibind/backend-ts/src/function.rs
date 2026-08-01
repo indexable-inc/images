@@ -8,6 +8,32 @@ use unibind_core::render::{RenderError, name_ident};
 use crate::defaults;
 use crate::ty::{self, Level, TyCtx};
 
+/// Where a callable sits. The receiver it declares and the scope its
+/// stream class is named in both follow from it.
+#[derive(Clone, Copy)]
+pub enum Callee<'a> {
+    /// A free `pub fn` in the exported module.
+    Free,
+    /// A method on `object`, whose name scopes the per-export stream class.
+    Method { object: &'a str },
+}
+
+impl<'a> Callee<'a> {
+    const fn owner(self) -> Option<&'a str> {
+        match self {
+            Self::Free => None,
+            Self::Method { object } => Some(object),
+        }
+    }
+
+    fn receiver(self) -> TokenStream {
+        match self {
+            Self::Free => TokenStream::new(),
+            Self::Method { .. } => quote!(&self,),
+        }
+    }
+}
+
 /// The pieces of one callable's wrapper signature and call, shared between
 /// free functions, object methods, and constructors.
 pub struct Wrapper {
@@ -63,17 +89,16 @@ pub fn render_fn(function: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream
         let exprs = &wrapper.exprs;
         quote!(super::#user::#name(#(#exprs),*))
     };
-    render_callable(function, ctx, &wrapper, &call, None)
+    render_callable(function, ctx, &wrapper, &call, Callee::Free)
 }
 
-/// Render the shared wrapper shape around `call`. `receiver` carries the
-/// extra tokens object methods prepend to the parameter list.
+/// Render the shared wrapper shape around `call`.
 pub fn render_callable(
     function: &ir::Function,
     ctx: &TyCtx<'_>,
     wrapper: &Wrapper,
     call: &TokenStream,
-    receiver: Option<&TokenStream>,
+    callee: Callee<'_>,
 ) -> Result<TokenStream, RenderError> {
     if let Some(ret) = &function.ret {
         ty::check(ret, &format!("the return type of `{}`", function.name))?;
@@ -82,12 +107,12 @@ pub fn render_callable(
     let napi_attr = napi_attr(function.names.ts.as_deref());
     let docs = doc_attrs(&function.docs);
     let params = &wrapper.params;
-    // A stream return crosses as the generated per-function handle class;
+    // A stream return crosses as the generated per-export handle class;
     // everything else declares through the shared type mapping.
     let ok_decl = match &function.ret {
         None => quote!(()),
         Some(ir::Type::Stream(_)) => {
-            let class = ty::stream_class_ident(&function.name);
+            let class = ty::stream_class_ident(callee.owner(), &function.name);
             quote!(#class)
         }
         Some(ret) => ty::decl(ret, ctx, Level::Top)?,
@@ -95,16 +120,17 @@ pub fn render_callable(
     let adapt = |value: &TokenStream| match &function.ret {
         None => value.clone(),
         Some(ir::Type::Stream(_)) => {
-            let class = ty::stream_class_ident(&function.name);
+            let class = ty::stream_class_ident(callee.owner(), &function.name);
             quote!(#class::__unibind_from(#value))
         }
         Some(ret) => ty::ret(ret, ctx, value),
     };
 
+    let receiver = callee.receiver();
     let shape = CallShape {
         name: &name,
         params,
-        receiver,
+        receiver: &receiver,
         call,
         ok_decl: &ok_decl,
         throws: function.throws.is_some(),
@@ -135,7 +161,8 @@ struct BodyAndRet {
 struct CallShape<'a> {
     name: &'a proc_macro2::Ident,
     params: &'a [TokenStream],
-    receiver: Option<&'a TokenStream>,
+    /// `&self,` on a method, empty for a free function.
+    receiver: &'a TokenStream,
     call: &'a TokenStream,
     ok_decl: &'a TokenStream,
     throws: bool,

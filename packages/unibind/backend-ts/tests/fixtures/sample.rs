@@ -4,6 +4,13 @@ mod sample_ts {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
+    /// Row provenance.
+    #[unibind::record]
+    #[derive(Clone)]
+    pub struct Meta {
+        pub source: String,
+    }
+
     /// A row.
     #[unibind::record(ts(name = "SampleRow"))]
     #[derive(Clone)]
@@ -16,6 +23,10 @@ mod sample_ts {
         pub weights: HashMap<String, f64>,
         pub blob: Vec<u8>,
         pub home: Option<PathBuf>,
+        /// A record inside a record, optional on both sides.
+        pub meta: Option<Meta>,
+        /// Records as map values.
+        pub meta_by_key: HashMap<String, Meta>,
     }
 
     /// Boundary failures.
@@ -118,6 +129,31 @@ mod sample_ts {
         #[unibind(ts(name = "addSlowly"))]
         pub async fn add(&self, amount: i64) -> Result<i64, SampleError> {
             Ok(self.total.fetch_add(amount, Ordering::Relaxed) + amount)
+        }
+
+        /// Every value the counter takes, as a pull stream.
+        pub fn watch(&self) -> unibind_runtime::UniStream<i64> {
+            unibind_runtime::UniStream::new(futures::stream::iter(Vec::new()))
+        }
+
+        /// Tail one store's rows (an async, throwing, renamed stream
+        /// method).
+        #[unibind(ts(name = "tailRows"))]
+        pub async fn tail(
+            &self,
+            store: String,
+        ) -> Result<unibind_runtime::UniStream<Row>, SampleError> {
+            let _ = store;
+            Ok(unibind_runtime::UniStream::new(futures::stream::iter(Vec::new())))
+        }
+
+        /// A second counter starting from this one's value: a method
+        /// returning another object handle.
+        pub fn fork(&self) -> Counter {
+            Counter {
+                total: AtomicI64::new(self.value()),
+                open: AtomicBool::new(true),
+            }
         }
 
         /// Release the counter.
