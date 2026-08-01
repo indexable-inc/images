@@ -411,6 +411,16 @@ test("a stream method yields records whose 64-bit fields cross as bigint", async
   await session.close();
 });
 
+test("a method returns a record, sync and after an await", async () => {
+  const session = api.openSession("badged");
+  // The shape that could not build before the glue stopped writing
+  // `super::`: a record return puts a path into the exported module inside
+  // the impl napi-derive relocates.
+  assert.deepEqual(session.badge(), { label: "badged" });
+  assert.deepEqual(await session.badgeLater(), { label: "badged!" });
+  await session.close();
+});
+
 test("a method returning another object hands back the wrapper class", async () => {
   const session = api.openSession("alpha");
   const keys = session.keys();

@@ -178,6 +178,17 @@ Crates:
   exactly (`i64`, `u64`, `isize`, `usize`) cross as JavaScript `bigint`;
   integer-keyed maps still reject at render time.
 
+  **The generated glue is napi 3, and both `napi` and `napi-derive` must be
+  on 3.** A workspace still pinned to napi 2 fails inside `napi_derive`
+  with errors that name no version at all -- "Only fn in impl block can be
+  marked as factory, constructor, getter or setter", "arguments cannot be
+  `self`", and an `E0107` arity mismatch -- so the diagnostic points at the
+  generated code rather than at the pin. Pin the derive too, not just the
+  runtime: the derive is what expands the glue, so a mixed napi-3 with
+  napi-derive-2 pairing is a third expansion shape that nothing here is
+  tested against. Cargo treats the two majors as distinct crates, so a
+  workspace mid-migration can carry both.
+
 ## Type mapping (phase 0)
 
 | Rust                  | IR              | Python        | TypeScript |

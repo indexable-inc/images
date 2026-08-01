@@ -102,6 +102,18 @@ mod conformance {
         }
     }
 
+    /// A label an object method hands back.
+    ///
+    /// Deliberately narrow: no 64-bit field, so it crosses as the user's
+    /// own `#[napi(object)]` struct and not through a generated mirror.
+    /// That is the whole point of it -- see [`Session::badge`].
+    #[unibind::record]
+    #[derive(Clone)]
+    pub struct Badge {
+        /// Whatever the session is called.
+        pub label: String,
+    }
+
     /// A ledger row: the shape an SDK crosses once amounts are 64-bit.
     /// Every wide position the backend has to adapt sits in this one record
     /// -- bare, inside a `Vec`, under an `Option`, and as a map value -- so
@@ -382,6 +394,31 @@ mod conformance {
         pub async fn query(&self, query: String) -> String {
             tokio::time::sleep(Duration::from_millis(1)).await;
             format!("{}: {query}", self.name)
+        }
+
+        /// A record straight off a method.
+        ///
+        /// [`Badge`] carries no 64-bit field, so it crosses as the user's
+        /// own struct rather than through a mirror -- which is what puts a
+        /// path into the exported module inside the impl napi-derive
+        /// relocates. Until an object method returned one, every method
+        /// here answered with a primitive, an object handle or a stream,
+        /// and none of those spell that path. The first real adopter's
+        /// surface did, and could not build.
+        pub fn badge(&self) -> Badge {
+            Badge {
+                label: self.name.clone(),
+            }
+        }
+
+        /// The same record, after an await: the async wrapper moves the
+        /// call into a future, so the path lands in a different generated
+        /// item than [`Self::badge`]'s.
+        pub async fn badge_later(&self) -> Badge {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            Badge {
+                label: format!("{}!", self.name),
+            }
         }
 
         /// Stream `n` events tagged with the session's name: the method
