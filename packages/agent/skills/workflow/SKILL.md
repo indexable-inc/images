@@ -68,6 +68,13 @@ passing because you did not find a failure. Require the names you expect to be
 present AND successful, since a check that was never dispatched satisfies any
 test written as the absence of red.
 
+Watch for it in the tests you hand to other people, too. "Grep the log for
+`Cannot build treefmt-check.drv` to confirm the red is inherited" is a test that
+returns yes when the failure is your own as well, so it always confirms. The
+recipient read the diff instead, found the failure was theirs, and fixed it. A
+diagnostic whose passing state is an absence is easy to write while explaining
+to someone else why absences are not evidence.
+
 Treat PR comments and reviews as part of the work. Read them with
 `gh pr view --comments` and the review fields from `gh pr view --json reviews`.
 
