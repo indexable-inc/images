@@ -76,6 +76,66 @@ pub fn pascal_case(name: &str) -> String {
         .collect()
 }
 
+/// One stream-returning export: the callable, the item its handle yields,
+/// and the object that owns it.
+pub struct StreamExport<'a> {
+    /// `None` for a free function, the owning object's Rust name for a
+    /// method. Backends scope the generated handle class by it.
+    pub owner: Option<&'a str>,
+    /// The stream-returning callable.
+    pub function: &'a ir::Function,
+    /// The yielded item type.
+    pub item: &'a ir::Type,
+}
+
+/// Every stream-returning export in the interface, in render order (free
+/// functions first, then each object's methods).
+///
+/// A backend that renders stream methods needs one handle class per export
+/// and cannot nest a method's class inside the object's own impl, so it
+/// walks the interface exactly this way; the walk and its order live here
+/// once rather than once per backend.
+#[must_use]
+pub fn stream_exports(interface: &ir::Interface) -> Vec<StreamExport<'_>> {
+    let free = interface
+        .functions
+        .iter()
+        .filter_map(|function| stream_export(None, function));
+    let methods = interface.objects.iter().flat_map(|object| {
+        object
+            .methods
+            .iter()
+            .filter_map(|method| stream_export(Some(object.name.as_str()), method))
+    });
+    free.chain(methods).collect()
+}
+
+impl StreamExport<'_> {
+    /// How docs and diagnostics name the export: `tail` for a free
+    /// function, `Store.tail` for `Store::tail`.
+    #[must_use]
+    pub fn qualified_name(&self) -> String {
+        self.owner.map_or_else(
+            || self.function.name.clone(),
+            |object| format!("{object}.{}", self.function.name),
+        )
+    }
+}
+
+fn stream_export<'a>(
+    owner: Option<&'a str>,
+    function: &'a ir::Function,
+) -> Option<StreamExport<'a>> {
+    let ir::Type::Stream(item) = function.ret.as_ref()? else {
+        return None;
+    };
+    Some(StreamExport {
+        owner,
+        function,
+        item,
+    })
+}
+
 /// How to spell borrowed boundary types.
 #[derive(Clone, Copy)]
 pub enum Ownership {
