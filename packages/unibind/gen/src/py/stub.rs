@@ -8,8 +8,9 @@
 
 use std::fmt::Write as _;
 
-use unibind_backend_py::stream::{self as streams, StreamExport};
+use unibind_backend_py::stream as streams;
 use unibind_core::ir;
+use unibind_core::render::{StreamExport, stream_exports};
 
 use crate::py::types::{self, Position};
 
@@ -33,7 +34,7 @@ pub fn render(interface: &ir::Interface) -> String {
     }
     // Forward references need no quoting in a stub, so stream classes can
     // trail the objects whose methods return them.
-    for export in streams::collect(interface) {
+    for export in stream_exports(interface) {
         blocks.push(stream_class(interface, &export));
     }
     for function in &interface.functions {
@@ -264,12 +265,8 @@ fn constructor_def(interface: &ir::Interface, ctor: &ir::Function) -> String {
 /// `__anext__` resolves one item) and their synthesized docstrings.
 fn stream_class(interface: &ir::Interface, export: &StreamExport<'_>) -> String {
     let class = streams::class_name(export.owner, &export.function.name);
-    let produced = export.owner.map_or_else(
-        || export.function.name.clone(),
-        |object| format!("{object}.{}", export.function.name),
-    );
     let docs = vec![
-        format!("Async iterator produced by `{produced}`."),
+        format!("Async iterator produced by `{}`.", export.qualified_name()),
         String::new(),
         "Pull-based: each `__anext__` polls exactly one item, so the producer only runs as \
          fast as the consumer awaits."

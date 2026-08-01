@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use unibind_core::ir;
-use unibind_core::render::{RenderError, RenderedInterface, name_ident};
+use unibind_core::render::{self, RenderError, RenderedInterface, name_ident};
 
 use crate::ty::TyCtx;
 use crate::{error, function, object, record, stream};
@@ -50,9 +50,9 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         .collect::<Result<Vec<_>, _>>()?;
     // Every stream class renders here rather than next to its export: a
     // method's class cannot live inside the object's `#[napi] impl`.
-    let streams = stream::collect(interface)
+    let streams = render::stream_exports(interface)
         .iter()
-        .map(|export| export.render(&ctx))
+        .map(|export| stream::render(export, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let signal = needs_signal(interface).then(abort_signal);
     let module_docs = function::doc_attrs(&interface.docs);

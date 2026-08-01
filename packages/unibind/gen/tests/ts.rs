@@ -40,6 +40,14 @@ fn named(name: &str) -> ir::Type {
     ir::Type::Named(name.to_owned())
 }
 
+/// The only map shape the ts backend carries: string keys.
+fn string_map(value: ir::Type) -> ir::Type {
+    ir::Type::Map {
+        key: Box::new(owned_string()),
+        value: Box::new(value),
+    }
+}
+
 fn sample_functions() -> Vec<ir::Function> {
     let rows = ir::Function {
         ret: Some(ir::Type::Vec(Box::new(named("Row")))),
@@ -164,10 +172,7 @@ fn sample_records() -> Vec<ir::Record> {
                 "weights",
                 None,
                 &[],
-                ir::Type::Map {
-                    key: Box::new(owned_string()),
-                    value: Box::new(ir::Type::Float(ir::FloatKind::F64)),
-                },
+                string_map(ir::Type::Float(ir::FloatKind::F64)),
             ),
             field("blob", None, &[], ir::Type::Bytes { owned: true }),
             field(
@@ -176,21 +181,8 @@ fn sample_records() -> Vec<ir::Record> {
                 &[],
                 ir::Type::Option(Box::new(ir::Type::Path { owned: true })),
             ),
-            field(
-                "meta",
-                None,
-                &["A record inside a record, optional on both sides."],
-                ir::Type::Option(Box::new(named("Meta"))),
-            ),
-            field(
-                "meta_by_key",
-                None,
-                &["Records as map values."],
-                ir::Type::Map {
-                    key: Box::new(owned_string()),
-                    value: Box::new(named("Meta")),
-                },
-            ),
+            field("meta", None, &[], ir::Type::Option(Box::new(named("Meta")))),
+            field("meta_by_key", None, &[], string_map(named("Meta"))),
         ],
     };
     vec![meta, row]
@@ -249,32 +241,29 @@ fn sample_objects() -> Vec<ir::Object> {
     };
     let watch = ir::Function {
         ret: Some(ir::Type::Stream(Box::new(ir::Type::Int(ir::IntKind::I64)))),
-        ..function(
-            "watch",
-            None,
-            &["Every value the counter takes, as a pull stream."],
-            Vec::new(),
-        )
+        ..function("watch", None, &["Every value the counter takes."], Vec::new())
     };
     let tail = ir::Function {
         asyncness: ir::Asyncness::Async,
-        ret: Some(ir::Type::Stream(Box::new(named("Row")))),
+        ret: Some(ir::Type::Stream(Box::new(owned_string()))),
         throws: Some("SampleError".to_owned()),
         ..function(
             "tail",
             Some("tailRows"),
-            &["Tail one store's rows (an async, throwing, renamed stream method)."],
-            vec![arg("store", owned_string(), None)],
+            &["Labels under `prefix` (async, throwing, renamed)."],
+            vec![
+                arg("prefix", owned_string(), None),
+                arg(
+                    "limit",
+                    ir::Type::Int(ir::IntKind::U32),
+                    Some(ir::Literal::Int(10)),
+                ),
+            ],
         )
     };
     let fork = ir::Function {
         ret: Some(named("Counter")),
-        ..function(
-            "fork",
-            None,
-            &["A method returning another object handle."],
-            Vec::new(),
-        )
+        ..function("fork", None, &["Fork a counter."], Vec::new())
     };
     let close = ir::Function {
         asyncness: ir::Asyncness::Async,

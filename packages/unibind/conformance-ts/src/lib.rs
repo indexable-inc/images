@@ -211,14 +211,18 @@ mod conformance {
         Err(ConformanceError::BadQuery("async".to_owned()))
     }
 
-    /// Count `0..n` into a bounded(2) channel with `delay_ms` between
-    /// items, so backpressure and early close are observable through
-    /// [`stream_items_produced`]. The producer is a real detached task:
-    /// dropping the stream closes the channel, which is how it stops.
-    pub fn count_stream(
+    /// `n` items from `item`, pushed `delay_ms` apart into a bounded(2)
+    /// channel and tallied in `produced`, so backpressure and early close
+    /// are observable from JavaScript. The producer is a real detached
+    /// task: dropping the stream closes the channel, which is how it
+    /// stops. Every counting stream here runs on this one mechanism, so a
+    /// method's stream and a function's behave identically under load.
+    fn counted_stream<T: Send + 'static>(
         n: i64,
-        #[unibind(default = 0)] delay_ms: i64,
-    ) -> unibind_runtime::UniStream<i64> {
+        delay_ms: i64,
+        produced: &'static AtomicI64,
+        item: impl Fn(i64) -> T + Send + 'static,
+    ) -> unibind_runtime::UniStream<T> {
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         let delay = millis_duration(delay_ms);
         // Detach the producer; napi's spawn targets the same tokio runtime
@@ -228,16 +232,24 @@ mod conformance {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                if sender.send(value).await.is_err() {
+                if sender.send(item(value)).await.is_err() {
                     return;
                 }
-                STREAM_ITEMS_PRODUCED.fetch_add(1, Ordering::SeqCst);
+                produced.fetch_add(1, Ordering::SeqCst);
             }
         }));
         unibind_runtime::UniStream::new(futures::stream::unfold(
             receiver,
             |mut receiver| async move { receiver.recv().await.map(|value| (value, receiver)) },
         ))
+    }
+
+    /// Count `0..n`, observable through [`stream_items_produced`].
+    pub fn count_stream(
+        n: i64,
+        #[unibind(default = 0)] delay_ms: i64,
+    ) -> unibind_runtime::UniStream<i64> {
+        counted_stream(n, delay_ms, &STREAM_ITEMS_PRODUCED, |value| value)
     }
 
     /// The async composition: resolve to a stream after an await.
@@ -293,33 +305,18 @@ mod conformance {
             format!("{}: {query}", self.name)
         }
 
-        /// Stream `n` events tagged with the session's name through a
-        /// bounded(2) channel with `delay_ms` between items: the method
-        /// twin of [`count_stream`], so backpressure and early close are
-        /// observable through [`session_events_produced`].
+        /// Stream `n` events tagged with the session's name: the method
+        /// twin of [`count_stream`] on the same bounded producer, counted
+        /// by [`session_events_produced`].
         pub fn events(
             &self,
             n: i64,
             #[unibind(default = 0)] delay_ms: i64,
         ) -> unibind_runtime::UniStream<String> {
-            let (sender, receiver) = tokio::sync::mpsc::channel(2);
-            let delay = millis_duration(delay_ms);
             let name = self.name.clone();
-            drop(napi::bindgen_prelude::spawn(async move {
-                for value in 0..n {
-                    if !delay.is_zero() {
-                        tokio::time::sleep(delay).await;
-                    }
-                    if sender.send(format!("{name}:{value}")).await.is_err() {
-                        return;
-                    }
-                    SESSION_EVENTS_PRODUCED.fetch_add(1, Ordering::SeqCst);
-                }
-            }));
-            unibind_runtime::UniStream::new(futures::stream::unfold(
-                receiver,
-                |mut receiver| async move { receiver.recv().await.map(|value| (value, receiver)) },
-            ))
+            counted_stream(n, delay_ms, &SESSION_EVENTS_PRODUCED, move |value| {
+                format!("{name}:{value}")
+            })
         }
 
         /// Three lines for `query`, or a rejection when it is empty: the

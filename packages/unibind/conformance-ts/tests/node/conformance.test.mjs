@@ -120,11 +120,15 @@ test("async functions resolve as real promises and decode rejections", async () 
   });
 });
 
-test("abort mid-flight rejects promptly and drops the Rust future", async () => {
+// Abort in flight: the call rejects with an AbortError well before its own
+// 500ms sleep would resolve, and the Rust future is dropped (its guard bumps
+// droppedMidFlightCount). `start` takes the signal, so a free function and a
+// method are the same measurement.
+async function assertAbortsMidFlight(start) {
   const baseline = api.droppedMidFlightCount();
   const controller = new AbortController();
   const started = Date.now();
-  const pending = api.sleepEcho("never", 500, controller.signal);
+  const pending = start(controller.signal);
   setTimeout(() => controller.abort(), 50);
   await assert.rejects(pending, (error) => {
     assert.equal(error.name, "AbortError");
@@ -136,6 +140,10 @@ test("abort mid-flight rejects promptly and drops the Rust future", async () => 
     await pollUntil(() => api.droppedMidFlightCount() > baseline),
     "droppedMidFlightCount never moved: the Rust future was not dropped",
   );
+}
+
+test("abort mid-flight rejects promptly and drops the Rust future", async () => {
+  await assertAbortsMidFlight((signal) => api.sleepEcho("never", 500, signal));
 });
 
 test("an already-aborted signal rejects before the future starts", async () => {
@@ -169,31 +177,40 @@ test("an async stream function resolves to an iterable stream", async () => {
   assert.deepEqual(items, [0, 1, 2]);
 });
 
-test("streams exert backpressure through the bounded(2) channel", async () => {
-  const baseline = api.streamItemsProduced();
-  const stream = api.countStream(20);
+// The bounded(2) pull, whatever opened the stream: the producer runs at
+// most a couple of items ahead of the consumer, stops when the stream
+// closes, and a closed stream's next() resolves null. `open` is a factory
+// so the produced-counter baseline is read before anything is produced.
+async function assertBoundedPull({ open, produced, item, total }) {
+  const baseline = produced();
+  const stream = open();
   let consumed = 0;
   for (let pull = 0; pull < 3; pull += 1) {
-    assert.equal(await stream.next(), consumed);
+    assert.equal(await stream.next(), item(consumed));
     consumed += 1;
     await sleep(50); // an unthrottled producer would run far ahead here
-    const produced = api.streamItemsProduced() - baseline;
+    const ahead = produced() - baseline;
     assert.ok(
-      produced <= consumed + 3,
-      `producer pushed ${produced} with only ${consumed} consumed; bounded(2) should cap it`,
+      ahead <= consumed + 3,
+      `producer pushed ${ahead} with only ${consumed} consumed; bounded(2) should cap it`,
     );
   }
   stream.close();
   await sleep(100); // let a send blocked on the full channel observe the close
-  const settled = api.streamItemsProduced() - baseline;
+  const settled = produced() - baseline;
   await sleep(100);
-  assert.equal(
-    api.streamItemsProduced() - baseline,
-    settled,
-    "producer kept pushing after close()",
-  );
-  assert.ok(settled < 20, `producer pushed all ${settled} items despite the early close`);
+  assert.equal(produced() - baseline, settled, "producer kept pushing after close()");
+  assert.ok(settled < total, `producer pushed all ${settled} items despite the early close`);
   assert.equal(await stream.next(), null, "next() after close() resolves null");
+}
+
+test("streams exert backpressure through the bounded(2) channel", async () => {
+  await assertBoundedPull({
+    open: () => api.countStream(20),
+    produced: () => api.streamItemsProduced(),
+    item: (index) => index,
+    total: 20,
+  });
 });
 
 test("early break from for-await closes the stream", async () => {
@@ -247,30 +264,12 @@ test("a stream method iterates, and its items carry the receiver's state", async
 
 test("a stream method exerts backpressure and stops at close()", async () => {
   const session = api.openSession("bounded");
-  const baseline = api.sessionEventsProduced();
-  const stream = session.events(20);
-  let consumed = 0;
-  for (let pull = 0; pull < 3; pull += 1) {
-    assert.equal(await stream.next(), `bounded:${consumed}`);
-    consumed += 1;
-    await sleep(50); // an unthrottled producer would run far ahead here
-    const produced = api.sessionEventsProduced() - baseline;
-    assert.ok(
-      produced <= consumed + 3,
-      `producer pushed ${produced} with only ${consumed} consumed; bounded(2) should cap it`,
-    );
-  }
-  stream.close();
-  await sleep(100); // let a send blocked on the full channel observe the close
-  const settled = api.sessionEventsProduced() - baseline;
-  await sleep(100);
-  assert.equal(
-    api.sessionEventsProduced() - baseline,
-    settled,
-    "producer kept pushing after close()",
-  );
-  assert.ok(settled < 20, `producer pushed all ${settled} events despite the early close`);
-  assert.equal(await stream.next(), null, "next() after close() resolves null");
+  await assertBoundedPull({
+    open: () => session.events(20),
+    produced: () => api.sessionEventsProduced(),
+    item: (index) => `bounded:${index}`,
+    total: 20,
+  });
   await session.close();
 });
 
@@ -294,18 +293,7 @@ test("a throwing stream method fails before any stream exists", async () => {
 
 test("aborting an async stream method rejects and drops the Rust future", async () => {
   const session = api.openSession("abortable");
-  const baseline = api.droppedMidFlightCount();
-  const controller = new AbortController();
-  const pending = session.eventsLater(3, 500, controller.signal);
-  setTimeout(() => controller.abort(), 50);
-  await assert.rejects(pending, (error) => {
-    assert.equal(error.name, "AbortError");
-    return true;
-  });
-  assert.ok(
-    await pollUntil(() => api.droppedMidFlightCount() > baseline),
-    "droppedMidFlightCount never moved: the Rust future was not dropped",
-  );
+  await assertAbortsMidFlight((signal) => session.eventsLater(3, 500, signal));
   const items = [];
   for await (const item of await session.eventsLater(3, 1)) {
     items.push(item);
