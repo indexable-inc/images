@@ -82,6 +82,42 @@ fn init_upstream(root: &Path) -> PathBuf {
     upstream
 }
 
+/// A fresh upstream plus a clone of it, and the base commit they share.
+///
+/// Every fork shape starts here and differs only in what it commits and how it
+/// merges, so the scaffolding lives once.
+struct Forked {
+    upstream: PathBuf,
+    fork: PathBuf,
+    base: String,
+}
+
+/// Build [`Forked`] under `root`.
+fn fork_of_upstream(root: &Path) -> Forked {
+    let upstream = init_upstream(root);
+    let fork = root.join("fork");
+    git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
+    let base = git(&fork, &["rev-parse", "main"]);
+    Forked {
+        upstream,
+        fork,
+        base,
+    }
+}
+
+/// Write `file`, stage it, and commit it as `subject` with `body`. An empty
+/// body makes a reason-less commit, which the refusal tests want.
+fn commit_patch(fork: &Path, file: &str, contents: &str, subject: &str, body: &str) {
+    fs::write(fork.join(file), contents).unwrap();
+    git(fork, &["add", "."]);
+    let message = if body.is_empty() {
+        subject.to_owned()
+    } else {
+        format!("{subject}\n\n{body}")
+    };
+    git(fork, &["commit", "--quiet", "-m", &message]);
+}
+
 /// The https URLs the binaries see; the gitconfig redirects them locally.
 pub const UPSTREAM_URL: &str = "https://github.com/fakeorg/fakerepo.git";
 pub const FORK_REPO: &str = "fakefork/fakerepo";
@@ -147,26 +183,20 @@ impl Fixture {
     /// patch is off the first-parent path from that patch and the second is
     /// dropped by `--no-merges`.
     pub fn megamerge_dag(root: &Path, first: (&str, &str), second: (&str, &str)) -> Self {
-        let upstream = init_upstream(root);
-        let fork = root.join("fork");
-        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-        let base = git(&fork, &["rev-parse", "main"]);
+        let Forked {
+            upstream,
+            fork,
+            base,
+        } = fork_of_upstream(root);
 
         git(&fork, &["checkout", "--quiet", "-B", "p0", &base]);
-        fs::write(fork.join("patch-0.txt"), format!("{}\n", first.0)).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{}\n\n{}", first.0, first.1)],
-        );
+        commit_patch(&fork, "patch-0.txt", &format!("{}\n", first.0), first.0, first.1);
         let p0 = git(&fork, &["rev-parse", "HEAD"]);
 
         // The tree the second patch lands, committed normally and then
         // re-parented, because commit-tree is the only way to author the
         // parent order this shape needs.
-        fs::write(fork.join("patch-1.txt"), format!("{}\n", second.0)).unwrap();
-        git(&fork, &["add", "."]);
-        git(&fork, &["commit", "--quiet", "-m", "scratch"]);
+        commit_patch(&fork, "patch-1.txt", &format!("{}\n", second.0), "scratch", "");
         #[expect(
             clippy::literal_string_with_formatting_args,
             reason = "^{tree} is git revision syntax, not a format placeholder"
@@ -212,18 +242,14 @@ impl Fixture {
     /// revisions of one patch sharing one subject. This is the home-manager
     /// shape from ENG-11646.
     pub fn merge_forwarded(root: &Path, patches: &[(&str, &str)]) -> Self {
-        let upstream = init_upstream(root);
-        let fork = root.join("fork");
-        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-        let base = git(&fork, &["rev-parse", "main"]);
+        let Forked {
+            upstream,
+            fork,
+            base,
+        } = fork_of_upstream(root);
         git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
         for (i, (subject, body)) in patches.iter().enumerate() {
-            fs::write(fork.join(format!("patch-{i}.txt")), format!("{subject}\n")).unwrap();
-            git(&fork, &["add", "."]);
-            git(
-                &fork,
-                &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-            );
+            commit_patch(&fork, &format!("patch-{i}.txt"), &format!("{subject}\n"), subject, body);
         }
 
         // An earlier revision of the first patch, on its own line off the same
@@ -234,12 +260,7 @@ impl Fixture {
             &fork,
             &["checkout", "--quiet", "-b", "earlier-revision", &base],
         );
-        fs::write(fork.join("patch-0.txt"), format!("{subject}\nearlier\n")).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-        );
+        commit_patch(&fork, "patch-0.txt", &format!("{subject}\nearlier\n"), subject, body);
         let earlier = git(&fork, &["rev-parse", "HEAD"]);
 
         // Merged for ancestry alone; -s ours keeps the branch's tree, which is
@@ -283,28 +304,17 @@ impl Fixture {
     /// branch's own line, which is what GitHub's merge button produces
     /// (ENG-11686).
     pub fn pr_merged(root: &Path, direct: (&str, &str), merged: (&str, &str)) -> Self {
-        let upstream = init_upstream(root);
-        let fork = root.join("fork");
-        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-        let base = git(&fork, &["rev-parse", "main"]);
+        let Forked {
+            upstream,
+            fork,
+            base,
+        } = fork_of_upstream(root);
         git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
+        commit_patch(&fork, "patch-direct.txt", &format!("{}\n", direct.0), direct.0, direct.1);
 
-        let (subject, body) = direct;
-        fs::write(fork.join("patch-direct.txt"), format!("{subject}\n")).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-        );
-
-        let (subject, body) = merged;
+        // The pull request's own branch, merged back with the merge button.
         git(&fork, &["checkout", "--quiet", "-b", "pr-branch"]);
-        fs::write(fork.join("patch-pr.txt"), format!("{subject}\n")).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-        );
+        commit_patch(&fork, "patch-pr.txt", &format!("{}\n", merged.0), merged.0, merged.1);
         git(&fork, &["checkout", "--quiet", "ix-patched"]);
         git(
             &fork,
@@ -333,31 +343,20 @@ impl Fixture {
     /// creation and target checks in activation". Only the merge's TREE
     /// distinguishes them, and reading them as patches is ENG-11646.
     pub fn retitled_pinned_revision(root: &Path, old: (&str, &str), new: (&str, &str)) -> Self {
-        let upstream = init_upstream(root);
-        let fork = root.join("fork");
-        git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-        let base = git(&fork, &["rev-parse", "main"]);
+        let Forked {
+            upstream,
+            fork,
+            base,
+        } = fork_of_upstream(root);
 
         // The revision a lock still pins, under the subject it had then.
-        let (subject, body) = old;
         git(&fork, &["checkout", "--quiet", "-b", "pinned", &base]);
-        fs::write(fork.join("patch.txt"), format!("{subject}\nearlier\n")).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-        );
+        commit_patch(&fork, "patch.txt", &format!("{}\nearlier\n", old.0), old.0, old.1);
         let pinned = git(&fork, &["rev-parse", "HEAD"]);
 
         // The branch's own copy, retitled.
-        let (subject, body) = new;
         git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
-        fs::write(fork.join("patch.txt"), format!("{subject}\n")).unwrap();
-        git(&fork, &["add", "."]);
-        git(
-            &fork,
-            &["commit", "--quiet", "-m", &format!("{subject}\n\n{body}")],
-        );
+        commit_patch(&fork, "patch.txt", &format!("{}\n", new.0), new.0, new.1);
 
         // `-s ours` keeps the branch's tree, which is what reconciling an
         // equivalent revision does and what makes this merge ancestry-only.
