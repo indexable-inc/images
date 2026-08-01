@@ -22,23 +22,26 @@
 # that did not think to look at `runs-on`, which is precisely the failure a lint
 # absorbs and a human does not.
 #
-# TWO SHAPES A `runs-on:` GREP CANNOT SEE, and both were live in this repository
-# when this was written. A `workflow_call` input can carry a hosted default, as
-# `runner-label` does in ci-budget.yml and ci-budget-read-only.yml, which puts a
-# hosted runner in every caller that does not override it -- including
-# indexable-inc/ix's own ci.yml, so a hosted job ran on every one of that
-# repository's CI runs and no search of that repository could have found it. And
-# a caller can pass a hosted label into a reusable workflow's parameter. Both are
-# checked below, so the guard covers the DECISION rather than the one syntax
-# that usually expresses it.
+# TWO SHAPES A `runs-on:` GREP CANNOT SEE, and both were live when this was
+# written. A `workflow_call` input can carry a hosted default
+# (`runner-label: {default: ubuntu-latest}`), which puts a hosted runner in
+# every caller that does not override it -- including callers in other
+# repositories, where nobody looking at this repo would find it. And a caller
+# can pass a hosted label into a reusable workflow's parameter. Both are checked
+# below, so the guard covers the DECISION rather than the one syntax that
+# usually expresses it.
 #
-# Inputs: $workflow, the repo-relative path, for the message. $allow, an object
+# Inputs: $workflow, the repo-relative path, for the message. $repo, this
+# repository's `owner/name`, so a self-referencing `uses:` is recognised as
+# local. $allow, an object
 # whose values are the written reason an entry is exempt, keyed by what is being
 # excused, one key shape per rule below:
 #
 #   "<workflow>:<job>"                 a job's own `runs-on`
 #   "<workflow>:input:<name>"          a `workflow_call` input's default
 #   "<workflow>:<job>:with:<name>"     a label passed at a call site
+#   "<workflow>:<job>:uses"            a cross-repo call with no runner-label
+#   "<workflow>:<job>:credential"      a job entitled to its credential suffix
 #
 # An exception is a named line in the calling check with prose next to it, never
 # a loosened pattern. Every entry is printed on each run, so an exception cannot
@@ -140,6 +143,81 @@ def hosted_input_defaults($allow):
       | {input: .key, default: .value.default}
     ];
 
+# A CROSS-REPO reusable-workflow call that passes no `runner-label` at all.
+# Ported from ix#9423, whose author found it; it is the other half of the
+# input-default hole and this file did not have it.
+#
+# Not passing the label means trusting a default declared in a repository this
+# check cannot read. That is not hypothetical: ix's own ci.yml calls
+# `indexable-inc/index/.github/workflows/ci-budget.yml@main` passing only
+# `pull-request-number` and `force-big-change`, and index defaults
+# `runner-label` to `ubuntu-latest`, so a hosted job has been running on every
+# ix CI run. Reading only `runs-on` certifies that tree clean.
+#
+# LOCAL calls are exempt, and getting this wrong is instructive. Requiring the
+# label everywhere is unsatisfiable: auto-deploy.yml calls ./deploy.yml, which
+# declares no `runner-label` input at all, and does not need one because its
+# `runs-on` is in this tree and checked by this same guard. ix#9423 found that
+# by looking at the callee rather than allow-listing the complaint.
+def crossrepo_calls_without_label($allow):
+  [ .jobs // {}
+    | to_entries[]
+    | . as $job
+    | select($job.value.uses? != null)
+    # Local is `./`, and also `<this repo>/...`, which index uses to call its own
+    # reusable workflows by full name. The distinction that matters is not the
+    # syntax but whether THIS check can read the default being relied on: it can
+    # for its own repository (the input-default rule above does exactly that),
+    # and it cannot for anyone else's.
+    | select($job.value.uses | startswith("./") | not)
+    | select($job.value.uses | startswith($repo + "/") | not)
+    | select((($job.value["with"] // {}) | to_entries | map(select(.key | test("runner[-_]?label"))) | length) == 0)
+    | select($allow | has("\($workflow | split("/") | last):\($job.key):uses") | not)
+    | {job: $job.key, uses: $job.value.uses}
+  ];
+
+# A job whose label ENDS in a suffix the dispatcher grants fleet-trust
+# credentials on, without being named as entitled to it.
+#
+# This is the trap that nearly caught this change: the obvious suffix for
+# cache-warm-reaper.yml is `-cache-warm`, and `ix_nix_cache_push_eligible`
+# matches on `label.ends_with("-cache-warm")`, so a job whose entire purpose is
+# cancelling workflow runs would have been handed the fleet nix-cache SIGNING
+# key. Checked mechanically here rather than left to whoever names the next job
+# noticing, since the failure is silent and the blast radius is fleet-wide.
+#
+# The three suffixes are the `ends_with` sites in
+# crates/ci/dispatcher/src/handler/workflow_job/credential_gate.rs.
+def credential_suffixes: ["-cache-push", "-cache-warm", "-prod"];
+
+def claim_name:
+  (capture("ix-ci-run-\\{0\\}-\\{1\\}-(?<n>[A-Za-z0-9{}._-]+)") | .n) // null;
+
+def credential_grabs($allow):
+  [ .jobs // {}
+    | to_entries[]
+    | . as $job
+    | ($job.value | runner_strings)[]
+    | claim_name
+    | select(. != null)
+    | . as $name
+    # `$sfx` bound before the `endswith`, and this is the THIRD instance of the
+    # same trap in this file: `$name | endswith(.)` evaluates its argument with
+    # `.` rebound to $name, so it asks whether $name ends with itself and every
+    # job matched `-cache-push`. Caught only by running it over the real tree
+    # and disbelieving a result that flagged 29 of 29 workflows.
+    # Against `-<name>`, not `<name>`: the dispatcher matches the whole rendered
+    # label `ix-ci-run-<run>-<attempt>-<name>`, so the job called `cache-warm`
+    # DOES end in `-cache-warm` and must be caught, while `cache-warm-reaper`
+    # does not and must not be.
+    | ("-" + $name) as $tail
+    | (credential_suffixes | map(. as $sfx | select($tail | endswith($sfx))))[0]
+    | select(. != null)
+    | . as $suffix
+    | select($allow | has("\($workflow | split("/") | last):\($job.key):credential") | not)
+    | {job: $job.key, name: $name, suffix: $suffix}
+  ];
+
 # What a caller hands a reusable workflow. The parameter is exempt where it is
 # declared precisely because it is checked here.
 def hosted_call_sites($allow):
@@ -164,11 +242,20 @@ def hosted_call_sites($allow):
 | hosted_jobs($allow) as $jobs
 | hosted_input_defaults($allow) as $defaults
 | hosted_call_sites($allow) as $calls
+| crossrepo_calls_without_label($allow) as $crossrepo
+| credential_grabs($allow) as $grabs
 | if ($jobs | length) > 0
-  then error("\($workflow): job \($jobs[0].job) does not claim a fleet runner -- \($jobs[0].labels | map(describe(.)) | join("; ")). Every job in this repository runs on an ix-ci-dispatcher runner: `runs-on: [\"${{ format('ix-ci-run-{0}-{1}-<name>', github.run_id, github.run_attempt) }}\"]`. If this job genuinely cannot, add it to `allowlist` in packages/workflow-hosted-runner/default.nix with the reason written next to it; do not widen the pattern.")
+  # The message teaches the two things an author has to get right after the
+  # claim itself, because both fail silently and neither is guessable. Wording
+  # follows ix#9423, whose version said this better than the original here did.
+  then error("\($workflow): job \($jobs[0].job) does not claim a fleet runner -- \($jobs[0].labels | map(describe(.)) | join("; ")). Every job in this repository runs on an ix-ci-dispatcher runner:\n    runs-on: [\"${{ format('ix-ci-run-{0}-{1}-<name>', github.run_id, github.run_attempt) }}\"]\n  Pick <name> deliberately: the dispatcher grants fleet-trust credentials to labels ENDING in `-cache-push`, `-cache-warm` or `-prod` (crates/ci/dispatcher/src/handler/workflow_job/credential_gate.rs), so extend past them rather than landing on one (`-cache-warm-reaper`, not `-cache-warm`).\n  The fleet PATH carries only bash, coreutils, dash, git, github-runner, tar, gzip, unzip and nix, so provision `gh`, `jq` and friends with a literal `nix build --no-link --print-out-paths nixpkgs#gh`. Spell the installables out: workflow-nix-bootstrap.jq withdraws its nixpkgs-only exemption once an argument contains `$`.\n  If the fleet genuinely cannot serve this job, add it to `allowlist` in packages/workflow-hosted-runner/default.nix with a written reason; do not widen the pattern.")
   elif ($defaults | length) > 0
   then error("\($workflow): the `workflow_call` input `\($defaults[0].input)` defaults to `\($defaults[0].default)`, which is not a fleet claim, and a job here uses that input as its `runs-on`. A default is what every caller that does not override it gets, including callers in other repositories, so a hosted default puts a hosted runner in runs nobody reading this repository would find. Default it to a dispatcher claim, as .github/workflows/update-flake-lock.yml does: `runs-on: [\"${{ inputs.runner-label || format('ix-ci-run-{0}-{1}-<name>', github.run_id, github.run_attempt) }}\"]`.")
   elif ($calls | length) > 0
   then error("\($workflow): job \($calls[0].job) passes `\($calls[0].input): \($calls[0].value)` to a reusable workflow, which is a runner choice made at the call site. Pass a fleet claim or pass nothing.")
+  elif ($crossrepo | length) > 0
+  then error("\($workflow): job \($crossrepo[0].job) calls `\($crossrepo[0].uses)` in another repository without passing `runner-label`, so it takes whatever that repository defaults to -- a value nothing here can see, and today that default is `ubuntu-latest`. Pass a run-scoped claim explicitly. Local `./` calls need nothing, because their `runs-on` is in this tree and this guard already reads it.")
+  elif ($grabs | length) > 0
+  then error("\($workflow): job \($grabs[0].job) claims the label `...-\($grabs[0].name)`, which ENDS in `\($grabs[0].suffix)`. The dispatcher grants a fleet-trust credential on exactly that suffix (crates/ci/dispatcher/src/handler/workflow_job/credential_gate.rs): `-cache-push` is the ix-public push token, `-cache-warm` the internal nix-cache SIGNING key, `-prod` the deploy publish channel. A job picks these up by NAME alone, so extend the suffix past it (`-cache-warm-reaper`, not `-cache-warm`) unless this job is genuinely entitled to that credential, in which case name it in the allow list.")
   else true
   end

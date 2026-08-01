@@ -33,6 +33,7 @@ quietly outlive the thing that justified it.
   # The .github tree alone, not the repo root: this lint reads nothing else, and
   # rooting it at the root would rebuild it on every edit anywhere in the
   # repository. Same narrowing, and the same reason, as packages/ci-budget-policy.
+  repo = "indexable-inc/index";
   githubRoot = ix.paths.root + "/.github";
   scanner = ./scan.jq;
   allowlist = {
@@ -42,6 +43,11 @@ quietly outlive the thing that justified it.
     # none, so dispatching this would not degrade the scan, it would fail the
     # step outright. Revisit when scorecard ships a non-container entrypoint.
     "scorecard.yml:analysis" = "ossf/scorecard-action is a docker container action and the Nix runners have no Docker daemon";
+
+    # The job the dispatcher is SUPPOSED to hand the ix-public push credential
+    # to. Named rather than pattern-exempted, so the set of things holding a
+    # fleet signing key is a list somebody can read.
+    "cache-push.yml:push:credential" = "the ix-public push token is the point of this job; the shard index goes BEFORE the -cache-push suffix precisely so the grant still applies";
 
     # NOT a judgement that these should stay hosted. They should not, and the
     # gate names them on every run so the decision cannot be forgotten. What is
@@ -79,7 +85,8 @@ in
     # rather than a store path nobody can open.
     scan() {
       yq -o=json '.' "$1" \
-        | jq --exit-status --arg workflow "$2" --arg allow "$3" --from-file ${scanner}
+        | jq --exit-status --arg workflow "$2" --arg allow "$3" \
+            --arg repo ${pkgs.lib.escapeShellArg repo} --from-file ${scanner}
     }
 
     fixtures=$PWD/fixtures
@@ -228,6 +235,54 @@ in
           runner-label: ubuntu-latest
     YML
 
+
+    # A cross-repo call that hands over the runner decision by omission. This is
+    # the ix ci.yml -> index ci-budget.yml shape.
+    cat > "$fixtures/crossrepo-no-label.yml" <<'YML'
+    jobs:
+      budget:
+        uses: someone-else/repo/.github/workflows/thing.yml@main
+        with:
+          pull-request-number: 1
+    YML
+
+    # The same call, made explicit. Must pass, or the rule is unsatisfiable and
+    # the only way to comply is an allow list entry.
+    cat > "$fixtures/crossrepo-with-label.yml" <<'YML'
+    jobs:
+      budget:
+        uses: someone-else/repo/.github/workflows/thing.yml@main
+        with:
+          runner-label: "''${{ format('ix-ci-run-{0}-{1}-budget', github.run_id, github.run_attempt) }}"
+    YML
+
+    # A `uses:` naming THIS repository by full name, which index does. Local in
+    # the way that matters: its default is readable by this same check.
+    # Unquoted heredoc: the repo name has to be THIS repo's, so the fixture
+    # tests the rule rather than a name that happens not to match.
+    cat > "$fixtures/self-referencing-uses.yml" <<YML
+    jobs:
+      budget:
+        uses: ${repo}/.github/workflows/thing.yml@main
+    YML
+
+    # POSITIVE CONTROL for the credential rule. Without this the rule could be
+    # silently matching nothing and "no job grabs a credential" would be a
+    # vacuous pass. `-cache-warm` is the exact trap this change nearly walked
+    # into for cache-warm-reaper.yml.
+    write_bad_job cache-warm-grab '["''${{ format(ix-ci-run-{0}-{1}-cache-warm, github.run_id, github.run_attempt) }}"]'
+
+    # NEGATIVE CONTROL, and the whole point of the suffix discipline: extending
+    # past the credential suffix must NOT trip the rule, or every job would need
+    # an allow list entry and the rule would be abandoned.
+    cat > "$fixtures/cache-warm-reaper.yml" <<'YML'
+    jobs:
+      reap:
+        runs-on: ["''${{ format('ix-ci-run-{0}-{1}-cache-warm-reaper', github.run_id, github.run_attempt) }}"]
+        steps:
+          - run: echo hi
+    YML
+
     expect pass "a run-scoped fleet claim, a parameter, and a \`uses:\` caller" good.yml
     expect pass "a workflow_call input defaulting to a fleet claim" good-default.yml
     expect refuse "\`ubuntu-latest\`" ubuntu.yml "is a GitHub-hosted runner"
@@ -240,6 +295,18 @@ in
     expect refuse "a hosted larger-runner group in the {group,labels} shape" runner-group.yml "is a GitHub-hosted runner"
     expect refuse "a hosted \`workflow_call\` input default" hosted-default.yml "defaults to \`ubuntu-latest\`"
     expect refuse "a caller passing a hosted label to a reusable workflow" hosted-call-site.yml "is a runner choice made at the call site"
+
+    expect refuse "a cross-repo call that passes no runner-label" crossrepo-no-label.yml \
+      "in another repository without passing"
+    expect pass "a cross-repo call that passes a fleet claim" crossrepo-with-label.yml
+    expect pass "a \`uses:\` naming this same repository, whose default this check can read" self-referencing-uses.yml
+    expect refuse "a job whose label ENDS in a credential suffix" cache-warm-grab.yml \
+      "grants a fleet-trust credential on exactly that suffix"
+    expect pass "a label extending PAST the credential suffix" cache-warm-reaper.yml
+    expect pass "a credential-bearing job named in the allow list" cache-warm-grab.yml "" \
+      '{"cache-warm-grab.yml:cache-warm-grab:credential":"a fixture proving the credential key works"}'
+    expect refuse "an allow list entry for a DIFFERENT job does not grant the credential" cache-warm-grab.yml \
+      "grants a fleet-trust credential" '{"cache-warm-grab.yml:someone-else:credential":"wrong job"}'
 
     # The escape hatch, proved in both directions for each of the three key
     # shapes: exempt under its own key, still refused under a neighbouring key.
@@ -261,7 +328,7 @@ in
     # same absence-as-success shape guarded above. Pin the count so an `expect`
     # line deleted or lost to a shell typo is a red build rather than a quieter
     # green one. Bump this deliberately when adding a case.
-    expected_assertions=18
+    expected_assertions=25
     if [ "$ran" -ne "$expected_assertions" ]; then
       printf 'workflow-hosted-runner: %s fixture assertions ran, expected %s. A case was added or lost without updating the count, and "nothing failed" is not the same as "everything ran".\n' \
         "$ran" "$expected_assertions" >&2
