@@ -5,6 +5,13 @@
 //! then: B converges on the score, fetches the module by hash, follows A's
 //! clock, and renders bit-identical samples for the same shared-frame range.
 
+// This package's own library is an empty doc-comment shell, and nothing here
+// calls into it, so `unused-crate-dependencies` reports audio-e2e against
+// itself. The lib cannot simply be deleted: `lib/per-system.nix` selects this
+// package's checks with `selectLibraryWithTests { library = "audio_e2e"; }`,
+// so removing the target removes the checks along with it.
+use audio_e2e as _;
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
