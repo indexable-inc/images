@@ -34,13 +34,20 @@ async function pollUntil(check, { timeoutMs = 2000, stepMs = 10 } = {}) {
   }
 }
 
+const occurrence = (symbol, role = "definition") => ({
+  symbol,
+  path: `src/${symbol}.rs`,
+  start: 1n,
+  end: 4n,
+  occurrenceRole: role,
+});
+
 test("records echo with camelCased and renamed fields", () => {
   const facts = {
-    occurrence: [
-      { symbol: "sym", path: "src/lib.rs", start: 1n, end: 4n, occurrenceRole: "definition" },
-    ],
+    occurrence: [occurrence("sym")],
     docsBySymbol: { sym: "does things" },
     sourceBlob: [1, 2, 255],
+    byPath: {},
   };
   const echoed = api.echoFacts(facts);
   assert.deepEqual(echoed.occurrence, facts.occurrence);
@@ -137,6 +144,32 @@ test("wide integers cross inside containers, records, and streams", async () => 
   assert.deepEqual(items, [start, start + 1n, start + 2n]);
 });
 
+test("records compose: a record under Option, and records as map values", () => {
+  const head = occurrence("head");
+  const byPath = { "src/head.rs": head, "src/other.rs": occurrence("other", "reference") };
+  const echoed = api.echoFacts({
+    occurrence: [],
+    docsBySymbol: {},
+    sourceBlob: [],
+    head,
+    byPath,
+  });
+  assert.deepEqual(echoed.head, head, "Option<Record> round-trips as the nested object");
+  assert.deepEqual(echoed.byPath, byPath, "Map<String, Record> round-trips");
+
+  const headless = api.echoFacts({
+    occurrence: [],
+    docsBySymbol: {},
+    sourceBlob: [],
+    byPath: {},
+  });
+  // napi returns `None` as undefined, not as an explicit null, which is why
+  // `index.d.ts` declares the field optional (`head?:`) and not merely
+  // nullable.
+  assert.equal(headless.head, undefined, "an omitted Option<Record> came back set");
+  assert.deepEqual(headless.byPath, {}, "an empty record map stays empty");
+});
+
 test("errors decode to the generated classes with the variant code", () => {
   assert.throws(
     () => api.failWith("store"),
@@ -174,11 +207,15 @@ test("async functions resolve as real promises and decode rejections", async () 
   });
 });
 
-test("abort mid-flight rejects promptly and drops the Rust future", async () => {
+// Abort in flight: the call rejects with an AbortError well before its own
+// 500ms sleep would resolve, and the Rust future is dropped (its guard bumps
+// droppedMidFlightCount). `start` takes the signal, so a free function and a
+// method are the same measurement.
+async function assertAbortsMidFlight(start) {
   const baseline = api.droppedMidFlightCount();
   const controller = new AbortController();
   const started = Date.now();
-  const pending = api.sleepEcho("never", 500n, controller.signal);
+  const pending = start(controller.signal);
   setTimeout(() => controller.abort(), 50);
   await assert.rejects(pending, (error) => {
     assert.equal(error.name, "AbortError");
@@ -190,6 +227,10 @@ test("abort mid-flight rejects promptly and drops the Rust future", async () => 
     await pollUntil(() => api.droppedMidFlightCount() > baseline),
     "droppedMidFlightCount never moved: the Rust future was not dropped",
   );
+}
+
+test("abort mid-flight rejects promptly and drops the Rust future", async () => {
+  await assertAbortsMidFlight((signal) => api.sleepEcho("never", 500n, signal));
 });
 
 test("an already-aborted signal rejects before the future starts", async () => {
@@ -223,31 +264,40 @@ test("an async stream function resolves to an iterable stream", async () => {
   assert.deepEqual(items, [0n, 1n, 2n]);
 });
 
-test("streams exert backpressure through the bounded(2) channel", async () => {
-  const baseline = api.streamItemsProduced();
-  const stream = api.countStream(20n);
+// The bounded(2) pull, whatever opened the stream: the producer runs at
+// most a couple of items ahead of the consumer, stops when the stream
+// closes, and a closed stream's next() resolves null. `open` is a factory
+// so the produced-counter baseline is read before anything is produced.
+async function assertBoundedPull({ open, produced, item, total }) {
+  const baseline = produced();
+  const stream = open();
   let consumed = 0n;
   for (let pull = 0; pull < 3; pull += 1) {
-    assert.equal(await stream.next(), consumed);
+    assert.equal(await stream.next(), item(consumed));
     consumed += 1n;
     await sleep(50); // an unthrottled producer would run far ahead here
-    const produced = api.streamItemsProduced() - baseline;
+    const ahead = produced() - baseline;
     assert.ok(
-      produced <= consumed + 3n,
-      `producer pushed ${produced} with only ${consumed} consumed; bounded(2) should cap it`,
+      ahead <= consumed + 3n,
+      `producer pushed ${ahead} with only ${consumed} consumed; bounded(2) should cap it`,
     );
   }
   stream.close();
   await sleep(100); // let a send blocked on the full channel observe the close
-  const settled = api.streamItemsProduced() - baseline;
+  const settled = produced() - baseline;
   await sleep(100);
-  assert.equal(
-    api.streamItemsProduced() - baseline,
-    settled,
-    "producer kept pushing after close()",
-  );
-  assert.ok(settled < 20n, `producer pushed all ${settled} items despite the early close`);
+  assert.equal(produced() - baseline, settled, "producer kept pushing after close()");
+  assert.ok(settled < total, `producer pushed all ${settled} items despite the early close`);
   assert.equal(await stream.next(), null, "next() after close() resolves null");
+}
+
+test("streams exert backpressure through the bounded(2) channel", async () => {
+  await assertBoundedPull({
+    open: () => api.countStream(20n),
+    produced: () => api.streamItemsProduced(),
+    item: (index) => index,
+    total: 20n,
+  });
 });
 
 test("early break from for-await closes the stream", async () => {
@@ -286,6 +336,94 @@ test("objects also arrive from plain function returns", async () => {
   const session = api.openSession("beta");
   assert.equal(api.liveSessions(), baseline + 1n);
   assert.equal(await session.query("hi"), "beta: hi");
+  await session.close();
+});
+
+test("a stream method iterates, and its items carry the receiver's state", async () => {
+  const session = api.openSession("streamy");
+  const items = [];
+  for await (const item of session.events(4n)) {
+    items.push(item);
+  }
+  assert.deepEqual(items, ["streamy:0", "streamy:1", "streamy:2", "streamy:3"]);
+  await session.close();
+});
+
+test("a stream method exerts backpressure and stops at close()", async () => {
+  const session = api.openSession("bounded");
+  await assertBoundedPull({
+    open: () => session.events(20n),
+    produced: () => api.sessionEventsProduced(),
+    item: (index) => `bounded:${index}`,
+    total: 20n,
+  });
+  await session.close();
+});
+
+test("a throwing stream method fails before any stream exists", async () => {
+  const session = api.openSession("guarded");
+  assert.throws(
+    () => session.tail(""),
+    (error) => {
+      assert.ok(error instanceof api.BadQuery, "the method's rejection decodes to its class");
+      assert.equal(error.code, "BadQuery");
+      return true;
+    },
+  );
+  const lines = [];
+  for await (const line of session.tail("q")) {
+    lines.push(line);
+  }
+  assert.deepEqual(lines, ["guarded/q#0", "guarded/q#1", "guarded/q#2"]);
+  await session.close();
+});
+
+test("aborting an async stream method rejects and drops the Rust future", async () => {
+  const session = api.openSession("abortable");
+  await assertAbortsMidFlight((signal) => session.eventsLater(3n, 500n, signal));
+  const items = [];
+  for await (const item of await session.eventsLater(3n, 1n)) {
+    items.push(item);
+  }
+  assert.deepEqual(items, [0n, 1n, 2n], "the same method still streams when it is not aborted");
+  await session.close();
+});
+
+test("a stream method yields records whose 64-bit fields cross as bigint", async () => {
+  const session = api.openSession("ledger");
+  const start = 2n ** 62n;
+  const rows = [];
+  for await (const row of session.ledgers(start, 2n)) {
+    rows.push(row);
+  }
+  assert.equal(rows.length, 2);
+  // The owner-scoped stream class and the record's generated mirror have to
+  // compose: every wide field arrives as an exact bigint, past 2^53.
+  assert.deepEqual(
+    rows.map((row) => row.balance),
+    [start, start + 1n],
+  );
+  assert.equal(rows[0].sequence, 2n ** 64n - 1n, "u64::MAX survived the stream element");
+  assert.deepEqual(rows[1].entries, 1n, "usize crosses as bigint inside a streamed record");
+  assert.deepEqual(rows[1].deltas, [1n], "a Vec<i64> field inside a streamed record");
+  assert.equal(rows[0].ceiling, start, "an Option<i64> field inside a streamed record");
+  assert.deepEqual(rows[0].totals, { ledger: 2n ** 64n - 1n }, "a u64-valued map field");
+  await session.close();
+});
+
+test("a method returning another object hands back the wrapper class", async () => {
+  const session = api.openSession("alpha");
+  const keys = session.keys();
+  assert.ok(keys instanceof api.Keys, "the returned handle is the generated wrapper class");
+  assert.equal(keys.create("signing"), "alpha/signing");
+  assert.throws(
+    () => keys.reject("nope"),
+    (error) => {
+      assert.ok(error instanceof api.BadQuery, "errors decode through the returned object too");
+      return true;
+    },
+  );
+  assert.throws(() => new api.Keys(), TypeError, "Keys instances only come from Session.keys()");
   await session.close();
 });
 

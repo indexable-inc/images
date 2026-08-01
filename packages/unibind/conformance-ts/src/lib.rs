@@ -1,11 +1,13 @@
 //! Conformance addon for the unibind TypeScript backend.
 //!
 //! One `#[unibind::export]` module exercising every construct the ts
-//! backend renders: records, error enums, defaulted and optional
-//! arguments, async functions with cancellation, pull streams (sync and
-//! async producers), a constructible resource object, and the 64-bit
-//! integers that only a JavaScript `bigint` can carry exactly. It mirrors
-//! the shapes of the shared Python conformance surface
+//! backend renders: records (including a record under `Option` and records
+//! as map values), error enums, defaulted and optional arguments, async
+//! functions with cancellation, pull streams from both free functions and
+//! object methods (sync and async producers), a constructible resource
+//! object, a method handing back another object, and the 64-bit integers
+//! that only a JavaScript `bigint` can carry exactly. It mirrors the shapes
+//! of the shared Python conformance surface
 //! (`packages/unibind/conformance`). The committed Node suite
 //! (`tests/node/conformance.test.mjs`) drives the built addon end to end;
 //! the atomic counters below exist so that suite can observe Rust-side
@@ -33,6 +35,10 @@ mod conformance {
     static DROPPED_MID_FLIGHT: AtomicI64 = AtomicI64::new(0);
     /// Items `count_stream` producers pushed into their channel so far.
     static STREAM_ITEMS_PRODUCED: AtomicI64 = AtomicI64::new(0);
+    /// Items [`Session::events`] producers pushed, counted apart from the
+    /// free-function streams so the method's backpressure is its own
+    /// measurement.
+    static SESSION_EVENTS_PRODUCED: AtomicI64 = AtomicI64::new(0);
     /// Live [`Session`] values: constructed minus dropped.
     static LIVE_SESSIONS: AtomicI64 = AtomicI64::new(0);
     /// Sessions whose `close` ran (at most once each).
@@ -67,6 +73,11 @@ mod conformance {
         pub docs_by_symbol: HashMap<String, String>,
         /// Raw source bytes (nested bytes stay `Array<number>`).
         pub source_blob: Vec<u8>,
+        /// The occurrence to show first, if any: a record nested under
+        /// `Option`, optional in both directions.
+        pub head: Option<Occurrence>,
+        /// Occurrences keyed by path: records as map values.
+        pub by_path: HashMap<String, Occurrence>,
     }
 
     /// Everything the conformance boundary raises.
@@ -279,14 +290,18 @@ mod conformance {
         Err(ConformanceError::BadQuery("async".to_owned()))
     }
 
-    /// Count `0..n` into a bounded(2) channel with `delay_ms` between
-    /// items, so backpressure and early close are observable through
-    /// [`stream_items_produced`]. The producer is a real detached task:
-    /// dropping the stream closes the channel, which is how it stops.
-    pub fn count_stream(
+    /// `n` items from `item`, pushed `delay_ms` apart into a bounded(2)
+    /// channel and tallied in `produced`, so backpressure and early close
+    /// are observable from JavaScript. The producer is a real detached
+    /// task: dropping the stream closes the channel, which is how it
+    /// stops. Every counting stream here runs on this one mechanism, so a
+    /// method's stream and a function's behave identically under load.
+    fn counted_stream<T: Send + 'static>(
         n: i64,
-        #[unibind(default = 0)] delay_ms: i64,
-    ) -> unibind_runtime::UniStream<i64> {
+        delay_ms: i64,
+        produced: &'static AtomicI64,
+        item: impl Fn(i64) -> T + Send + 'static,
+    ) -> unibind_runtime::UniStream<T> {
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         let delay = millis_duration(delay_ms);
         // Detach the producer; napi's spawn targets the same tokio runtime
@@ -296,16 +311,24 @@ mod conformance {
                 if !delay.is_zero() {
                     tokio::time::sleep(delay).await;
                 }
-                if sender.send(value).await.is_err() {
+                if sender.send(item(value)).await.is_err() {
                     return;
                 }
-                STREAM_ITEMS_PRODUCED.fetch_add(1, Ordering::SeqCst);
+                produced.fetch_add(1, Ordering::SeqCst);
             }
         }));
         unibind_runtime::UniStream::new(futures::stream::unfold(
             receiver,
             |mut receiver| async move { receiver.recv().await.map(|value| (value, receiver)) },
         ))
+    }
+
+    /// Count `0..n`, observable through [`stream_items_produced`].
+    pub fn count_stream(
+        n: i64,
+        #[unibind(default = 0)] delay_ms: i64,
+    ) -> unibind_runtime::UniStream<i64> {
+        counted_stream(n, delay_ms, &STREAM_ITEMS_PRODUCED, |value| value)
     }
 
     /// The async composition: resolve to a stream after an await.
@@ -361,6 +384,73 @@ mod conformance {
             format!("{}: {query}", self.name)
         }
 
+        /// Stream `n` events tagged with the session's name: the method
+        /// twin of [`count_stream`] on the same bounded producer, counted
+        /// by [`session_events_produced`].
+        pub fn events(
+            &self,
+            n: i64,
+            #[unibind(default = 0)] delay_ms: i64,
+        ) -> unibind_runtime::UniStream<String> {
+            let name = self.name.clone();
+            counted_stream(n, delay_ms, &SESSION_EVENTS_PRODUCED, move |value| {
+                format!("{name}:{value}")
+            })
+        }
+
+        /// Three lines for `query`, or a rejection when it is empty: the
+        /// failure lands before any stream exists, so JavaScript sees a
+        /// thrown error rather than a stream that ends immediately.
+        pub fn tail(
+            &self,
+            query: String,
+        ) -> Result<unibind_runtime::UniStream<String>, ConformanceError> {
+            if query.is_empty() {
+                return Err(ConformanceError::BadQuery("tail needs a query".to_owned()));
+            }
+            let name = self.name.clone();
+            Ok(unibind_runtime::UniStream::new(futures::stream::iter(
+                (0..3).map(move |index| format!("{name}/{query}#{index}")),
+            )))
+        }
+
+        /// Resolve to a stream after `millis`; aborting the call drops the
+        /// future mid-sleep, which [`dropped_mid_flight_count`] observes,
+        /// and no stream is ever created.
+        pub async fn events_later(&self, n: i64, millis: i64) -> unibind_runtime::UniStream<i64> {
+            let mut guard = MidFlightGuard { armed: true };
+            tokio::time::sleep(millis_duration(millis)).await;
+            guard.armed = false;
+            unibind_runtime::UniStream::new(futures::stream::iter(0..n.max(0)))
+        }
+
+        /// Stream `n` ledger rows starting at `start`: a method whose
+        /// stream element is a record carrying 64-bit fields, so the
+        /// owner-scoped stream class and the record's generated mirror
+        /// have to compose. Each row's `balance` is `start + index`, past
+        /// 2^53 when the caller asks for it.
+        pub fn ledgers(&self, start: i64, n: i64) -> unibind_runtime::UniStream<Ledger> {
+            let name = self.name.clone();
+            unibind_runtime::UniStream::new(futures::stream::iter((0..n.max(0)).map(
+                move |index| Ledger {
+                    balance: start.wrapping_add(index),
+                    sequence: u64::MAX,
+                    entries: usize::try_from(index).unwrap_or(usize::MAX),
+                    deltas: vec![index],
+                    ceiling: Some(start),
+                    totals: HashMap::from([(name.clone(), u64::MAX)]),
+                },
+            )))
+        }
+
+        /// This session's keys namespace: a method handing back another
+        /// object.
+        pub fn keys(&self) -> Keys {
+            Keys {
+                session: self.name.clone(),
+            }
+        }
+
         /// Release the session; the generated wrapper guarantees at most
         /// one call even when JavaScript closes (or disposes) twice.
         pub async fn close(&self) {
@@ -373,6 +463,33 @@ mod conformance {
         fn drop(&mut self) {
             LIVE_SESSIONS.fetch_sub(1, Ordering::SeqCst);
         }
+    }
+
+    /// A session's keys namespace: the `client.keys().create(...)` shape,
+    /// where the handle a method returns must arrive as the generated
+    /// wrapper class (a bare native handle would decode no errors).
+    #[unibind::object]
+    pub struct Keys {
+        session: String,
+    }
+
+    impl Keys {
+        /// The fully qualified name `label` would get in this session.
+        pub fn create(&self, label: String) -> String {
+            format!("{}/{label}", self.session)
+        }
+
+        /// Always rejects, so the returned handle's error decoding is
+        /// provable from JavaScript.
+        pub fn reject(&self, label: String) -> Result<String, ConformanceError> {
+            Err(ConformanceError::BadQuery(label))
+        }
+    }
+
+    /// Items [`Session::events`] producers pushed so far, across every
+    /// session.
+    pub fn session_events_produced() -> i64 {
+        SESSION_EVENTS_PRODUCED.load(Ordering::SeqCst)
     }
 
     /// Open a session from a free function (the non-constructor path).
