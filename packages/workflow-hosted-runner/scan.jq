@@ -43,6 +43,14 @@
 # An exception is a named line in the calling check with prose next to it, never
 # a loosened pattern. Every entry is printed on each run, so an exception cannot
 # quietly outlive the thing that justified it.
+#
+# ONE THING TO KNOW BEFORE MOVING A JOB HERE. The fleet PATH is bash, coreutils,
+# dash, git, github-runner, tar, gzip, nix and unzip, so a converted job usually
+# has to fetch `gh` or `jq`. Spell the installables LITERALLY
+# (`nix build --no-link --print-out-paths nixpkgs#gh nixpkgs#jq`):
+# indexable-inc/ix's nix/checks/workflow-nix-bootstrap.jq withdraws its nixpkgs-only exemption the moment an
+# argument contains `$`, so an `ensure() { nix build "nixpkgs#$1"; }` helper
+# turns the job into one that must also install bootstrap-index-nix.
 
 # Every string a `runs-on` can resolve to, in either spelling GitHub accepts: a
 # bare scalar, or a list of labels. `.. | strings` walks both, so the shape
@@ -50,11 +58,22 @@
 def runner_strings:
   [(.["runs-on"] // empty) | .. | strings];
 
-# A claim on the ephemeral fleet. The dispatcher mints a runner per job keyed on
-# this label (crates/ci/dispatcher/src/spawn.rs), so its presence is what makes
-# the job land on our own hardware.
+# A RUN-SCOPED claim on the ephemeral fleet. The dispatcher mints a runner per
+# job keyed on this label (crates/ci/dispatcher/src/spawn.rs).
+#
+# Run scoping is checked, not just the `ix-ci-run-` prefix, and the difference
+# is not pedantic. A static `ix-ci-run-something` label is not hosted, but it is
+# not per-job either: it matches any idle fleet runner rather than the ephemeral
+# one spawned for this job, so the job can land on a runner still holding
+# another job's credentials. Bare `self-hosted` is the same defect in its widest
+# form. Both are refused for that reason rather than for being GitHub's.
+#
+# Matched as the `format(...)` expression rather than a rendered value, because
+# the expression is what is in the YAML.
 def is_fleet_claim:
-  contains("ix-ci-run-");
+  test("ix-ci-run-\\{0\\}-\\{1\\}-")
+  and test("github\\.run_id")
+  and test("github\\.run_attempt");
 
 # A reusable workflow whose label is the caller's to choose. Not exempt, merely
 # checked somewhere else: `hosted_call_sites` below reads what callers pass, and
@@ -63,14 +82,19 @@ def is_caller_supplied:
   test("inputs\\.[A-Za-z_-]*runner[-_]?label");
 
 # Named only to sharpen the message. Enforcement is the allow list above; this
-# decides which of two sentences to print, never whether to refuse.
+# decides which sentence to print, never whether to refuse.
+#
+# `self-hosted` is in here for the message's sake even though it is not one of
+# GitHub's images. It is refused by the run-scoping rule, not by this one.
 def hosted_family:
   test("^(ubuntu|macos|windows)-"; "i") or . == "self-hosted";
 
 def describe($label):
   if ($label | hosted_family)
   then "`\($label)` is a GitHub-hosted runner"
-  else "`\($label)` is not a recognisable `ix-ci-run-` fleet claim"
+  elif ($label | test("ix-ci-run-"))
+  then "`\($label)` names the fleet but is not run-scoped, so it matches any idle runner rather than this job's ephemeral one and can land on a runner holding another job's credentials"
+  else "`\($label)` is not a run-scoped `ix-ci-run-` fleet claim"
   end;
 
 # Jobs whose runs-on holds anything that is neither a fleet claim nor a caller's

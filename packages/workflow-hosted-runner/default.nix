@@ -85,6 +85,7 @@ in
     fixtures=$PWD/fixtures
     mkdir -p "$fixtures"
     failed=0
+    ran=0
 
     # `expect <pass|refuse> <label> <file> [expected-substring] [allow-json]`.
     #
@@ -103,6 +104,7 @@ in
       file=$3
       want_msg=''${4:-}
       allow=''${5:-'{}'}
+      ran=$((ran + 1))
       set +e
       verdict=$(scan "$fixtures/$file" "$file" "$allow" 2>&1)
       rc=$?
@@ -136,10 +138,6 @@ in
     jobs:
       as-a-list:
         runs-on: ["''${{ format('ix-ci-run-{0}-{1}-thing', github.run_id, github.run_attempt) }}"]
-        steps:
-          - run: echo hi
-      as-a-bare-string:
-        runs-on: "ix-ci-run-1-1-thing"
         steps:
           - run: echo hi
       parameterised:
@@ -188,7 +186,21 @@ in
     write_bad_job bare-self-hosted 'self-hosted'
     # A hosted label smuggled into a list beside a legitimate one. `.. | strings`
     # is what makes the shape irrelevant.
-    write_bad_job mixed-list '["ix-ci-run-1-1-thing", "ubuntu-latest"]'
+    write_bad_job mixed-list '["''${{ format(''''ix-ci-run-{0}-{1}-thing'''', github.run_id, github.run_attempt) }}", "ubuntu-latest"]'
+    # Names the fleet, is not run-scoped. Not hosted, and refused anyway: it
+    # matches any idle runner rather than this job's ephemeral one.
+    write_bad_job static-label 'ix-ci-run-static-thing'
+    # A hosted larger-runner group, in the {group,labels} shape `runs-on` also
+    # accepts. Neither key is a fleet claim.
+    cat > "$fixtures/runner-group.yml" <<'YML'
+    jobs:
+      runner-group:
+        runs-on:
+          group: my-larger-runners
+          labels: [ubuntu-latest]
+        steps:
+          - run: echo hi
+    YML
 
     # The ci-budget.yml shape: hosted only in the default of an input that a job
     # reads as its runs-on. Nothing in this file says `runs-on: ubuntu-latest`.
@@ -216,14 +228,16 @@ in
           runner-label: ubuntu-latest
     YML
 
-    expect pass "both spellings of a fleet claim, a parameter, and a \`uses:\` caller" good.yml
+    expect pass "a run-scoped fleet claim, a parameter, and a \`uses:\` caller" good.yml
     expect pass "a workflow_call input defaulting to a fleet claim" good-default.yml
     expect refuse "\`ubuntu-latest\`" ubuntu.yml "is a GitHub-hosted runner"
     expect refuse "a hosted spelling this guard never names" unheard-of.yml "is a GitHub-hosted runner"
     expect refuse "\`macos-15\`" macos.yml "is a GitHub-hosted runner"
     expect refuse "\`windows-2025\`" windows.yml "is a GitHub-hosted runner"
     expect refuse "bare \`self-hosted\`, which is not the run-scoped label" bare-self-hosted.yml "is a GitHub-hosted runner"
-    expect refuse "a hosted label in a list beside a fleet claim" mixed-list.yml "is a GitHub-hosted runner"
+    expect refuse "a hosted label in a list beside a legitimate fleet claim" mixed-list.yml "is a GitHub-hosted runner"
+    expect refuse "a static \`ix-ci-run-\` label with no run scoping" static-label.yml "is not run-scoped"
+    expect refuse "a hosted larger-runner group in the {group,labels} shape" runner-group.yml "is a GitHub-hosted runner"
     expect refuse "a hosted \`workflow_call\` input default" hosted-default.yml "defaults to \`ubuntu-latest\`"
     expect refuse "a caller passing a hosted label to a reusable workflow" hosted-call-site.yml "is a runner choice made at the call site"
 
@@ -243,12 +257,33 @@ in
     expect refuse "the job key shape does not exempt a call site" hosted-call-site.yml \
       "is a runner choice made at the call site" '{"hosted-call-site.yml:call":"wrong key shape"}'
 
+    # "No fixture failed" is satisfied by no fixture having run, which is the
+    # same absence-as-success shape guarded above. Pin the count so an `expect`
+    # line deleted or lost to a shell typo is a red build rather than a quieter
+    # green one. Bump this deliberately when adding a case.
+    expected_assertions=18
+    if [ "$ran" -ne "$expected_assertions" ]; then
+      printf 'workflow-hosted-runner: %s fixture assertions ran, expected %s. A case was added or lost without updating the count, and "nothing failed" is not the same as "everything ran".\n' \
+        "$ran" "$expected_assertions" >&2
+      failed=1
+    fi
+
     if [ "$failed" -ne 0 ]; then
       echo 'workflow-hosted-runner: the scanner does not agree with its own fixtures; fix ./scan.jq before trusting it over .github/workflows' >&2
       exit 1
     fi
 
-    for workflow in ${githubRoot}/workflows/*.yml; do
+    # An assertion whose passing state is an absence. If the glob ever stops
+    # matching -- a moved directory, a renamed extension -- the loop below runs
+    # zero times and this check reports success having read nothing. Count first.
+    workflows=(${githubRoot}/workflows/*.yml)
+    if [ ''${#workflows[@]} -lt 18 ]; then
+      printf 'workflow-hosted-runner: found only %s workflow(s) under .github/workflows; the scan glob has stopped matching and this check would pass without reading anything\n' \
+        "''${#workflows[@]}" >&2
+      exit 1
+    fi
+
+    for workflow in "''${workflows[@]}"; do
       # stdout is jq's `true` per compliant workflow, 51 lines of it. The
       # refusal goes to stderr, so dropping stdout loses nothing diagnostic.
       scan "$workflow" ".github/workflows/$(basename "$workflow")" ${pkgs.lib.escapeShellArg allowJson} >/dev/null
