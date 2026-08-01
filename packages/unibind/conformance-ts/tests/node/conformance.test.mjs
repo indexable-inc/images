@@ -30,13 +30,20 @@ async function pollUntil(check, { timeoutMs = 2000, stepMs = 10 } = {}) {
   }
 }
 
+const occurrence = (symbol, role = "definition") => ({
+  symbol,
+  path: `src/${symbol}.rs`,
+  start: 1,
+  end: 4,
+  occurrenceRole: role,
+});
+
 test("records echo with camelCased and renamed fields", () => {
   const facts = {
-    occurrence: [
-      { symbol: "sym", path: "src/lib.rs", start: 1, end: 4, occurrenceRole: "definition" },
-    ],
+    occurrence: [occurrence("sym")],
     docsBySymbol: { sym: "does things" },
     sourceBlob: [1, 2, 255],
+    byPath: {},
   };
   const echoed = api.echoFacts(facts);
   assert.deepEqual(echoed.occurrence, facts.occurrence);
@@ -51,6 +58,29 @@ test("records echo with camelCased and renamed fields", () => {
     "the ts field rename reaches the JS object shape",
   );
   assert.equal(occurrences[0].role, undefined);
+});
+
+test("records compose: a record under Option, and records as map values", () => {
+  const head = occurrence("head");
+  const byPath = { "src/head.rs": head, "src/other.rs": occurrence("other", "reference") };
+  const echoed = api.echoFacts({
+    occurrence: [],
+    docsBySymbol: {},
+    sourceBlob: [],
+    head,
+    byPath,
+  });
+  assert.deepEqual(echoed.head, head, "Option<Record> round-trips as the nested object");
+  assert.deepEqual(echoed.byPath, byPath, "Map<String, Record> round-trips");
+
+  const headless = api.echoFacts({
+    occurrence: [],
+    docsBySymbol: {},
+    sourceBlob: [],
+    byPath: {},
+  });
+  assert.equal(headless.head, null, "an omitted Option<Record> reads back as null");
+  assert.deepEqual(headless.byPath, {}, "an empty record map stays empty");
 });
 
 test("errors decode to the generated classes with the variant code", () => {
@@ -202,6 +232,101 @@ test("objects also arrive from plain function returns", async () => {
   const session = api.openSession("beta");
   assert.equal(api.liveSessions(), baseline + 1);
   assert.equal(await session.query("hi"), "beta: hi");
+  await session.close();
+});
+
+test("a stream method iterates, and its items carry the receiver's state", async () => {
+  const session = api.openSession("streamy");
+  const items = [];
+  for await (const item of session.events(4)) {
+    items.push(item);
+  }
+  assert.deepEqual(items, ["streamy:0", "streamy:1", "streamy:2", "streamy:3"]);
+  await session.close();
+});
+
+test("a stream method exerts backpressure and stops at close()", async () => {
+  const session = api.openSession("bounded");
+  const baseline = api.sessionEventsProduced();
+  const stream = session.events(20);
+  let consumed = 0;
+  for (let pull = 0; pull < 3; pull += 1) {
+    assert.equal(await stream.next(), `bounded:${consumed}`);
+    consumed += 1;
+    await sleep(50); // an unthrottled producer would run far ahead here
+    const produced = api.sessionEventsProduced() - baseline;
+    assert.ok(
+      produced <= consumed + 3,
+      `producer pushed ${produced} with only ${consumed} consumed; bounded(2) should cap it`,
+    );
+  }
+  stream.close();
+  await sleep(100); // let a send blocked on the full channel observe the close
+  const settled = api.sessionEventsProduced() - baseline;
+  await sleep(100);
+  assert.equal(
+    api.sessionEventsProduced() - baseline,
+    settled,
+    "producer kept pushing after close()",
+  );
+  assert.ok(settled < 20, `producer pushed all ${settled} events despite the early close`);
+  assert.equal(await stream.next(), null, "next() after close() resolves null");
+  await session.close();
+});
+
+test("a throwing stream method fails before any stream exists", async () => {
+  const session = api.openSession("guarded");
+  assert.throws(
+    () => session.tail(""),
+    (error) => {
+      assert.ok(error instanceof api.BadQuery, "the method's rejection decodes to its class");
+      assert.equal(error.code, "BadQuery");
+      return true;
+    },
+  );
+  const lines = [];
+  for await (const line of session.tail("q")) {
+    lines.push(line);
+  }
+  assert.deepEqual(lines, ["guarded/q#0", "guarded/q#1", "guarded/q#2"]);
+  await session.close();
+});
+
+test("aborting an async stream method rejects and drops the Rust future", async () => {
+  const session = api.openSession("abortable");
+  const baseline = api.droppedMidFlightCount();
+  const controller = new AbortController();
+  const pending = session.eventsLater(3, 500, controller.signal);
+  setTimeout(() => controller.abort(), 50);
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.name, "AbortError");
+    return true;
+  });
+  assert.ok(
+    await pollUntil(() => api.droppedMidFlightCount() > baseline),
+    "droppedMidFlightCount never moved: the Rust future was not dropped",
+  );
+  const items = [];
+  for await (const item of await session.eventsLater(3, 1)) {
+    items.push(item);
+  }
+  assert.deepEqual(items, [0, 1, 2], "the same method still streams when it is not aborted");
+  await session.close();
+});
+
+test("a method returning another object hands back the wrapper class", async () => {
+  const session = api.openSession("alpha");
+  const keys = session.keys();
+  assert.ok(keys instanceof api.Keys, "the returned handle is the generated wrapper class");
+  assert.equal(keys.create("signing"), "alpha/signing");
+  assert.throws(
+    () => keys.reject("nope"),
+    (error) => {
+      assert.ok(error instanceof api.BadQuery, "errors decode through the returned object too");
+      return true;
+    },
+  );
+  assert.throws(() => new api.Keys(), TypeError, "Keys instances only come from Session.keys()");
   await session.close();
 });
 
