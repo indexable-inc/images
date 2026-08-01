@@ -27,7 +27,7 @@ pub fn mirrored_records(records: &[ir::Record]) -> Vec<String> {
     loop {
         let mut grew = false;
         for record in records {
-            if mirrored.iter().any(|name| *name == record.name) {
+            if mirrored.contains(&record.name) {
                 continue;
             }
             if record

@@ -39,7 +39,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     let mirrors = interface
         .records
         .iter()
-        .filter(|record| mirrored.iter().any(|name| *name == record.name))
+        .filter(|record| mirrored.contains(&record.name))
         .map(|record| mirror::render_mirror(record, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let conversions = interface

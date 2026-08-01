@@ -159,12 +159,17 @@ pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
         return TokenStream::new();
     }
     let narrowers = kinds.iter().map(|kind| narrow_fn(*kind));
+    // A width can be reachable only through a record the interface declares
+    // but never mentions in a signature, whose conversions are then uncalled
+    // (see [`crate::mirror`]); that is the user's business, not dead glue to
+    // report.
     quote! {
         /// A `bigint` JavaScript sent that the declared Rust width cannot
         /// hold. Deliberately not a `__unibind__:` reason: this is a caller
         /// mistake, not a boundary failure the user's error enum declared,
         /// so it surfaces as a plain napi error rather than one of the
         /// generated classes.
+        #[allow(dead_code)]
         fn __unibind_bigint_out_of_range(width: &str) -> ::napi::Error {
             ::napi::Error::new(
                 ::napi::Status::InvalidArg,
@@ -184,7 +189,7 @@ fn inbound_kinds(interface: &ir::Interface, mirrored: &[String]) -> Vec<ir::IntK
         collect_args(function, &mut found);
     }
     for object in &interface.objects {
-        for constructor in &object.constructor {
+        if let Some(constructor) = &object.constructor {
             collect_args(constructor, &mut found);
         }
         for method in &object.methods {
@@ -192,7 +197,7 @@ fn inbound_kinds(interface: &ir::Interface, mirrored: &[String]) -> Vec<ir::IntK
         }
     }
     for record in &interface.records {
-        if !mirrored.iter().any(|name| *name == record.name) {
+        if !mirrored.contains(&record.name) {
             continue;
         }
         for field in &record.fields {

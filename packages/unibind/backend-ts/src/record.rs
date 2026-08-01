@@ -22,7 +22,7 @@ use crate::ty;
 /// consumed (and stripped) by the outer `napi(object)` expansion. A
 /// mirrored record gains none: its mirror carries them.
 pub fn record_attrs(record: &ir::Record, mirrored: &[String]) -> RenderedRecord {
-    if mirrored.iter().any(|name| *name == record.name) {
+    if mirrored.contains(&record.name) {
         return RenderedRecord {
             outer: Vec::new(),
             fields: record.fields.iter().map(|_| Vec::new()).collect(),
