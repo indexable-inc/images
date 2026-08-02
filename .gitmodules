@@ -1,0 +1,4 @@
+[submodule "vendor/jj"]
+	path = vendor/jj
+	url = https://github.com/indexable-inc/jj.git
+	branch = ix-patched

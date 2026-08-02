@@ -51,6 +51,19 @@
   };
 
   inputs = {
+    # Fork sources are carried as git submodules under `vendor/` rather than
+    # as rev-pinned forge inputs, so the gitlink is the single source of truth
+    # for each pin and no rev appears in this file. Nix only mounts a
+    # submodule tree when the input asks for it: without this line a
+    # `path:./vendor/<fork>` input below fails eval with "not tracked by Git",
+    # and a forge fetch of this flake would render each as an empty directory.
+    # Consumers fetching index as a flake input get the submodule refetch
+    # automatically (nix >= 2.27); CI checkouts need
+    # .github/actions/init-submodules, because actions/checkout's own
+    # `submodules:` option does not survive the ix dispatcher's per-job
+    # GIT_CONFIG_GLOBAL (ix#8123).
+    self.submodules = true;
+
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Relative-path ("subflake") inputs for the repo's independent data
@@ -163,21 +176,23 @@
       flake = false;
     };
 
-    # jj megamerge fork of jj-vcs/jj. Pinned BY REV, never branch-loose: the
-    # series is large and touches working-copy internals, and a conflicted jj
-    # commit must never reach the bookmark (git-based readers cannot parse
-    # jj's conflict encoding). The rev therefore moves only when a human
-    # deliberately repins, never under the scheduled fork-sync
-    # (autoUpdate = false in lib/fork-packages.nix).
+    # jj megamerge fork of jj-vcs/jj, carried as the submodule `vendor/jj`
+    # tracking `ix-patched`. The gitlink holds the rev, so none appears here,
+    # and the `refs/pins/<date>-<sha12>` ritual this fork used to need retires
+    # with it: a gitlink the bump workflow advances along the branch is
+    # reachable from that branch by construction.
+    #
+    # Bumping is `git submodule update --remote`, driven by
+    # .github/workflows/update-flake-lock.yml through `submodule-paths`, which
+    # relocks in the same commit. Locally it is `git -C vendor/jj pull` plus a
+    # commit, never `nix flake update jj-src`.
     #
     # `ix-patched` is published history that flake.locks pin, so it is never
-    # rebased: work lands as ordinary commits on top, and upstream arrives as a
-    # two-parent merge. Bump it by hand: push the commits, wait for that
-    # branch's own push-triggered CI to go green (f561bc016 is what makes a
-    # pushed tip get its own verdict), mint the pin ref, repin here, then build
-    # `.#jj`.
+    # rebased: work lands as ordinary commits on top, and upstream arrives as
+    # a two-parent merge. A conflicted jj commit must never reach the bookmark,
+    # because git-based readers cannot parse jj's conflict encoding.
     jj-src = {
-      url = "github:indexable-inc/jj/af48c0d50b540e7ff0b909e635098ffaefc2f007";
+      url = "path:./vendor/jj";
       flake = false;
     };
 
