@@ -4,52 +4,43 @@
       "flake": false,
       "locked": {
         "lastModified": 1784724655,
-        "narHash": "sha256-JsLaZ/Lxy2QqE4nUSn5ol//6UMUaNDidYRzefavgZ0g=",
-        "owner": "indexable-inc",
-        "repo": "btop",
+        "path": "./vendor/btop",
         "rev": "9f43b7904e2d2e08cfe33c2fa54c472de1cee2ef",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "ref": "ix-patched",
-        "repo": "btop",
-        "type": "github"
-      }
+        "path": "./vendor/btop",
+        "type": "path"
+      },
+      "parent": []
     },
     "clippy-src": {
       "flake": false,
       "locked": {
         "lastModified": 1784724549,
-        "narHash": "sha256-W88kh/unXy++7dATx432fu8IKBjMvfebd9nZhPt0e/I=",
-        "owner": "indexable-inc",
-        "repo": "rust-clippy",
+        "path": "./vendor/clippy",
         "rev": "cd551e2408a75638f6b0ac7ea88aa0dd18b8aea3",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "rust-clippy",
-        "rev": "cd551e2408a75638f6b0ac7ea88aa0dd18b8aea3",
-        "type": "github"
-      }
+        "path": "./vendor/clippy",
+        "type": "path"
+      },
+      "parent": []
     },
     "codex-src": {
       "flake": false,
       "locked": {
         "lastModified": 1784724636,
-        "narHash": "sha256-d6yeKEwtARioC+3bTbXbnIET53hOKa+cz7PoYPl6VuQ=",
-        "owner": "indexable-inc",
-        "repo": "codex",
+        "path": "./vendor/codex",
         "rev": "1ca1b52d1e4e579d0fd35b17e5fd8e719b84bd33",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "codex",
-        "rev": "1ca1b52d1e4e579d0fd35b17e5fd8e719b84bd33",
-        "type": "github"
-      }
+        "path": "./vendor/codex",
+        "type": "path"
+      },
+      "parent": []
     },
     "drgn-src": {
       "flake": false,
@@ -124,35 +115,29 @@
       "flake": false,
       "locked": {
         "lastModified": 1784724747,
-        "narHash": "sha256-bnIJ4fg1tWMXZNijOSA9NmZ0x4B33XiC3K6LLbV7lgQ=",
-        "owner": "indexable-inc",
-        "repo": "ghostty",
+        "path": "./vendor/ghostty",
         "rev": "c1b4a88a20757642c8f945f8d96c4905198158cb",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "ghostty",
-        "rev": "c1b4a88a20757642c8f945f8d96c4905198158cb",
-        "type": "github"
-      }
+        "path": "./vendor/ghostty",
+        "type": "path"
+      },
+      "parent": []
     },
     "git-src": {
       "flake": false,
       "locked": {
         "lastModified": 1785531994,
-        "narHash": "sha256-9N1VyEYI7gpdR75evmQiO5fg546e4tc3W4zuwRFKbU0=",
-        "owner": "indexable-inc",
-        "repo": "git",
+        "path": "./vendor/git",
         "rev": "eef38393cda1413ded72f0259d1618110cf38456",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "git",
-        "rev": "eef38393cda1413ded72f0259d1618110cf38456",
-        "type": "github"
-      }
+        "path": "./vendor/git",
+        "type": "path"
+      },
+      "parent": []
     },
     "hermes-agent": {
       "inputs": {
@@ -204,25 +189,22 @@
       "flake": false,
       "locked": {
         "lastModified": 1785530609,
-        "narHash": "sha256-85GQQa8fT6mMGISL22IaZ99uDSHtRefSiy/Fae5rv90=",
-        "owner": "indexable-inc",
-        "repo": "home-manager",
+        "path": "./vendor/home-manager",
         "rev": "7d29fa5cbf4b468b7d9692cfb500cb89291fb519",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "home-manager",
-        "rev": "7d29fa5cbf4b468b7d9692cfb500cb89291fb519",
-        "type": "github"
-      }
+        "path": "./vendor/home-manager",
+        "type": "path"
+      },
+      "parent": []
     },
     "jj-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1785659759,
+        "lastModified": 1785490983,
         "path": "./vendor/jj",
-        "rev": "0d9e515c5a041f6528d319173a5e8f9edf4a5484",
+        "rev": "af48c0d50b540e7ff0b909e635098ffaefc2f007",
         "type": "path"
       },
       "original": {
@@ -252,35 +234,29 @@
       "flake": false,
       "locked": {
         "lastModified": 1784726528,
-        "narHash": "sha256-c9oAynAK6kbCt2A6VYL/VEChIsYJvinzcXmDqILTeX8=",
-        "owner": "indexable-inc",
-        "repo": "mesa",
+        "path": "./vendor/mesa",
         "rev": "0859cf8912b7dde1cb7b06f2ed416a84a479feef",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "mesa",
-        "rev": "0859cf8912b7dde1cb7b06f2ed416a84a479feef",
-        "type": "github"
-      }
+        "path": "./vendor/mesa",
+        "type": "path"
+      },
+      "parent": []
     },
     "nix-fast-build-src": {
       "flake": false,
       "locked": {
         "lastModified": 1784724794,
-        "narHash": "sha256-8Bqq/gIboYy34MGkZQnLZjy0yL6aff9nKrjhejngHTI=",
-        "owner": "indexable-inc",
-        "repo": "nix-fast-build",
+        "path": "./vendor/nix-fast-build",
         "rev": "6b976a8b2f8252942312599e6bfec20cec207f97",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "nix-fast-build",
-        "rev": "6b976a8b2f8252942312599e6bfec20cec207f97",
-        "type": "github"
-      }
+        "path": "./vendor/nix-fast-build",
+        "type": "path"
+      },
+      "parent": []
     },
     "nix-ninja-src": {
       "flake": false,
@@ -303,18 +279,15 @@
       "flake": false,
       "locked": {
         "lastModified": 1785534682,
-        "narHash": "sha256-k1pNEeTmiYl+6gcK98O+fjJbdRk2Ho+92yqDK+SqmHQ=",
-        "owner": "indexable-inc",
-        "repo": "nix",
+        "path": "./vendor/nix",
         "rev": "2d7585afe7b146f2bb07d834285ce8caefc7ba33",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "nix",
-        "rev": "2d7585afe7b146f2bb07d834285ce8caefc7ba33",
-        "type": "github"
-      }
+        "path": "./vendor/nix",
+        "type": "path"
+      },
+      "parent": []
     },
     "nixpkgs": {
       "locked": {
@@ -374,18 +347,15 @@
       "flake": false,
       "locked": {
         "lastModified": 1784724689,
-        "narHash": "sha256-qmhR0ItOC5fne8s3NuS+JZw+DSwvIdNQGRQK6+ykwrY=",
-        "owner": "indexable-inc",
-        "repo": "nushell",
+        "path": "./vendor/nushell",
         "rev": "2d3f1b3d35b2dd4abc1cc4e6092d3908ad021416",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "ref": "ix-patched",
-        "repo": "nushell",
-        "type": "github"
-      }
+        "path": "./vendor/nushell",
+        "type": "path"
+      },
+      "parent": []
     },
     "perftest-src": {
       "flake": false,
@@ -513,35 +483,29 @@
       "flake": false,
       "locked": {
         "lastModified": 1784724802,
-        "narHash": "sha256-Xm73BnsNqbZiPKFxRRkCWQVaoCfJeGE4xOIgI8yVktA=",
-        "owner": "indexable-inc",
-        "repo": "rnix-parser",
+        "path": "./vendor/rnix-0-12",
         "rev": "015fe463b6e9bad73326d725e0d3fa9a61e1fbdb",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "rnix-parser",
-        "rev": "015fe463b6e9bad73326d725e0d3fa9a61e1fbdb",
-        "type": "github"
-      }
+        "path": "./vendor/rnix-0-12",
+        "type": "path"
+      },
+      "parent": []
     },
     "rnix-0-14-src": {
       "flake": false,
       "locked": {
         "lastModified": 1784724806,
-        "narHash": "sha256-gyyaZazWgPWVbPPwtbYG9lRCfY4k+K+XWN6bayJ6mww=",
-        "owner": "indexable-inc",
-        "repo": "rnix-parser",
+        "path": "./vendor/rnix-0-14",
         "rev": "3f74f857a0d2bb6715ba993f506368b8b413d0d5",
-        "type": "github"
+        "type": "path"
       },
       "original": {
-        "owner": "indexable-inc",
-        "repo": "rnix-parser",
-        "rev": "3f74f857a0d2bb6715ba993f506368b8b413d0d5",
-        "type": "github"
-      }
+        "path": "./vendor/rnix-0-14",
+        "type": "path"
+      },
+      "parent": []
     },
     "root": {
       "inputs": {
