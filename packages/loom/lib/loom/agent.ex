@@ -72,9 +72,7 @@ defmodule Loom.Agent do
 
   @doc "Phase, VM, and result snapshot for `Loom.status/1`."
   @spec status(String.t()) :: {:ok, map()} | {:error, :not_found}
-  def status(id) do
-    with {:ok, reply} <- call(id, :status), do: {:ok, reply}
-  end
+  def status(id), do: call(id, :status)
 
   @doc """
   Deliver `text` to the agent.

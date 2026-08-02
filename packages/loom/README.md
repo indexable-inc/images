@@ -9,15 +9,16 @@ nothing: the multi-agent semantics, the browser rendering, and the VM
 lifecycle all come from prior art, and this package only supplies the
 glue between them.
 
-## The finished shape
+## Create the control VM
 
 ```console
 ix secret set anthropic_api_key
+ix secret set loom_ix_token
 ix new github:indexable-inc/index#loom --name loom \
-    --secret-env anthropic_api_key:ANTHROPIC_API_KEY \
-    --secret-env loom_ix_token:IX_TOKEN \
-    --l7-proxy-port 8080
+    --secret-file anthropic_api_key=anthropic_api_key \
+    --secret-file loom_ix_token=loom_ix_token
 ix shell loom
+loom
 ```
 
 The target is an ordinary template per the ix template contract: a plain
@@ -56,14 +57,14 @@ in the browser, plus the agent tree, through the stock local-producer
 path - the driving processes are local to the control VM, so no bridge
 exists.
 
-## Using it as a human (today, pre-template)
+## Using it as a human
 
 The interface is an `iex` session inside the control VM; agent events
 land in your shell process mailbox.
 
 ```console
-ix shell loom-ctl
-loom                     # launcher: env + iex -S mix, see e2e/provision.sh
+ix shell loom
+loom                     # starts the packaged interactive Elixir session
 ```
 
 ```elixir
