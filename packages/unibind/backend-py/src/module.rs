@@ -56,8 +56,11 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         .iter()
         .map(|obj| object::render_object(obj, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
-    let streams = stream::collect(interface);
-    let stream_classes: Vec<TokenStream> = streams.iter().map(|s| s.render(&ctx)).collect();
+    let streams = render::stream_exports(interface);
+    let stream_classes: Vec<TokenStream> = streams
+        .iter()
+        .map(|export| stream::render(export, &ctx))
+        .collect();
     let registration = registration(&ctx, &streams)?;
     let module_docs = function::doc_attrs(&interface.docs);
 
@@ -90,7 +93,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
 
 fn registration(
     ctx: &Ctx<'_>,
-    streams: &[stream::StreamExport<'_>],
+    streams: &[render::StreamExport<'_>],
 ) -> Result<TokenStream, RenderError> {
     let interface = ctx.interface;
     let user = ctx.user;
@@ -115,7 +118,7 @@ fn registration(
     }
     // Stream classes register too, so `isinstance` and typing hints work.
     for export in streams {
-        let ident = export.class_ident();
+        let ident = stream::class_ident(export.owner, &export.function.name);
         statements.push(quote! {
             module.add_class::<#ident>()?;
         });

@@ -17,18 +17,7 @@ To run the same per-unit clippy that CI runs (the `llm-clippy` fork with
 `fallible_int_fallback` and `anonymous_tuple_return_type`):
 
 ```sh
-nix build .#ciChecks.x86_64-linux.<unit>.clippy   # <unit> is usually rust-<crate-name>
-```
-
-`<unit>` is the package's `passthruTests.prefix`, which defaults to
-`rust-<crate-name>` but is overridden by some packages: `upstream-sync` and
-`unibind-gen` are just their own names. To find the right one rather than guess,
-filter one level in, because no unit is NAMED `clippy` and grepping the
-top-level names for it returns a single false positive:
-
-```sh
-nix eval --json .#ciChecks.x86_64-linux \
-  --apply 'cs: builtins.filter (n: cs.${n} ? clippy) (builtins.attrNames cs)'
+nix build .#ciChecks.x86_64-linux.rust-<crate-name>.clippy
 ```
 
 Prefer names that preserve the concept's path. Local aliases may shorten noisy

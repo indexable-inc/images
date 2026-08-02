@@ -397,16 +397,146 @@ main {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- machine builds panel (patched nix only) ---------- */
+/* ---------- daemon panel ---------- */
 
-/* Self-hides on stock nix (the component renders nothing when `detected` is
- * false). */
+.daemon-body,
 .global-body {
   min-height: 0;
   overflow: auto;
   padding: 0.4rem 0.6rem;
   display: flex;
   flex-direction: column;
+}
+
+.daemon-body {
+  gap: 0.4rem;
+}
+
+/* Not-tracing reason / idle note. */
+.daemon-status {
+  color: var(--muted);
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.daemon-ops {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* label | proportional bar | count, columns aligned across rows. */
+.daemon-op {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr 3.5rem;
+  align-items: center;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-op-label {
+  color: var(--muted);
+}
+
+.daemon-op-bar {
+  height: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.daemon-op-fill {
+  display: block;
+  height: 100%;
+  width: var(--p, 0%);
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, var(--green)));
+}
+
+.daemon-op-count {
+  text-align: right;
+  color: var(--ink);
+}
+
+/* The store path the daemon last touched -- the "currently working on" line. */
+.daemon-path {
+  display: flex;
+  gap: 0.4rem;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.daemon-path-label {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Head-side ellipsis for path readouts: the leaf carries the identity, so
+ * overflow must eat the prefix, never the tail (#2487). `direction: rtl`
+ * moves the line's overflow edge (and its ellipsis) to the left; the &lrm;
+ * marks wrapping the text in the markup keep the characters themselves in
+ * left-to-right order, so nothing visually reorders. */
+.daemon-path-value,
+.daemon-hot-path {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.daemon-path-value {
+  flex: 1 1 auto;
+}
+
+.daemon-hot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--line-soft);
+}
+
+.daemon-hot-title {
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* path | current rate | cumulative count. */
+.daemon-hot-row {
+  display: grid;
+  grid-template-columns: 1fr 3rem 3.5rem;
+  gap: 0.35rem;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.daemon-hot-path {
+  color: var(--ink);
+}
+
+.daemon-hot-rate,
+.daemon-hot-count {
+  text-align: right;
+}
+
+.daemon-hot-rate {
+  color: var(--accent);
+}
+
+.daemon-hot-count {
+  color: var(--faint);
+}
+
+/* ---------- machine builds panel (patched nix only) ---------- */
+
+/* Sits above the daemon panel in the side pane; caps its height so the daemon
+ * panel and activity graph below stay visible. Self-hides on stock nix (the
+ * component renders nothing when `detected` is false). */
+.global-body {
   gap: 0.5rem;
 }
 

@@ -82,42 +82,6 @@ fn init_upstream(root: &Path) -> PathBuf {
     upstream
 }
 
-/// A fresh upstream plus a clone of it, and the base commit they share.
-///
-/// Every fork shape starts here and differs only in what it commits and how it
-/// merges, so the scaffolding lives once.
-struct Forked {
-    upstream: PathBuf,
-    fork: PathBuf,
-    base: String,
-}
-
-/// Build [`Forked`] under `root`.
-fn fork_of_upstream(root: &Path) -> Forked {
-    let upstream = init_upstream(root);
-    let fork = root.join("fork");
-    git(root, &["clone", "--quiet", upstream.to_str().unwrap(), "fork"]);
-    let base = git(&fork, &["rev-parse", "main"]);
-    Forked {
-        upstream,
-        fork,
-        base,
-    }
-}
-
-/// Write `file`, stage it, and commit it as `subject` with `body`. An empty
-/// body makes a reason-less commit, which the refusal tests want.
-fn commit_patch(fork: &Path, file: &str, contents: &str, subject: &str, body: &str) {
-    fs::write(fork.join(file), contents).unwrap();
-    git(fork, &["add", "."]);
-    let message = if body.is_empty() {
-        subject.to_owned()
-    } else {
-        format!("{subject}\n\n{body}")
-    };
-    git(fork, &["commit", "--quiet", "-m", &message]);
-}
-
 /// The https URLs the binaries see; the gitconfig redirects them locally.
 pub const UPSTREAM_URL: &str = "https://github.com/fakeorg/fakerepo.git";
 pub const FORK_REPO: &str = "fakefork/fakerepo";
@@ -171,231 +135,6 @@ impl Fixture {
         Self::seal(root, &upstream, "origin/maintenance", patches)
     }
 
-    /// The megamerge shape as it exists on the unmigrated forks: the seal has
-    /// one parent PER PATCH (five on rust-clippy), so a patch can be
-    /// unreachable on the first-parent path, and a patch may itself be a merge
-    /// commit because its parents are its declared dependencies. A
-    /// first-parent or no-merges read of this shape silently drops patches,
-    /// which `Fixture::new`'s single-parent seal cannot catch.
-    ///
-    /// Takes exactly two patches: the second is built as a merge whose first
-    /// parent is the base and whose second is the first patch, so the first
-    /// patch is off the first-parent path from that patch and the second is
-    /// dropped by `--no-merges`.
-    pub fn megamerge_dag(root: &Path, first: (&str, &str), second: (&str, &str)) -> Self {
-        let Forked {
-            upstream,
-            fork,
-            base,
-        } = fork_of_upstream(root);
-
-        git(&fork, &["checkout", "--quiet", "-B", "p0", &base]);
-        commit_patch(&fork, "patch-0.txt", &format!("{}\n", first.0), first.0, first.1);
-        let p0 = git(&fork, &["rev-parse", "HEAD"]);
-
-        // The tree the second patch lands, committed normally and then
-        // re-parented, because commit-tree is the only way to author the
-        // parent order this shape needs.
-        commit_patch(&fork, "patch-1.txt", &format!("{}\n", second.0), "scratch", "");
-        #[expect(
-            clippy::literal_string_with_formatting_args,
-            reason = "^{tree} is git revision syntax, not a format placeholder"
-        )]
-        let tree = git(&fork, &["rev-parse", "HEAD^{tree}"]);
-        let p1 = git(
-            &fork,
-            &[
-                "commit-tree",
-                &tree,
-                "-p",
-                &base,
-                "-p",
-                &p0,
-                "-m",
-                &format!("{}\n\n{}", second.0, second.1),
-            ],
-        );
-
-        let seal = git(
-            &fork,
-            &[
-                "commit-tree",
-                &tree,
-                "-p",
-                &p0,
-                "-p",
-                &p1,
-                "-m",
-                &format!("ix megamerge: 2 patches on {}", &base[..12]),
-            ],
-        );
-        git(&fork, &["branch", "ix-patched", &seal]);
-        git(&fork, &["checkout", "--quiet", "ix-patched"]);
-        Self::with_redirects(root, upstream, fork)
-    }
-
-    /// The merge-forward shape the `forkBranches` doctrine mandates. No seal:
-    /// patches are ordinary commits on the branch, upstream is MERGED in
-    /// rather than rebased onto, and an earlier revision of a patch is merged
-    /// back so a rev some flake.lock pinned stays reachable. A read over
-    /// everything reachable then sees the merge commits as patches and two
-    /// revisions of one patch sharing one subject. This is the home-manager
-    /// shape from ENG-11646.
-    pub fn merge_forwarded(root: &Path, patches: &[(&str, &str)]) -> Self {
-        let Forked {
-            upstream,
-            fork,
-            base,
-        } = fork_of_upstream(root);
-        git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
-        for (i, (subject, body)) in patches.iter().enumerate() {
-            commit_patch(&fork, &format!("patch-{i}.txt"), &format!("{subject}\n"), subject, body);
-        }
-
-        // An earlier revision of the first patch, on its own line off the same
-        // base: same subject, different commit, as an amend-and-repush leaves
-        // behind and a flake.lock keeps pinned.
-        let (subject, body) = patches[0];
-        git(
-            &fork,
-            &["checkout", "--quiet", "-b", "earlier-revision", &base],
-        );
-        commit_patch(&fork, "patch-0.txt", &format!("{subject}\nearlier\n"), subject, body);
-        let earlier = git(&fork, &["rev-parse", "HEAD"]);
-
-        // Merged for ancestry alone; -s ours keeps the branch's tree, which is
-        // what reconciling an equivalent revision does.
-        git(&fork, &["checkout", "--quiet", "ix-patched"]);
-        git(
-            &fork,
-            &[
-                "merge",
-                "--quiet",
-                "--no-ff",
-                "-s",
-                "ours",
-                &earlier,
-                "-m",
-                "Merge the revision a lock still pins",
-            ],
-        );
-
-        // Upstream moves and the branch merges it forward.
-        fs::write(upstream.join("upstream-feature"), "moved on\n").unwrap();
-        git(&upstream, &["add", "."]);
-        git(&upstream, &["commit", "--quiet", "-m", "upstream: a later change"]);
-        git(&fork, &["fetch", "--quiet", "origin", "main"]);
-        git(
-            &fork,
-            &[
-                "merge",
-                "--quiet",
-                "--no-ff",
-                "FETCH_HEAD",
-                "-m",
-                "Merge upstream main into ix-patched",
-            ],
-        );
-        Self::with_redirects(root, upstream, fork)
-    }
-
-    /// A merge-forward branch where one patch arrived as a merged pull
-    /// request: its commit sits on the merge's second parent, off the
-    /// branch's own line, which is what GitHub's merge button produces
-    /// (ENG-11686).
-    pub fn pr_merged(root: &Path, direct: (&str, &str), merged: (&str, &str)) -> Self {
-        let Forked {
-            upstream,
-            fork,
-            base,
-        } = fork_of_upstream(root);
-        git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
-        commit_patch(&fork, "patch-direct.txt", &format!("{}\n", direct.0), direct.0, direct.1);
-
-        // The pull request's own branch, merged back with the merge button.
-        git(&fork, &["checkout", "--quiet", "-b", "pr-branch"]);
-        commit_patch(&fork, "patch-pr.txt", &format!("{}\n", merged.0), merged.0, merged.1);
-        git(&fork, &["checkout", "--quiet", "ix-patched"]);
-        git(
-            &fork,
-            &[
-                "merge",
-                "--quiet",
-                "--no-ff",
-                "pr-branch",
-                "-m",
-                "Merge pull request #1 from fake/pr-branch",
-            ],
-        );
-
-        Self::with_redirects(root, upstream, fork)
-    }
-
-    /// The home-manager shape that a naive second-parent walk gets wrong: the
-    /// patch on the branch has been RETITLED since the revision a flake.lock
-    /// still pins, and that revision is merged back for ancestry alone with
-    /// `-s ours`.
-    ///
-    /// [`Fixture::merge_forwarded`] gives the merged-back revision the same
-    /// subject as the branch's, so a subject filter alone hides it. Real
-    /// home-manager does not: the branch says "files: batch link creation and
-    /// target checks" where the pinned revision says "files: batch symlink
-    /// creation and target checks in activation". Only the merge's TREE
-    /// distinguishes them, and reading them as patches is ENG-11646.
-    pub fn retitled_pinned_revision(root: &Path, old: (&str, &str), new: (&str, &str)) -> Self {
-        let Forked {
-            upstream,
-            fork,
-            base,
-        } = fork_of_upstream(root);
-
-        // The revision a lock still pins, under the subject it had then.
-        git(&fork, &["checkout", "--quiet", "-b", "pinned", &base]);
-        commit_patch(&fork, "patch.txt", &format!("{}\nearlier\n", old.0), old.0, old.1);
-        let pinned = git(&fork, &["rev-parse", "HEAD"]);
-
-        // The branch's own copy, retitled.
-        git(&fork, &["checkout", "--quiet", "-B", "ix-patched", &base]);
-        commit_patch(&fork, "patch.txt", &format!("{}\n", new.0), new.0, new.1);
-
-        // `-s ours` keeps the branch's tree, which is what reconciling an
-        // equivalent revision does and what makes this merge ancestry-only.
-        git(
-            &fork,
-            &[
-                "merge",
-                "--quiet",
-                "--no-ff",
-                "-s",
-                "ours",
-                &pinned,
-                "-m",
-                "Merge the revision a lock still pins (ancestry only)",
-            ],
-        );
-        Self::with_redirects(root, upstream, fork)
-    }
-
-    /// The scratch global gitconfig that redirects the https URLs the binaries
-    /// use at the local fixture repos.
-    fn with_redirects(root: &Path, upstream: PathBuf, fork: PathBuf) -> Self {
-        let gitconfig = root.join("gitconfig");
-        fs::write(
-            &gitconfig,
-            format!(
-                "[url \"{}\"]\n\tinsteadOf = {UPSTREAM_URL}\n[url \"{}\"]\n\tinsteadOf = {FORK_URL}\n",
-                upstream.display(),
-                fork.display()
-            ),
-        )
-        .unwrap();
-        Self {
-            upstream,
-            fork,
-            gitconfig,
-        }
-    }
-
     /// Clone the fork, commit the patch series on `base_ref`, and seal it
     /// with the megamerge commit under the `ix-patched` bookmark.
     fn seal(root: &Path, upstream: &Path, base_ref: &str, patches: &[(&str, &str)]) -> Self {
@@ -432,7 +171,22 @@ impl Fixture {
             ],
         );
         git(&fork, &["branch", "ix-patched", &seal]);
-        Self::with_redirects(root, upstream.to_path_buf(), fork)
+
+        let gitconfig = root.join("gitconfig");
+        fs::write(
+            &gitconfig,
+            format!(
+                "[url \"{}\"]\n\tinsteadOf = {UPSTREAM_URL}\n[url \"{}\"]\n\tinsteadOf = {FORK_URL}\n",
+                upstream.display(),
+                fork.display()
+            ),
+        )
+        .unwrap();
+        Self {
+            upstream: upstream.to_path_buf(),
+            fork,
+            gitconfig,
+        }
     }
 
     /// The env pairs that make the binaries hit the local fixtures.

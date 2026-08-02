@@ -13,7 +13,7 @@ use quote::quote;
 use unibind_core::ir;
 use unibind_core::render::{RenderError, name_ident};
 
-use crate::function::{doc_attrs, render_callable, wrapper_parts};
+use crate::function::{Callee, doc_attrs, render_callable, wrapper_parts};
 use crate::ty::{self, TyCtx};
 
 pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
@@ -43,20 +43,12 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
 
     let mut methods = Vec::new();
     for method in &object.methods {
-        if matches!(method.ret, Some(ir::Type::Stream(_))) {
-            return Err(RenderError::new(format!(
-                "method `{}` of `{}` returns a stream; stream methods are a \
-                 follow-up of issue #1993 (return the stream from a module \
-                 function instead)",
-                method.name, object.name
-            )));
-        }
         // The resource surface owns `close`: the generic path would render
         // a second, non-idempotent close.
         if object.resource && is_close(method) {
             continue;
         }
-        methods.push(render_method(method, ctx)?);
+        methods.push(render_method(method, &object.name, ctx)?);
     }
     let resource_surface = object
         .resource
@@ -69,12 +61,12 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
         #docs
         #[::napi_derive::napi(js_name = #js_name)]
         pub struct #handle {
-            inner: ::std::sync::Arc<super::#user::#name>,
+            inner: ::std::sync::Arc<#user::#name>,
             #closed_field
         }
 
         impl #handle {
-            fn __unibind_from(value: super::#user::#name) -> Self {
+            fn __unibind_from(value: #user::#name) -> Self {
                 Self {
                     inner: ::std::sync::Arc::new(value),
                     #closed_init
@@ -95,8 +87,14 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
 
 /// One `#[napi]` method delegating to the user's `&self` method. Sync
 /// bodies call through the handle's `Arc` directly; async bodies clone the
-/// `Arc` into the future so the receiver outlives a collected handle.
-fn render_method(method: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
+/// `Arc` into the future so the receiver outlives a collected handle. A
+/// stream return crosses as the owner-scoped handle class
+/// [`crate::stream`] renders alongside the object.
+fn render_method(
+    method: &ir::Function,
+    object: &str,
+    ctx: &TyCtx<'_>,
+) -> Result<TokenStream, RenderError> {
     let method_name = name_ident(&method.name)?;
     let wrapper = wrapper_parts(method, ctx)?;
     let exprs = &wrapper.exprs;
@@ -109,7 +107,7 @@ fn render_method(method: &ir::Function, ctx: &TyCtx<'_>) -> Result<TokenStream, 
             }
         },
     };
-    render_callable(method, ctx, &wrapper, &call, Some(&quote!(&self,)))
+    render_callable(method, ctx, &wrapper, &call, Callee::Method { object })
 }
 
 /// The napi constructor over the user's `#[unibind(constructor)]` function.
@@ -126,8 +124,9 @@ fn render_constructor(
     let docs = doc_attrs(&ctor.docs);
     let wrapper = wrapper_parts(ctor, ctx)?;
     let params = &wrapper.params;
+    let prologue = &wrapper.prologue;
     let exprs = &wrapper.exprs;
-    let call = quote!(super::#user::#object_ident::#ctor_name(#(#exprs),*));
+    let call = quote!(#user::#object_ident::#ctor_name(#(#exprs),*));
     let body = if ctor.throws.is_some() {
         quote! {
             match #call {
@@ -146,6 +145,7 @@ fn render_constructor(
         #docs
         #[::napi_derive::napi(constructor)]
         pub fn #ctor_name(#(#params),*) -> ::napi::Result<Self> {
+            #(#prologue)*
             #body
         }
     })

@@ -972,21 +972,6 @@ in {
           "if".app-name-regex-substring = "ix-term";
           run = "layout tiling";
         }
-        # test-ide's fleet dashboard is the same shape: a Tauri window with
-        # titleBarStyle "Overlay", so AppKit reports no close, minimize or zoom
-        # button and aerospace floats it even though the subrole reads
-        # AXStandardWindow. Measured 2026-07-30: window 2287 sat at x=3200
-        # w=2080 across the Ghostty grid until `aerospace layout tiling` snapped
-        # it to a 1175x432 cell. The regex catches `npm run tauri dev`, whose
-        # binary carries no bundle id.
-        {
-          "if".app-id = "dev.andrewgazelka.fleet";
-          run = "layout tiling";
-        }
-        {
-          "if".app-name-regex-substring = "fleet";
-          run = "layout tiling";
-        }
         {
           "if".app-id = "com.paulsolt.SuperEasyTimerMac";
           run = "layout floating";
@@ -1647,19 +1632,6 @@ in {
           recurse = false;
           fetchJobs = 16;
         };
-        # The private config pins index as a submodule; a plain `git submodule
-        # update` checks that pin out detached, which drops the branch from the
-        # prompt and makes the bump flow (`git -C index pull`) need a manual
-        # checkout first. This include keeps the checkout attached: updates
-        # merge the pin into main instead of detaching, and --remote tracks
-        # main. Scoped by gitdir so a submodule named "index" in any other
-        # repo keeps stock behavior (#3746).
-        "includeIf \"gitdir:${cfg.paths.privateConfigDirectory}/\"".path = pkgs.writeText "private-config-git" (lib.generators.toGitINI {
-          "submodule \"index\"" = {
-            branch = "main";
-            update = "merge";
-          };
-        });
         # No fetch/commit-time auto maintenance anywhere, and explicitly so:
         # git's own default for maintenance.auto is true, so this file must
         # say `false` rather than stay silent. A ~/Projects/ includeIf used

@@ -159,6 +159,58 @@ async def case_resource_lifecycle() -> str:
     )
 
 
+async def case_async_object_return() -> str:
+    """An async, fallible method hands back a live wrapper for another object."""
+    closed_base = conf.closed_shells()
+    async with conf.Gate("shells") as gate:
+        shell = await gate.open_shell("bash")
+        # A wrapper instance, not an opaque capsule: the class the module
+        # exports, and its methods answer.
+        assert isinstance(shell, conf.Shell), f"got {type(shell).__name__}"
+        assert type(shell) is conf.Shell, f"got {type(shell).__name__}"
+        assert shell.command() == "shells/bash", shell.command()
+        assert shell.is_open()
+        await shell.close()
+        assert not shell.is_open()
+        assert conf.closed_shells() == closed_base + 1, "the minted object's close never ran"
+
+        # The error arm of the same shape still maps onto the exception
+        # hierarchy rather than resolving to a half-built handle.
+        caught: ValueError | None = None
+        try:
+            await gate.open_shell("")
+        except ValueError as exc:
+            caught = exc
+        assert caught is not None, "open_shell('') resolved instead of raising"
+        assert isinstance(caught, conf.ConformanceError)
+    return (
+        f"await gate.open_shell('bash') -> {type(shell).__name__} instance; "
+        f"command() == {shell.command()!r}; close() observed; "
+        f"empty command raised {str(caught)!r}"
+    )
+
+
+async def case_bytes_stream() -> str:
+    """A UniStream<Vec<u8>> off an object method arrives as exact `bytes`."""
+    async with conf.Gate("blobs") as gate:
+        shell = await gate.open_shell("cat")
+        stream = shell.output(3)
+        stream_class = type(stream).__name__
+        chunks = [chunk async for chunk in stream]
+        await shell.close()
+    expected = [b"\x00\xffblobs/cat" + str(index).encode() for index in range(3)]
+    kinds = {type(chunk).__name__ for chunk in chunks}
+    assert kinds == {"bytes"}, f"stream items arrived as {kinds}"
+    # 0x00 and 0xFF are both invalid on their own in UTF-8 text, so a lossy
+    # decode/encode anywhere on the item path cannot produce these exactly.
+    assert chunks == expected, f"{chunks} != {expected}"
+    assert all(0xFF in chunk for chunk in chunks), "the high byte did not survive"
+    return (
+        f"{stream_class} yielded {len(chunks)} bytes objects, "
+        f"first {chunks[0]!r} (NUL + 0xFF intact)"
+    )
+
+
 async def case_zero_copy_gil() -> str:
     """&[u8] args alias Python memory; blocking fns release the GIL."""
     payload = bytearray(b"unibind" * 1024)
@@ -215,6 +267,8 @@ CASES: tuple[tuple[str, Callable[[], Awaitable[str]]], ...] = (
     ("cancel-mid-flight", case_cancel_mid_flight),
     ("stream-backpressure", case_stream_backpressure),
     ("drop-without-close", case_resource_lifecycle),
+    ("async-object-return", case_async_object_return),
+    ("bytes-stream", case_bytes_stream),
     ("zero-copy-gil", case_zero_copy_gil),
     ("panic-containment", case_panic_containment),
 )

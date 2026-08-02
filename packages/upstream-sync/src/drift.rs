@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::Path;
 
-use anstream::eprintln;
+use anstream::{eprintln, println};
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use lazy_regex::regex;
@@ -21,17 +21,8 @@ use serde::Serialize;
 
 use crate::gh;
 use crate::mapping::{self, Fork, Slug};
-use crate::report;
 use crate::status;
-use crate::style::{YELLOW, paint};
-
-/// What a 404 or 422 means for this lane, for [`gh::read`]'s warning. The probe
-/// is aimed at the UPSTREAM repo, which shares no object store with a
-/// mesa-style fork, so a megamerge sha resolving to nothing there is an expected
-/// answer rather than a broken state.
-const ABSENT_HINT: &str = "The pinned rev is not present upstream -- either the fork repo is not \
-     a GitHub fork of the upstream (they share no object store, so a megamerge sha can never \
-     resolve there) or the rev was garbage-collected. Cell left unknown.";
+use crate::style::{CYAN, YELLOW, paint};
 
 /// One fork's drift facts (the `--json` row shape).
 #[derive(Debug, Serialize)]
@@ -65,17 +56,32 @@ pub fn run(
     json: bool,
     markdown: bool,
 ) -> Result<()> {
-    report::check_flags("drift", json, markdown)?;
+    if json && markdown {
+        return Err(eyre!(
+            "upstream-sync: drift: --json and --markdown are mutually exclusive"
+        ));
+    }
     let mapping_path = mapping::path(mapping_override)?;
     let forks = mapping::select(mapping::load(&mapping_path)?, name, "upstream-sync")?;
     let rows = forks.iter().map(row).collect::<Result<Vec<Row>>>()?;
-    report::emit(
-        &rows,
-        &render_table(&rows),
-        "== fork drift: pinned base vs upstream default branch ==",
-        json,
-        markdown,
-    )
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    let table = render_table(&rows);
+    if markdown {
+        println!("{table}");
+    } else {
+        println!(
+            "{}",
+            paint(
+                CYAN,
+                "== fork drift: pinned base vs upstream default branch =="
+            )
+        );
+        println!("{table}");
+    }
+    Ok(())
 }
 
 /// The pinned base rev of a fork's input from the committed flake.lock in
@@ -85,7 +91,7 @@ pub fn run(
 ///
 /// # Errors
 /// Fails when an existing flake.lock is unreadable or not JSON.
-pub(crate) fn lock_rev(input: &str) -> Result<Option<String>> {
+fn lock_rev(input: &str) -> Result<Option<String>> {
     let lock = Path::new("flake.lock");
     if !lock.exists() {
         return Ok(None);
@@ -104,20 +110,18 @@ pub(crate) fn lock_rev(input: &str) -> Result<Option<String>> {
 /// tracked upstream branch (the registry's `upstreamRef`, else the default
 /// branch) has that our pinned base does not.
 fn github_behind(fork: &Fork, slug: &Slug, rev: &str) -> Result<Option<i64>> {
-    let ctx = format!("drift: {}", fork.name);
     let repo = format!("repos/{}/{}", slug.owner, slug.repo);
     let branch = match &fork.upstream_ref {
         Some(configured) => configured.clone(),
-        None => match gh::read(&ctx, &repo, ".default_branch", ABSENT_HINT)? {
+        None => match gh::read(&fork.name, &repo, ".default_branch")? {
             gh::Read::Value(branch) => branch,
             gh::Read::Absent(_) => return Ok(None),
         },
     };
     let gh::Read::Value(n) = gh::read(
-        &ctx,
+        &fork.name,
         &format!("{repo}/compare/{rev}...{branch}"),
         ".ahead_by",
-        ABSENT_HINT,
     )?
     else {
         return Ok(None);
@@ -195,10 +199,9 @@ fn base_date(fork: &Fork, forge: &str, slug: &Slug, rev: Option<&str>) -> Result
     let Some(rev) = rev else { return Ok(None) };
     match forge {
         "github" => gh::read(
-            &format!("drift: {}", fork.name),
+            &fork.name,
             &format!("repos/{}/{}/commits/{rev}", slug.owner, slug.repo),
             ".commit.committer.date",
-            ABSENT_HINT,
         )
         .map(|read| match read {
             gh::Read::Value(date) => Some(date),
@@ -242,32 +245,19 @@ fn stance_counts(fork: &Fork) -> StanceCounts {
 
 fn row(fork: &Fork) -> Result<Row> {
     let slug = Slug::parse(&fork.upstream_url)?;
-    // A vendored fork has no pinned base to measure upstream distance FROM, so
-    // this lane cannot answer its question for one. Its cells stay unknown and
-    // its `input` cell says `vendored:<path>`, rather than an empty row that
-    // reads as no drift. Getting the answer back means deriving the view
-    // locally to find the base it sits on, which this network-only lane does
-    // not do; ENG-11685 owns that.
-    let rev = match fork.source()? {
-        mapping::Source::Pinned(input) => {
-            let rev = lock_rev(input)?;
-            if rev.is_none() {
-                eprintln!(
-                    "{}",
-                    paint(
-                        YELLOW,
-                        &format!(
-                            "upstream-sync: drift: {}: input {input} has no locked rev in \
-                             flake.lock",
-                            fork.name
-                        )
-                    )
-                );
-            }
-            rev
-        }
-        mapping::Source::Vendored(_) => None,
-    };
+    let rev = lock_rev(&fork.input)?;
+    if rev.is_none() {
+        eprintln!(
+            "{}",
+            paint(
+                YELLOW,
+                &format!(
+                    "upstream-sync: drift: {}: input {} has no locked rev in flake.lock",
+                    fork.name, fork.input
+                )
+            )
+        );
+    }
     let forge = if mapping::is_github(&fork.upstream_url) {
         "github"
     } else if mapping::is_gitlab(&fork.upstream_url) {
@@ -317,7 +307,7 @@ fn row(fork: &Fork) -> Result<Row> {
     Ok(Row {
         name: fork.name.clone(),
         forge: forge.to_owned(),
-        input: fork.source_label()?,
+        input: fork.input.clone(),
         rev,
         behind,
         base_date,
@@ -332,8 +322,10 @@ fn row(fork: &Fork) -> Result<Row> {
     })
 }
 
-/// "?" marks an unknown cell (forge unreachable or no locked rev) so a degraded
-/// row is visibly degraded, not silently zero. The action column sits before the
+/// The human/markdown table: "?" marks an unknown cell (forge unreachable or
+/// no locked rev) so a degraded row is visibly degraded, not silently zero.
+/// Byte-compatible with nu's `to md --pretty` (the fork-sync workflow embeds
+/// it in step summaries and PR bodies). The action column sits before the
 /// stance counts so an 80-column pipe still shows the verdict.
 fn render_table(rows: &[Row]) -> String {
     const HEADERS: [&str; 11] = [
@@ -350,10 +342,10 @@ fn render_table(rows: &[Row]) -> String {
         "note",
     ];
     let unknown = || "?".to_owned();
-    let cells: Vec<Vec<String>> = rows
+    let cells: Vec<[String; 11]> = rows
         .iter()
         .map(|r| {
-            vec![
+            [
                 r.name.clone(),
                 r.rev
                     .as_deref()
@@ -370,7 +362,39 @@ fn render_table(rows: &[Row]) -> String {
             ]
         })
         .collect();
-    report::markdown_table(&HEADERS, &cells)
+
+    let widths: Vec<usize> = HEADERS
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            cells
+                .iter()
+                .map(|row| row[i].len())
+                .chain([h.len()])
+                .max()
+                .unwrap_or_default()
+        })
+        .collect();
+    let line = |vals: &[String]| {
+        let padded: Vec<String> = vals
+            .iter()
+            .zip(&widths)
+            .map(|(v, w)| format!("{v:<w$}"))
+            .collect();
+        format!("| {} |", padded.join(" | "))
+    };
+
+    let mut out = vec![
+        line(&HEADERS.map(str::to_owned)),
+        line(
+            &widths
+                .iter()
+                .map(|w| "-".repeat(*w))
+                .collect::<Vec<String>>(),
+        ),
+    ];
+    out.extend(cells.iter().map(|row| line(row.as_slice())));
+    out.join("\n")
 }
 
 #[cfg(test)]

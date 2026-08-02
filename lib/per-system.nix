@@ -49,52 +49,17 @@
     ];
     text = ''
       # nu
-      # The top-level `vendor/` tree is not ours to style. Each subtree under
-      # it is a byte-for-byte copy of another project's, and the derived-view
-      # import filters those paths back out so a copy hashes to upstream's own
-      # commit; reformat, rename or annotate one file there and that identity
-      # is gone, so house style stops at the repository's own files. This is
-      # the single place naming what is vendored: the stages that discover
-      # their own files go through `owned-files`, and the four tools that walk
-      # the tree themselves (statix, deadnix, clone, complexity) exclude the
-      # same directory through their own flag.
-      const vendored_dir = "vendor"
-      # One directory, three spellings, because those flags disagree on syntax.
-      # `fd` and `statix` take gitignore patterns, where the leading slash
-      # anchors the match to the scan root: a bare name matches at any depth and
-      # would also drop users/*/config/nushell/vendor/autoload, which is ours
-      # and is shell-fenced.
-      const vendored_gitignore = $"/($vendored_dir)"
-      # `clone` and `complexity` match a `glob::Pattern` against a scan path
-      # carrying a `./` prefix, so a bare directory name matches nothing there;
-      # `*` crosses separators, so one trailing `*` covers the whole subtree.
-      const vendored_scan_glob = $"./($vendored_dir)/*"
-      # `deadnix` takes a path prefix instead of a glob, so the bare directory
-      # is the exclusion there; a vendored tree nested deeper would need its own
-      # entry.
-      #
-      # `fd` restricted to repository-owned files: every file-discovering stage
-      # calls this instead of bare `fd`. The arguments are fd's own, passed as a
-      # list because a custom nushell command rejects flags its own signature
-      # does not declare.
-      def owned-files [fd_args: list<string>] { fd --exclude $vendored_gitignore ...$fd_args }
       def "main alejandra" [] {
-        let nix_files = (owned-files [--extension nix] | lines)
+        let nix_files = (fd --extension nix | lines)
         alejandra --check ...$nix_files
       }
-      # `--ignore` extends statix.toml's `ignore` rather than replacing it, so
-      # the two module roots listed there stay excluded.
-      def "main statix" [] { statix check . --ignore $vendored_gitignore }
+      def "main statix" [] { statix check . }
       # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
       # dropping a pattern name is unsafe without `...` in the pattern (it
       # narrows the callable signature); an unused name here must be deleted
       # (migrating call sites) or kept behind `...`, matching what the LSP
       # already flags as unused.
-      # `--exclude` takes a list, so the `--` is load-bearing: written as
-      # `deadnix --fail --exclude vendor .` the `.` is read as a second exclude,
-      # the default scan path then has everything excluded, and the stage passes
-      # having checked nothing.
-      def "main deadnix" [] { deadnix --fail --exclude $vendored_dir -- . }
+      def "main deadnix" [] { deadnix --fail . }
       # The Nix style rules as astlog lint declarations
       # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
       # finding per lint-declared relation row and exits nonzero on any
@@ -104,7 +69,7 @@
       # .nix files are handed to the corpus: astlog would otherwise parse
       # every known-grammar file in the repo to run nix-only rules.
       def "main astlog" [] {
-        let nix_files = (owned-files [--extension nix] | lines)
+        let nix_files = (fd --extension nix | lines)
         astlog scan astlog-rules/nix.astlog ...$nix_files
       }
       # The Rust style rules (astlog-rules/rust.astlog), the successor to the
@@ -133,7 +98,7 @@
         # [workspace.dependencies] and inherited with `workspace = true`. A
         # separate ruleset because the `astlog-rules` self-test maps one source
         # extension per ruleset (rust.astlog -> .rs, cargo.astlog -> .toml).
-        let cargo_files = (owned-files [--hidden --glob Cargo.toml] | lines)
+        let cargo_files = (fd --hidden --glob Cargo.toml | lines)
         if ($cargo_files | is-not-empty) {
           astlog scan astlog-rules/cargo.astlog ...$cargo_files
         }
@@ -150,7 +115,7 @@
       # speccing them would be noise. `fd` already skips gitignored `_build`/`deps`.
       def "main astlog-elixir" [] {
         let files = (
-          owned-files [--extension ex --extension exs]
+          fd --extension ex --extension exs
           | lines
           | where {|p| $p =~ '(^|/)lib/' }
         )
@@ -178,13 +143,11 @@
           | where {|line| $line != "" and not ($line | str starts-with "#") }
         )
         let scripts = (
-          owned-files [
-            --hidden --type file --exclude .git
+          fd --hidden --type file --exclude .git
             --extension sh --extension bash --extension nu
-          ]
           | lines
         )
-        let nix_files = (owned-files [--extension nix] | lines)
+        let nix_files = (fd --extension nix | lines)
         # `astlog scan` exits nonzero on findings by design; capture the JSON
         # (an empty corpus still prints `[]`) instead of failing the stage.
         let scan = (do { astlog scan astlog-rules/shell-fence.astlog --json ...$nix_files } | complete)
@@ -245,6 +208,10 @@
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
+          # TypeScript's project-variant convention: tsconfig.VARIANT.json.
+          # Vite scaffolds ship tsconfig.node.json, mkapp adds
+          # tsconfig.staging.json; tsc owns these names via `-p`.
+          '(^|/)tsconfig\.[a-z-]+\.json$'
           '(^|/)(package-lock|lock)\.json$'
           '(^|/)(pins|manifest)\.json$'
           '^\.(claude|vscode|zed)/settings\.json$'
@@ -274,13 +241,11 @@
           '^tests/.*\.json$'
         ]
         let candidates = (
-          owned-files [
-            --hidden --type file
-            --extension toml --extension json --extension yaml --extension yml
-            --extension kdl --extension ini --extension conf --extension cfg --extension xml
-            --extension properties --extension editorconfig --extension sobelow-conf
-            --exclude .git
-          ]
+          fd --hidden --type file
+          --extension toml --extension json --extension yaml --extension yml
+          --extension kdl --extension ini --extension conf --extension cfg --extension xml
+          --extension properties --extension editorconfig --extension sobelow-conf
+          --exclude .git
           | lines
         )
         let denied = ($candidates | where {|path| not ($allowed | any {|pattern| $path =~ $pattern})})
@@ -304,7 +269,7 @@
       # fine and stay out of scope.
       def "main dirnames" [] {
         let offenders = (
-          owned-files [--type directory . packages]
+          fd --type directory . packages
           | lines
           | where {|dir| ($dir | path basename) == ($dir | path dirname | path basename) }
           | where {|dir|
@@ -329,7 +294,7 @@
       # `-dark.svg` twin (the creating-a-readme skill documents the pattern).
       def "main svg-dark" [] {
         let offenders = (
-          owned-files [--hidden --extension md --exclude .git --exclude .claude]
+          fd --hidden --extension md --exclude .git --exclude .claude
           | lines
           | each {|md|
               let dir = ($md | path dirname)
@@ -356,7 +321,7 @@
           exit 1
         }
       }
-      # Site content invariants, front-loaded into `nix run .#lint`.
+      # Site content invariants, front-loaded into the pre-push lint.
       #
       # The SvelteKit build is the full validator and the Check gate DOES run
       # it: `site` is in `packageSet`, so `cachePushRoots` carries it and
@@ -401,7 +366,7 @@
         let routes_root = "packages/site/src/routes"
         let lib_root = "packages/site/src/lib"
         let owners = (
-          owned-files [--type file '^\+(page\.svelte|page\.ts|server\.ts)$' $routes_root]
+          fd --type file '^\+(page\.svelte|page\.ts|server\.ts)$' $routes_root
           | lines
           | each {|file| $file | path dirname }
           | uniq
@@ -440,7 +405,7 @@
               )
               $collections
               | each {|name|
-                  owned-files [--extension svx . ($lib_root | path join $name)]
+                  fd --extension svx . ($lib_root | path join $name)
                   | lines
                   | each {|svx|
                       let stem = ($svx | path parse | get stem)
@@ -452,7 +417,7 @@
           | flatten
         )
         let assets = (
-          owned-files [--type file . "packages/site/static"]
+          fd --type file . "packages/site/static"
           | lines
           | each {|file| $file | str replace "packages/site/static/" "" }
         )
@@ -528,7 +493,7 @@
         let routes = (site-routes | each {|route| route-key $route })
         [plans updates stories]
         | each {|kind|
-            owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
+            fd --extension svx . $"packages/site/src/lib/($kind)"
             | lines
             | sort
             | each {|path|
@@ -570,7 +535,7 @@
       def svx-tag-errors [] {
         [plans updates stories]
         | each {|kind|
-            owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
+            fd --extension svx . $"packages/site/src/lib/($kind)"
             | lines
             | sort
             | each {|path|
@@ -603,7 +568,7 @@
           [plans updates stories]
           | each {|kind|
               let entries = (
-                owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
+                fd --extension svx . $"packages/site/src/lib/($kind)"
                 | lines
                 | sort
                 | each {|path|
@@ -685,7 +650,7 @@
         let errors = (
           [plans updates stories]
           | each {|kind|
-              owned-files [--extension svx . $"packages/site/src/lib/($kind)"]
+              fd --extension svx . $"packages/site/src/lib/($kind)"
               | lines
               | sort
               | each {|path|
@@ -743,7 +708,7 @@
       # worktrees and assets) is filtered out explicitly.
       def "main ruff" [] {
         let py_files = (
-          owned-files [--extension py]
+          fd --extension py
           | lines
           | where {|p| not ($p | str starts-with ".claude/") }
         )
@@ -761,7 +726,7 @@
       # DetectionResult JSON to stdout; redirect it to null so a failing stage's
       # log shows the tracing gate summary (stderr), not the full JSON blob.
       def "main clone" [] {
-        clone . --ignore $vendored_scan_glob out> /dev/null
+        clone . out> /dev/null
       }
       # Per-unit complexity over the whole tree (packages/complexity).
       # `complexity .` walks up for the repo `complexity.toml`, whose
@@ -772,7 +737,7 @@
       # the JSON goes to null so a failing stage's log shows the tracing
       # summary naming the worst units, not the whole report.
       def "main complexity" [] {
-        complexity . --ignore $vendored_scan_glob out> /dev/null
+        complexity . out> /dev/null
       }
       def main [] {
         error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | site-frontmatter | ruff | clone | complexity" }
@@ -1336,22 +1301,9 @@
       # Pre-merge closure gate (closure-gate.yml, #1873): the same build gate
       # over the roots the post-merge cache-push linux lane publishes, darwin
       # cross closure included -- the set #2690 broke while flake-check stayed
-      # green, back when packages were eval-gated only.
-      #
-      # That last clause is history, not the current state, and it read as
-      # current for long enough to mislead: `main required` above builds
-      # `requiredGateRoots`, which carries the package closures, so a linux
-      # package IS built on every pull request. Believing otherwise argues for
-      # holding a pin bump that the required gate already covers.
-      #
-      # What this lane still uniquely covers is darwin. The required gate is
-      # `x86_64-linux` only and this workflow is `workflow_dispatch:`, so no
-      # automatically triggered run builds a darwin closure. A flake-input bump
-      # therefore gets linux assurance from its own pull request and darwin
-      # assurance from nobody unless someone dispatches this.
-      #
-      # --skip-cached keeps it O(changed): on the warm-store pool only drvs new
-      # relative to main's already-built closure realise.
+      # green (packages are eval-gated only). --skip-cached keeps it
+      # O(changed): on the warm-store pool only drvs new relative to main's
+      # already-built closure realise.
       def "main closure" [] {
         build-gate ".#cachePushRoots.x86_64-linux"
       }
@@ -2028,6 +1980,13 @@
               hmModule = paths.packagesRoot + "/agent/home-manager/claude-code.nix";
             };
             run-records-session = repoPackages.run.passthru.tests.recordsSession;
+            # Scaffolds an app both ways mkapp is run -- from the store output
+            # and from a checkout -- and asserts each one satisfies every
+            # @import its src/app.css makes, plus that the CLI refuses to emit a
+            # scaffold it cannot complete. Nothing between scaffold and first
+            # paint resolves a CSS import, so without this a missing stylesheet
+            # reaches a browser before it reaches a check (index#4288).
+            mkapp-scaffold = repoPackages.mkapp.passthru.tests.scaffold;
             # hive's quality lane through the same shared ix.buildElixirCheck:
             # `mix compile --warnings-as-errors` (Elixir 1.18's set-theoretic type
             # checker) plus format, `mix credo --strict`, and test. The lint half
@@ -2366,16 +2325,6 @@ in {
       examplePackages
       // healthChecks.lifecyclePackages
     )
-    // {
-      #   nix eval .#legacyPackages.<system>.rustUnits.<crate-version-hash>.drvPath
-      # Every rustc unit in the workspace graph, keyed `<crate>-<version>-<hash>`.
-      # Surfaced so a derivation-input audit can read a third-party crate's drv
-      # path straight off the flake instead of reconstructing the workspace by
-      # hand: perturb an input, re-evaluate, and diff the paths to see exactly
-      # which units that input invalidates (ENG-10672). IFD-backed, hence
-      # `legacyPackages`.
-      rustUnits = (ix.rustWorkspaceFor pkgs).units.units;
-    }
     // lib.optionalAttrs (system == "x86_64-linux") {
       kernel-unit = (ix.kernelUnitFor pkgs).buildKernel {
         inherit (pkgs.linux_6_12) src;
@@ -2418,22 +2367,6 @@ in {
         repoPackages.astlog
         pkgs.alejandra
       ];
-      # ix-vt-sys's build script reads IX_VT_GHOSTTY_LIB_DIR to emit the
-      # libghostty-vt link search path, and the ix-vt/tui test binaries dlopen
-      # the dylib at runtime. Export the unit graph's own lib dir
-      # (lib/rust/workspace.nix) so plain `cargo test -p tui -p ix-vt` works
-      # from the devshell (#3118).
-      env = let
-        inherit (ix.rustWorkspaceFor pkgs) ghosttyLibDir;
-      in
-        {
-          IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
-        }
-        // lib.optionalAttrs pkgs.stdenv.isDarwin {
-          # Plain cargo emits no rpath entry for the dylib, so darwin's loader
-          # resolves @rpath/libghostty-vt.dylib via the fallback path.
-          DYLD_FALLBACK_LIBRARY_PATH = ghosttyLibDir;
-        };
     };
 
     bench = pkgs.mkShellNoCC {

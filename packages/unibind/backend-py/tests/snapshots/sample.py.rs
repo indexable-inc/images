@@ -31,7 +31,7 @@ mod __unibind_py_sample {
     impl super::sample::Row {
         ///A row.
         #[new]
-        #[pyo3(signature = (id, label, tags, weights, blob, home))]
+        #[pyo3(signature = (id, label, tags, weights, blob, home = None))]
         fn __unibind_new(
             id: u64,
             label: ::std::string::String,
@@ -398,4 +398,3 @@ mod __unibind_py_sample {
         ::pyo3::PyResult::Ok(())
     }
 }
-

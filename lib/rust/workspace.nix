@@ -280,104 +280,8 @@
       else null;
     isCross = target != null;
     cargoUnit = cargoUnitFor workspacePkgs;
-    # ── Workspace-wide build env, and the guard that keeps it narrow ────────
-    # Every entry lands in all ~2.4k units of the graph (see the `env = ` note
-    # below). Nothing this repo builds belongs here; put it in
-    # `packageBuildEnv.<cargo-package>` instead.
-    workspaceWideEnv =
-      lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
-    # Default-deny over the store paths reachable from `workspaceWideEnv`.
-    # Adding a workspace-wide env var that carries a store path, or repointing
-    # an existing one at a different derivation, fails eval until the author
-    # either scopes it with `packageBuildEnv.<package>` (almost always the right
-    # answer) or records the derivation below with a reason. Keyed by
-    # `parseDrvName` name with the store hash stripped, so a version bump or a
-    # rebuild of an allowed dependency is inert and only a genuinely new
-    # dependency trips the guard.
-    # The only entries this needs today, enumerated by running the guard with
-    # an empty allowlist against all four graphs (aarch64-darwin native,
-    # x86_64-linux native, and the two Linux->Darwin cross targets). Both
-    # native graphs report zero store paths; everything below comes from the
-    # cross graphs.
-    allowedWorkspaceWideEnvDeps = lib.optionalAttrs (appleToolchain != null) (
-      # `appleSdkToolchain`'s CC/CXX/AR/RANLIB/LINKER wrappers and its CMake
-      # toolchain file: on a cross-darwin graph these ARE the C toolchain, so
-      # every unit that compiles C goes through them and there is nowhere
-      # narrower to put them. The tool list is spelled out rather than
-      # derived from the toolchain, so a new wrapper still has to be approved
-      # here. They move only when the wrapper text changes.
-      lib.genAttrs (
-        map (tool: "apple-sdk-${tool}-${target}") [
-          "ar"
-          "cc"
-          "cxx"
-          "linker"
-          "ranlib"
-        ]
-        ++ ["apple-sdk-toolchain-${target}.cmake"]
-      ) (_name: "appleToolchain: cross-darwin C toolchain wrapper")
-      // {
-        # SDKROOT and the `-isysroot` in CFLAGS/CXXFLAGS. The version is part
-        # of the derivation name, so `parseDrvName` cannot strip it and an SDK
-        # pin bump WILL trip this guard. That is the intended trade: bumping
-        # the SDK re-hashes every unit in the cross graph anyway, so it is
-        # worth one line of review here (lib/darwin/macos-sdk.nix).
-        "MacOSX15.4.sdk" = "appleToolchain: SDKROOT and -isysroot";
-      }
-    );
-    # `getContext` keys are store paths (`…-name.drv` for a derivation
-    # reference, `…-name` for a plain source path); strip the 32-char hash and
-    # the `.drv` suffix, then drop the version so bumps do not trip the guard.
-    storeDepName = storePath: let
-      base = baseNameOf storePath;
-    in
-      (builtins.parseDrvName (
-        lib.removeSuffix ".drv" (builtins.substring 33 (builtins.stringLength base) base)
-      ))
-      .name;
-    # A value is a string, a path, or a derivation (cargo-unit stringifies all
-    # three into the unit's env), and every one of those can carry a store
-    # path. Taking the context of the *stringified* value rather than only of
-    # `isString` values is what makes `SDKROOT = <derivation>` visible: filter
-    # on `isString` and a derivation-valued attr sails straight past the guard.
-    storeDepsOf = value:
-      map storeDepName (
-        builtins.attrNames (
-          builtins.getContext (
-            if builtins.isAttrs value && !(lib.isDerivation value)
-            then ""
-            else builtins.toString value
-          )
-        )
-      );
-    workspaceWideEnvProblems = lib.unique (
-      lib.concatLists (
-        lib.mapAttrsToList (
-          envName: value:
-            map (dep: "${envName} -> ${dep}") (
-              builtins.filter (dep: !(allowedWorkspaceWideEnvDeps ? ${dep})) (storeDepsOf value)
-            )
-        )
-        workspaceWideEnv
-      )
-    );
-    # Hung off `cargoUnit` rather than written as `assert …; buildWorkspace {…}`
-    # so that reaching `buildWorkspace` forces it. The two are equally eager;
-    # this spelling just keeps the 200-line argument attrset below out of the
-    # assert's body, and so out of the diff.
-    guardedCargoUnit = assert lib.assertMsg (workspaceWideEnvProblems == []) ''
-      rust workspace: workspace-wide `env` gained a store-path dependency that
-      is not on the allowlist:
-      ${lib.concatMapStringsSep "\n" (entry: "  - ${entry}") workspaceWideEnvProblems}
-      cargo-unit folds `env` into every unit, so this pins that path into all
-      ~2.4k unit derivations and every rebuild of it re-hashes the whole graph
-      (ENG-10672). Move the variable to `packageBuildEnv.<cargo-package>` so
-      only its readers are invalidated, or, if it genuinely has to be
-      workspace-wide, add the derivation to `allowedWorkspaceWideEnvDeps`
-      above with a reason.
-    ''; cargoUnit;
   in
-    guardedCargoUnit.buildWorkspace (
+    cargoUnit.buildWorkspace (
       {
         pname = "ix-rust-workspace${lib.optionalString isCross "-${target}"}";
         inherit src;
@@ -484,13 +388,20 @@
         # that machine's libclang and header layout that a cross graph needs
         # too. Scoped per-package so the env does not invalidate every other
         # unit in the dependency closure (see cargo-unit's buildWorkspace docs).
-        # Everything in this table reaches only its package's own compile and
-        # build-script-run units; anything moved out of it and into
-        # workspace-wide `env` below re-hashes all ~2.4k units in the graph on
-        # every rebuild of its value (ENG-10672), which the guard at the top of
-        # this `let` now refuses.
         packageBuildEnv =
           {
+            # dashboard-core's build script reads this to embed the dashboard
+            # page. Scoped per-package: workspace-wide it made the Svelte/Vite
+            # site (and its npm install) a build input of EVERY unit in the
+            # graph, so anything that had to build an ix binary from source --
+            # an `ix apply` guest, most of all -- ran `npm install` for a
+            # SvelteKit app first. That is what ran a 14 GB guest root out of
+            # space on `dashboard-site-node-modules` (ENG-10488).
+            dashboard-core = {
+              IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
+            };
+          }
+          // {
             libsqlite3-sys = {
               LIBCLANG_PATH = "${workspacePkgs.llvmPackages.libclang.lib}/lib";
               BINDGEN_EXTRA_CLANG_ARGS = lib.concatStringsSep " " (
@@ -509,44 +420,6 @@
                 ]
               );
             };
-          }
-          # `alsa-sys` only exists in a Linux-target graph (cargo cfg-excludes
-          # it elsewhere), and its build script is the only
-          # `pkg_config::probe_library` caller this workspace feeds: the value
-          # holds ALSA's `.pc` file and nothing else, so no other crate can
-          # resolve anything through it. The final `minecraft-sound` link still
-          # needs ALSA's lib dir, which `extraLinkRustcArgsForPlatform`
-          # supplies on link units only.
-          // lib.optionalAttrs targetIsLinux {
-            alsa-sys.PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
-          }
-          // {
-            # ix-vt-sys's build script reads this to emit the libghostty-vt link
-            # search path (packages/tui/vt/ix-vt-sys/build.rs); it is the only
-            # reader in the tree.
-            ix-vt-sys.IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
-            # dashboard-core's build script reads this to embed the dashboard
-            # page. Scoped per-package: workspace-wide it made the Svelte/Vite
-            # site (and its npm install) a build input of EVERY unit in the
-            # graph, so anything that had to build an ix binary from source --
-            # an `ix apply` guest, most of all -- ran `npm install` for a
-            # SvelteKit app first. That is what ran a 14 GB guest root out of
-            # space on `dashboard-site-node-modules` (ENG-10488).
-            dashboard-core.IX_DASHBOARD_SITE_HTML = dashboardSiteHtml;
-            # Both are read by packages/vmkit/build.rs and nothing else. The
-            # firmware path is re-emitted as `cargo:rustc-env`, so vmkit's own
-            # compile unit resolves the `include_bytes!(env!(...))` in
-            # linuxkrun.rs -- `packageBuildEnv` covers a package's compile units
-            # as well as its build-script-run unit, so the store path stays an
-            # input of both. The two gates are mutually exclusive (darwin build
-            # host vs linux build host), so at most one key is populated.
-            vmkit =
-              lib.optionalAttrs buildHostIsAarch64Darwin {
-                KRUN_EFI_FIRMWARE = krunEfiFirmware;
-              }
-              // lib.optionalAttrs (buildHostIsLinux && !isCross) {
-                VMKIT_LINK_LIBKRUN = "1";
-              };
           };
         # Per-package rustc args for pyo3 extension-module cdylibs (registry
         # `pyExtension`). Scoped per package so the relaxed link cannot mask
@@ -558,14 +431,29 @@
             _id: pyExtensionLinkArgs
           )
         );
-        # cargo-unit folds `env` into EVERY unit in the graph, vendored
-        # crates.io dependencies included, so a value carrying a store path
-        # makes all ~2.4k unit derivations depend on that path and every
-        # rebuild of it re-hashes the whole graph. Keep this table free of
-        # anything the repo rebuilds often; `packageBuildEnv` above is where
-        # those go. The `workspaceWideEnvProblems` guard at the top of this
-        # `let` is default-deny over exactly this attrset.
-        env = workspaceWideEnv;
+        env =
+          {
+            # ix-vt-sys's build script reads this to emit the libghostty-vt link
+            # search path. Set workspace-wide; only ix-vt-sys reads it.
+            IX_VT_GHOSTTY_LIB_DIR = ghosttyLibDir;
+          }
+          // lib.optionalAttrs targetIsLinux {
+            PKG_CONFIG_PATH = "${workspacePkgs.alsa-lib.dev}/lib/pkgconfig";
+          }
+          // lib.optionalAttrs buildHostIsAarch64Darwin {
+            # vmkit's build script forwards this to a compile-time env so
+            # linuxkrun.rs can `include_bytes!` the OVMF firmware, and uses its
+            # presence to enable the libkrun-efi backend. Only vmkit reads it.
+            KRUN_EFI_FIRMWARE = krunEfiFirmware;
+          }
+          // lib.optionalAttrs (buildHostIsLinux && !isCross) {
+            # On a Linux host, signal vmkit's build script to link classic libkrun
+            # (KVM). No firmware: the bundled libkrunfw kernel boots the rootfs. Only
+            # vmkit reads it. Skipped for cross graphs, whose link search below is the
+            # host's libkrun (wrong arch for a cross target).
+            VMKIT_LINK_LIBKRUN = "1";
+          }
+          // lib.optionalAttrs (appleToolchain != null) appleToolchain.env;
         # Build scripts emit native `-l` flags that propagate to downstream final
         # links, but their `rustc-link-search` paths do not cross cargo-unit's
         # per-unit derivation boundary. Keep native search/rpath args on final
@@ -639,10 +527,6 @@ in {
     cargoLock
     units
     dashboardSite
-    # The devshell mirrors this into IX_VT_GHOSTTY_LIB_DIR (and darwin's
-    # DYLD_FALLBACK_LIBRARY_PATH) so plain `cargo test -p tui -p ix-vt`
-    # links and dlopens the same libghostty-vt the unit graph uses (#3118).
-    ghosttyLibDir
     ;
 
   /**

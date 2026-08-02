@@ -15,40 +15,16 @@ use std::{
 
 use snafu::{OptionExt as _, ResultExt as _, ensure};
 
-/// The parsed diff, new-side oriented: added/modified line numbers per file
-/// (1-indexed) plus each hunk's old-side ancestry. A file with only deletions
-/// contributes nothing.
+/// Added/modified line numbers per file, 1-indexed on the new (working-tree)
+/// side. A file with only deletions contributes no lines.
 ///
 /// Keys from [`changed_lines`] are absolute paths (repo root joined with git's
-/// repo-relative path, canonicalized where possible), including
-/// [`HunkOrigin::old_path`], so they can be matched against clone-fragment
-/// paths regardless of how the scan target was spelled. [`parse_unified_diff`]
-/// on its own returns git's repo-relative paths; the absolutization happens in
-/// [`changed_lines`].
+/// repo-relative path, canonicalized where possible) so they can be matched
+/// against clone-fragment paths regardless of how the scan target was spelled.
+/// [`parse_unified_diff`] on its own returns git's repo-relative paths; the
+/// absolutization happens in [`changed_lines`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ChangedLines {
-    /// Added/modified new-side lines per file.
-    pub lines: BTreeMap<PathBuf, BTreeSet<usize>>,
-    /// Hunk ancestry per file, keyed like `lines`. Untracked (brand-new) files
-    /// have lines but no origins: they replaced nothing at the base.
-    pub origins: BTreeMap<PathBuf, Vec<HunkOrigin>>,
-}
-
-/// One hunk's ancestry: the new-side lines `new_start .. new_start + new_count`
-/// replaced `old_count` lines starting at `old_start` of `old_path` at the
-/// diff base. `old_count == 0` is a pure insertion (the new lines replaced
-/// nothing); a hunk of a brand-new file never appears here (its old side is
-/// `/dev/null`). The diff gate uses this to map a changed line back to the
-/// base region it came from (see [`crate::gate`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HunkOrigin {
-    pub new_start: usize,
-    pub new_count: usize,
-    /// The old-side file; differs from the new-side key across a rename.
-    pub old_path: PathBuf,
-    pub old_start: usize,
-    pub old_count: usize,
-}
+pub struct ChangedLines(pub BTreeMap<PathBuf, BTreeSet<usize>>);
 
 /// The resolved diff for the gate: the merge-base commit it was taken against
 /// and the changed lines on the working-tree side.
@@ -111,7 +87,7 @@ fn git_command(dir: &Path) -> Command {
 /// Run `git` in `dir`, returning stdout on a zero exit or a precise error
 /// otherwise (never a silent fallback: the diff gate must fail loudly when git
 /// cannot answer).
-pub fn git(dir: &Path, args: &[&str]) -> Result<String, DiffError> {
+fn git(dir: &Path, args: &[&str]) -> Result<String, DiffError> {
     let display = args.join(" ");
     let output = git_command(dir)
         .args(args)
@@ -195,29 +171,13 @@ pub fn changed_lines(dir: &Path, base: &str) -> Result<RepoDiff, DiffError> {
     // be compared to clone-fragment paths (which reflect the scan target, not
     // the repo root).
     let root = repo_root(dir)?;
-    let mut changed = ChangedLines {
-        lines: relative
-            .lines
+    let mut changed = ChangedLines(
+        relative
+            .0
             .into_iter()
             .map(|(rel, lines)| (absolutize(&root, &rel), lines))
             .collect(),
-        origins: relative
-            .origins
-            .into_iter()
-            .map(|(rel, origins)| {
-                (
-                    absolutize(&root, &rel),
-                    origins
-                        .into_iter()
-                        .map(|mut origin| {
-                            origin.old_path = absolutize(&root, &origin.old_path);
-                            origin
-                        })
-                        .collect(),
-                )
-            })
-            .collect(),
-    };
+    );
 
     // A brand-new (untracked, non-ignored) file is an uncommitted change whose
     // every line is added, but `git diff` never reports it. List those files and
@@ -229,7 +189,7 @@ pub fn changed_lines(dir: &Path, base: &str) -> Result<RepoDiff, DiffError> {
 
 /// The repository's top-level directory (canonicalized), the anchor for git's
 /// repo-relative diff paths.
-pub fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
+fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
     let out = git(dir, &["rev-parse", "--show-toplevel"])?;
     Ok(PathBuf::from(out.trim()))
 }
@@ -237,7 +197,7 @@ pub fn repo_root(dir: &Path) -> Result<PathBuf, DiffError> {
 /// Join a repo-relative path onto the repo root and canonicalize it. Falls back
 /// to the plain join if canonicalization fails (e.g. the file was since
 /// deleted), which still matches a fragment path canonicalized the same way.
-pub fn absolutize(root: &Path, rel: &Path) -> PathBuf {
+fn absolutize(root: &Path, rel: &Path) -> PathBuf {
     let joined = root.join(rel);
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
@@ -263,7 +223,7 @@ fn add_untracked(dir: &Path, root: &Path, changed: &mut ChangedLines) -> Result<
         if line_count == 0 {
             continue;
         }
-        let entry = changed.lines.entry(path).or_default();
+        let entry = changed.0.entry(path).or_default();
         entry.extend(1..=line_count);
     }
 
@@ -279,84 +239,59 @@ fn add_untracked(dir: &Path, root: &Path, changed: &mut ChangedLines) -> Result<
 /// - `@@ -old[,n] +new[,m] @@` gives the new-side start `new` and length `m`
 ///   (`m` defaults to 1). Those `m` lines, `new..new+m`, are the changed lines.
 pub fn parse_unified_diff(diff: &str) -> Result<ChangedLines, DiffError> {
-    let mut out = ChangedLines::default();
-    let mut old_side: Option<PathBuf> = None;
-    let mut new_side: Option<PathBuf> = None;
+    let mut out: BTreeMap<PathBuf, BTreeSet<usize>> = BTreeMap::new();
+    let mut current: Option<PathBuf> = None;
 
     for line in diff.lines() {
-        if line.starts_with("diff ") {
-            // A new file section; forget the previous file's sides so a
-            // malformed section cannot inherit them.
-            old_side = None;
-            new_side = None;
-        } else if let Some(rest) = line.strip_prefix("--- ") {
-            old_side = side_path(rest, "a/");
-        } else if let Some(rest) = line.strip_prefix("+++ ") {
-            new_side = side_path(rest, "b/");
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            current = new_side_path(rest);
         } else if line.starts_with("@@ ") {
             // A hunk with no `+++` before it, or one against /dev/null
             // (deletion), has no new-side file to attribute lines to.
-            let Some(path) = new_side.clone() else {
+            let Some(path) = current.clone() else {
                 continue;
             };
-            let range = parse_hunk_range(line, '+')?;
-            let entry = out.lines.entry(path.clone()).or_default();
+            let range = parse_hunk_new_range(line)?;
+            let entry = out.entry(path).or_default();
             for offset in 0..range.count {
                 entry.insert(range.start + offset);
-            }
-            // Old-side ancestry for the diff gate's pre-existing-duplication
-            // check. A brand-new file (`--- /dev/null`) replaced nothing, so
-            // it has no ancestry to record.
-            if range.count > 0
-                && let Some(old_path) = old_side.clone()
-            {
-                let old_range = parse_hunk_range(line, '-')?;
-                out.origins.entry(path).or_default().push(HunkOrigin {
-                    new_start: range.start,
-                    new_count: range.count,
-                    old_path,
-                    old_start: old_range.start,
-                    old_count: old_range.count,
-                });
             }
         }
     }
 
-    Ok(out)
+    Ok(ChangedLines(out))
 }
 
-/// Extract the path from a `--- `/`+++ ` header body, stripping the `a/`/`b/`
-/// prefix git adds. `/dev/null` (no file on that side) yields `None`.
-fn side_path(rest: &str, prefix: &str) -> Option<PathBuf> {
+/// Extract the new-side path from a `+++ ` header body, stripping the `b/`
+/// prefix git adds. `/dev/null` (a deletion) yields `None`.
+fn new_side_path(rest: &str) -> Option<PathBuf> {
     // Strip a trailing tab-delimited timestamp if present (git omits it, but
     // some diff producers add one).
     let path = rest.split('\t').next().unwrap_or(rest);
     if path == "/dev/null" {
         return None;
     }
-    let stripped = path.strip_prefix(prefix).unwrap_or(path);
+    let stripped = path.strip_prefix("b/").unwrap_or(path);
     Some(PathBuf::from(stripped))
 }
 
-/// One side's line range of a hunk header: `count` lines starting at 1-indexed
-/// `start`. A `count` of 0 is an empty side (pure deletion on the new side,
-/// pure insertion on the old side).
+/// The new-side line range of a hunk header: `count` lines starting at 1-indexed
+/// `start`. A `count` of 0 is a pure deletion (no new-side lines).
 struct HunkRange {
     start: usize,
     count: usize,
 }
 
-/// Parse one side's `<sign>start[,count]` range from a hunk header
-/// `@@ -old[,n] +new[,m] @@ ...`, where `sign` is `-` (old side) or `+` (new
-/// side). The signed ranges precede the trailing context, so the first
-/// matching token is always the range.
-fn parse_hunk_range(line: &str, sign: char) -> Result<HunkRange, DiffError> {
-    let field = line
+/// Parse the new-side `+new[,count]` range from a hunk header
+/// `@@ -old[,n] +new[,m] @@ ...`. A `count` of 0 (pure deletion at that point)
+/// yields an empty range.
+fn parse_hunk_new_range(line: &str) -> Result<HunkRange, DiffError> {
+    let new_field = line
         .split_whitespace()
-        .find_map(|token| token.strip_prefix(sign))
+        .find_map(|token| token.strip_prefix('+'))
         .context(BadHunkHeaderSnafu { line })?;
 
-    let mut parts = field.splitn(2, ',');
+    let mut parts = new_field.splitn(2, ',');
     let start: usize = parts
         .next()
         .and_then(|s| s.parse().ok())

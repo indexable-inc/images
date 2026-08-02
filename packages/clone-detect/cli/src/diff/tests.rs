@@ -1,71 +1,56 @@
 use std::path::PathBuf;
 
-use super::{ChangedLines, HunkOrigin, parse_unified_diff};
+use super::{ChangedLines, parse_unified_diff};
 
 /// Lines recorded for `path` in a parsed diff, as a sorted vec for assertions.
 fn lines_for(changed: &ChangedLines, path: &str) -> Vec<usize> {
     changed
-        .lines
+        .0
         .get(&PathBuf::from(path))
         .map(|set| set.iter().copied().collect())
         .unwrap_or_default()
 }
 
-/// Hunk origins recorded for `path` in a parsed diff.
-fn origins_for(changed: &ChangedLines, path: &str) -> Vec<HunkOrigin> {
-    changed
-        .origins
-        .get(&PathBuf::from(path))
-        .cloned()
-        .unwrap_or_default()
-}
-
-/// The expected origin of a single `f.txt` hunk: new-side range
-/// `(new_start, new_count)` replacing old-side range `(old_start, old_count)`.
-fn origin(
-    (new_start, new_count): (usize, usize),
-    (old_start, old_count): (usize, usize),
-) -> HunkOrigin {
-    HunkOrigin {
-        new_start,
-        new_count,
-        old_path: PathBuf::from("f.txt"),
-        old_start,
-        old_count,
-    }
-}
-
-/// Hunk parsing over a single `f.txt` diff: each case is (unified diff,
-/// expected new-side lines, expected hunk origins).
 #[test]
-fn parses_new_side_lines_and_hunk_origins() {
-    let cases: &[(&str, &[usize], &[HunkOrigin])] = &[
-        // `@@ -2 +2 @@` with no count means one new-side line at 2.
-        (
-            "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -2 +2 @@ a\n-b\n+B2\n",
-            &[2],
-            &[origin((2, 1), (2, 1))],
-        ),
-        // `@@ -3,0 +4,2 @@` adds two lines starting at 4: a pure insertion,
-        // so the recorded origin has an empty old side.
-        (
-            "--- a/f.txt\n+++ b/f.txt\n@@ -3,0 +4,2 @@ c\n+X\n+Y\n",
-            &[4, 5],
-            &[origin((4, 2), (3, 0))],
-        ),
-        // A deletion hunk (`@@ -5,3 +4,0 @@`) has a new-side count of 0: it
-        // contributes no lines and no origin.
-        (
-            "+++ b/f.txt\n@@ -5,3 +4,0 @@ c\n-gone1\n-gone2\n-gone3\n",
-            &[],
-            &[],
-        ),
-    ];
-    for (diff, lines, origins) in cases {
-        let changed = parse_unified_diff(diff).unwrap();
-        assert_eq!(lines_for(&changed, "f.txt"), *lines, "diff: {diff}");
-        assert_eq!(origins_for(&changed, "f.txt"), *origins, "diff: {diff}");
-    }
+fn single_modified_line() {
+    // `@@ -2 +2 @@` with no count means one new-side line at 2.
+    let diff = "\
+diff --git a/f.txt b/f.txt
+--- a/f.txt
++++ b/f.txt
+@@ -2 +2 @@ a
+-b
++B2
+";
+    let changed = parse_unified_diff(diff).unwrap();
+    assert_eq!(lines_for(&changed, "f.txt"), vec![2]);
+}
+
+#[test]
+fn added_block_uses_count() {
+    // `@@ -3,0 +4,2 @@` adds two lines starting at 4.
+    let diff = "\
++++ b/f.txt
+@@ -3,0 +4,2 @@ c
++X
++Y
+";
+    let changed = parse_unified_diff(diff).unwrap();
+    assert_eq!(lines_for(&changed, "f.txt"), vec![4, 5]);
+}
+
+#[test]
+fn pure_deletion_contributes_no_lines() {
+    // A deletion hunk has a new-side count of 0: `@@ -5,3 +4,0 @@`.
+    let diff = "\
++++ b/f.txt
+@@ -5,3 +4,0 @@ c
+-gone1
+-gone2
+-gone3
+";
+    let changed = parse_unified_diff(diff).unwrap();
+    assert!(lines_for(&changed, "f.txt").is_empty());
 }
 
 #[test]
@@ -81,8 +66,7 @@ diff --git a/gone.txt b/gone.txt
 -b
 ";
     let changed = parse_unified_diff(diff).unwrap();
-    assert!(changed.lines.is_empty());
-    assert!(changed.origins.is_empty());
+    assert!(changed.0.is_empty());
 }
 
 #[test]
@@ -119,8 +103,6 @@ fn new_file_added() {
 ";
     let changed = parse_unified_diff(diff).unwrap();
     assert_eq!(lines_for(&changed, "new.rs"), vec![1, 2, 3]);
-    // No old side, no ancestry: the new file replaced nothing at the base.
-    assert!(origins_for(&changed, "new.rs").is_empty());
 }
 
 #[test]
@@ -140,8 +122,7 @@ fn strips_b_prefix_only() {
 #[test]
 fn empty_diff_is_empty() {
     let changed = parse_unified_diff("").unwrap();
-    assert!(changed.lines.is_empty());
-    assert!(changed.origins.is_empty());
+    assert!(changed.0.is_empty());
 }
 
 #[test]
@@ -149,6 +130,5 @@ fn hunk_before_any_file_header_is_ignored() {
     // Defensive: a stray hunk with no preceding `+++` has nothing to attribute.
     let diff = "@@ -1 +1 @@\n-a\n+b\n";
     let changed = parse_unified_diff(diff).unwrap();
-    assert!(changed.lines.is_empty());
-    assert!(changed.origins.is_empty());
+    assert!(changed.0.is_empty());
 }

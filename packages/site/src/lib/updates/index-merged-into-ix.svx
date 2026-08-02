@@ -1,0 +1,73 @@
+---
+id: index-merged-into-ix
+postedAt: 2026-07-31T02:05:00-07:00
+title: "index is no longer a submodule: one repo, and nothing left to bump"
+tags: [ci, git, nix, repo]
+links:
+  - label: "ix#9290"
+    href: https://github.com/indexable-inc/ix/pull/9290
+  - label: "ix#9291"
+    href: https://github.com/indexable-inc/ix/pull/9291
+---
+
+ix vendored index as a git submodule at `./index` and consumed it as a flake
+input. Two pointers named the same code: the gitlink and the `rev` in
+`flake.lock`. Keeping them agreeing needed a bot, a rolling bump pull request, a
+watchdog, a repair-PR bot, a pre-commit guard, a pre-push guard and a fixture
+suite for the guards.
+
+That is gone. `index/` is ordinary tracked files in ix, and its history came
+with it, so `git log -- index/...` works and `git blame` reaches back through
+the join.
+
+## What you have to do
+
+Pull. `git submodule` commands against ix now do nothing, and a stale
+`.git/modules/index` is harmless. If a script of yours runs
+`git submodule update --init` against an ix checkout, delete the line rather
+than leaving a step that cannot fail.
+
+Nothing about building changes. `flake.nix` still says
+`index.url = "path:./index"`.
+
+## Why the pointer was the whole problem
+
+A `path:` input to a submodule records the submodule's revision:
+
+```json
+"index": { "locked": { "path": "./index", "rev": "bc371506...", "lastModified": 1785398515 } }
+```
+
+A `path:` input to a plain tracked subdirectory does not:
+
+```json
+"index": { "locked": { "path": "./index", "type": "path" } }
+```
+
+No rev, no narHash. There is nothing to move and nothing that can disagree, so
+the machinery that existed to move it has no job. Retired with it:
+`submodule-lock-sync.yml` and its repair bot, `check-submodule-lock-sync.sh`
+and its fixture suite, the `escalate` watchdog for index bumps, index's
+`sync-ix-submodule.yml` dispatch, and the `repository_dispatch` bridge job.
+
+The lock guard is worth a note. Once the rev is gone it selects on
+`locked.type == "path" and locked ? rev`, matches nothing, and prints
+`flake.lock agrees with every gitlink pin` on every run, having compared
+nothing. It was deleted rather than left wired to an empty set. If you write a
+successor, give it something external to check against: a consistency check
+between two values we control cannot catch a fault that moved both, which is
+how a `flake.lock` pinning a revision that does not exist in any repository
+passed the guard on its way to a push.
+
+## The window this closes
+
+The bump loop's most recent pull requests took 10 and 22 hours against 3 to 8
+minutes in early July. During one of those windows ix's gitlink sat 92 commits
+behind index main, so a merged index change had no path to a machine for most
+of a day.
+
+## What is not done
+
+The public `indexable-inc/index` repository is still writable and still the
+development history. Turning it into a read-only projection of `ix:index/` is a
+separate change. Until it lands, treat index as frozen: commit in ix.

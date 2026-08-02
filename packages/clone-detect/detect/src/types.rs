@@ -75,12 +75,6 @@ pub struct Fragment {
     pub kind: String,
     #[serde(default)]
     pub generated: bool,
-    /// Identifier-normalized AST hash of the fragment's code. Whitespace never
-    /// reaches the AST, so a pure reformat keeps it stable; together with the
-    /// file path it identifies "the same fragment" across scans of the tree at
-    /// different revisions. The diff gate uses it to tell pre-existing
-    /// duplication from new (#3455).
-    pub fingerprint: u64,
 }
 
 impl Fragment {
@@ -103,7 +97,6 @@ impl Fragment {
             },
             kind: node.kind.to_owned(),
             generated,
-            fingerprint: node.normalized_hash,
         }
     }
 }

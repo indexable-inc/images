@@ -11,7 +11,7 @@
 //! command output) is redirected to our stderr rather than mixed in, and the
 //! emitter exits with nix's status.
 //!
-//! No HTTP server, no broadcast channel, no machine probe: the emitter is the
+//! No HTTP server, no broadcast channel, no daemon probe: the emitter is the
 //! thin, dependency-light path, and the render model it emits is owned by the
 //! parser crate so the dashboard renderer and this emitter never drift.
 

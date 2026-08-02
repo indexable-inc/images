@@ -25,10 +25,6 @@ from ci_policy import (
 )
 
 COMMENT_MARKER = "<!-- ci-budget -->"
-# GitHub's hard ceiling on listing one pull request's files: `pulls/{n}/files`
-# paginates to 30 pages of 100 and then stops, whatever `changed_files` reports.
-# It is a property of the API, not a policy knob, so raising it does not buy more
-# files -- see `classify_pull_requests` for what happens above it.
 MAX_PULL_REQUEST_FILES = 3000
 CI_BUDGET_SNAPSHOT_PREFIX = "ci-budget-snapshot"
 MERGE_QUEUE_ENTRIES_QUERY = """
@@ -691,7 +687,7 @@ def classify_pull_requests(
     labels = list(dict.fromkeys(labels))
     if force_big_change or POLICY.big_change_label in labels:
         return classify([], labels, repository, force_big_change=force_big_change)
-    counts: list[tuple[int, int]] = []
+    paths: list[str] = []
     for pull_request in pull_requests:
         number = pull_request_number(pull_request, "pull request")
         changed_files = pull_request.get("changed_files")
@@ -699,24 +695,6 @@ def classify_pull_requests(
             raise RuntimeError(
                 "GitHub API returned a pull request without changed_files"
             )
-        counts.append((number, changed_files))
-    # A pull request GitHub will not enumerate is, definitionally, a big change.
-    # This used to raise from `changed_paths`, which turned a decisive input into
-    # an unclassifiable one: the classifier failed, every job needing its outputs
-    # skipped, and the required contexts went red describing a missing phase
-    # rather than anything about the change. Classifying big is both the safe
-    # direction (the larger budget) and the true one.
-    oversized = [(n, c) for n, c in counts if c > MAX_PULL_REQUEST_FILES]
-    if oversized:
-        return classify(
-            [],
-            labels,
-            repository,
-            force_big_change=force_big_change,
-            unenumerable=oversized,
-        )
-    paths: list[str] = []
-    for number, changed_files in counts:
         paths.extend(client.changed_paths(number, changed_files))
     return classify(
         list(dict.fromkeys(paths)),
@@ -734,16 +712,6 @@ def render_comment(classification: Classification, repository: str) -> str:
             detail = f"Extended validation: matched `{matches[0]['path']}`."
         elif "label" in classification.reason["sources"]:
             detail = f"Extended validation: the `{POLICY.big_change_label}` label is present."
-        elif "unenumerable" in classification.reason["sources"]:
-            oversized = classification.reason.get("unenumerable", [])
-            listed = ", ".join(
-                f"#{number} has {count} changed files" for number, count in oversized
-            )
-            detail = (
-                f"Extended validation: {listed}, and GitHub lists at most "
-                f"{MAX_PULL_REQUEST_FILES} per pull request, so the changed paths "
-                "could not be read and the change is treated as large."
-            )
         else:
             detail = "Extended validation: this run was explicitly classified as large."
     else:

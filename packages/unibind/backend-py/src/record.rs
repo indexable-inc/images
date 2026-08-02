@@ -32,28 +32,47 @@ pub fn record_attrs(record: &ir::Record) -> RenderedRecord {
     }
 }
 
-/// A `#[pymethods]` block giving the record a positional-or-keyword
-/// constructor, so Python can build values as well as receive them.
+/// A `#[pymethods]` block giving ordinary value records a positional
+/// constructor and all-optional option records a keyword-only constructor.
+/// Optional fields default to `None`, matching the TypeScript record surface.
 pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, RenderError> {
     let name = Ident::new(&record.name, Span::call_site());
     let mut params = Vec::new();
     let mut field_idents = Vec::new();
     let mut signature = Vec::new();
-    for field in &record.fields {
+    for (index, field) in record.fields.iter().enumerate() {
         let ident = Ident::new(&field.name, Span::call_site());
         let py_ident = render::name_ident(field.names.py.as_ref().unwrap_or(&field.name))?;
         let ty = render::rust_type(&field.ty, user, render::Ownership::Declared);
         params.push(quote!(#py_ident: #ty));
-        signature.push(quote!(#py_ident));
+        if matches!(field.ty, ir::Type::Option(_))
+            && record.fields[index..]
+                .iter()
+                .all(|field| matches!(field.ty, ir::Type::Option(_)))
+        {
+            signature.push(quote!(#py_ident = None));
+        } else {
+            signature.push(quote!(#py_ident));
+        }
         field_idents.push(quote!(#ident: #py_ident));
     }
     let docs = doc_attrs(&record.docs);
+    let signature = if !record.fields.is_empty()
+        && record
+            .fields
+            .iter()
+            .all(|field| matches!(field.ty, ir::Type::Option(_)))
+    {
+        quote!(*, #(#signature),*)
+    } else {
+        quote!(#(#signature),*)
+    };
     Ok(quote! {
         #[::pyo3::pymethods]
         impl super::#user::#name {
             #docs
             #[new]
-            #[pyo3(signature = (#(#signature),*))]
+            #[pyo3(signature = (#signature))]
             fn __unibind_new(#(#params),*) -> Self {
                 Self {
                     #(#field_idents),*

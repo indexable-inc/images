@@ -1,0 +1,36 @@
+---
+id: index-tracked-in-ix
+postedAt: 2026-07-30T17:30:00-07:00
+title: "index is tracked inside ix, not vendored as a submodule"
+tags: [git, nix, flakes, ci]
+links:
+  - label: ix PR 9282
+    href: https://github.com/indexable-inc/ix/pull/9282
+---
+
+ix consumed index as a git submodule at `./index`. It no longer does: index's
+tree and all 3,703 of its commits were rewritten under `index/` with
+`git filter-repo --to-subdirectory-filter` and merged into ix, so `index/` is
+ordinary tracked files and `git log -- index/<path>` returns that file's real
+history rather than one import commit.
+
+**Clone plainly.** `--recurse-submodules` and
+`git submodule update --init --recursive` do nothing now, and a fresh worktree
+no longer needs a second step before it can build.
+
+**There is nothing left to bump.** ix's flake still reads
+`index.url = "path:./index"`, but a relative path input to a tracked
+subdirectory locks as `{"path": "./index", "type": "path"}` — no rev, no
+narHash. The gitlink and `flake.lock` could disagree about which index a commit
+meant; that state can no longer be expressed, so the guard that policed it, its
+fixture suite, its repair bot and its required check are all gone.
+
+**Three cargo git dependencies became path dependencies.** `astlog-core`,
+`ix-vt` and `audio-dsp` were fetched from `github.com/indexable-inc/index` over
+the network at pinned revs. They now resolve to `index/packages/...` in the
+checkout, which also removes their fixed-output fetch hashes — and with them a
+recurring hazard where a store path pasted into an index doc page poisoned the
+fetch and failed eval for every workflow that touched the flake.
+
+The public `indexable-inc/index` continues to exist; it becomes a read-only
+projection of `index/` rather than the place the work happens.

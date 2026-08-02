@@ -1,8 +1,9 @@
 # Inherited from the PARENT ix checkout, not wanted here.
 #
-# index is a git submodule of ix, and cargo merges every `.cargo/config.toml`
-# from the cwd up to the filesystem root. So a cargo invocation inside index
-# picks up `../.cargo/config.toml`, which sets `[profile.release] rustflags`.
+# index is a subdirectory of ix (a git submodule of it until ix#9282), and cargo
+# merges every `.cargo/config.toml` from the cwd up to the filesystem root. So a
+# cargo invocation inside index picks up `../.cargo/config.toml`, which sets
+# `[profile.release] rustflags`.
 # That key is gated behind the unstable `profile-rustflags` feature, which ix
 # opts into at the top of ITS Cargo.toml -- a declaration that does not reach
 # this workspace. The result was that every bare cargo command in index failed,

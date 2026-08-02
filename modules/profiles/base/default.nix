@@ -758,7 +758,6 @@ in {
         bat
         bpftrace
         btop
-        codex
         # dig/nslookup for DNS debugging; `host` alone (shipped via
         # NixOS defaults) answers "does it resolve" but not "from which
         # server, with which record details".

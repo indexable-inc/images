@@ -59,7 +59,7 @@ pub fn literal(value: &ir::Literal) -> String {
         // `{:?}` keeps a fractional part (`1.0`, not `1`), so the rendered
         // default stays a Python float literal.
         ir::Literal::Float(float) => format!("{float:?}"),
-        ir::Literal::Str(text) => str_literal(text),
+        ir::Literal::Str(text) => crate::literal::double_quoted(text),
         ir::Literal::None => "None".to_owned(),
     }
 }
@@ -81,22 +81,4 @@ fn named_py_name(interface: &ir::Interface, name: &str) -> String {
         .find(|object| object.name == name)
         .map_or(name, |object| py_name(&object.names, &object.name))
         .to_owned()
-}
-
-/// A double-quoted Python string literal.
-fn str_literal(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for character in text.chars() {
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
 }

@@ -29,23 +29,7 @@
 # Fields:
 #   name        : package id.
 #   input       : flake input pinning the megamerge (flake.lock `locked.rev`;
-#                 branch-loose for autoUpdate forks). Exactly one of `input`
-#                 and `vendored` per entry; declaring both or neither is an
-#                 error, not a default, in every consumer.
-#   vendored    : repo-relative path of an in-tree jj-views DERIVED VIEW of the
-#                 fork repo, for a fork carried here instead of fetched. That
-#                 path filters back out into the fork repo's exact commit
-#                 hashes, so editing the fork is an ordinary in-tree diff and
-#                 publishing it is an ordinary non-forced push, and there is no
-#                 rev that can drift. Consume it as a `builtins.path` slice of
-#                 just that directory (see lib/default.nix): a bare path
-#                 literal or a `path:./...` flake input both resolve against
-#                 the WHOLE flake source, so any commit anywhere in the repo
-#                 would rebuild the fork.
-#                 A vendored entry has no pin, so `upstream-sync pin-drift`
-#                 reports it `vendored` rather than failing it unknown, and
-#                 `drift` cannot measure its upstream distance at all until
-#                 ENG-11685 lands. Both say so per row.
+#                 branch-loose for autoUpdate forks).
 #   upstreamUrl : upstream git URL rebases target.
 #   upstreamRef : optional upstream branch the fork's base sits on.
 #                 upstream-sync anchors the series base on it (merge-base
@@ -85,14 +69,6 @@
 #                may jj-rebase the fork onto the upstream tip and float the
 #                input under the cron. `false` pins the input by rev; it moves
 #                only under a deliberate manual rebase.
-#   pinDivergence : optional. ACKNOWLEDGES that this entry's pinned rev is not an
-#                ancestor of `bookmark`, which `upstream-sync pin-drift` fails on
-#                by default. Keyed by the rev it covers, so the acknowledgement
-#                expires the moment the pin moves and cannot be inherited by a
-#                pin nobody looked at; the gate also fails a waiver whose fork is
-#                no longer diverged, so a dead one cannot sit here looking live.
-#                  rev    : the full pinned rev this waiver covers.
-#                  reason : why it is not fixed yet, and what fixing it means.
 #
 # Upstreaming intent (hand-written declarative intent; the human gate on the
 # outward act). `packages/upstream-sync` reads these; the LIVE state it tracks
@@ -228,20 +204,16 @@
       # Home Manager is consumed as a FLAKE by workstation config repos, not
       # as a package built here, so the series' consumer is the maintained
       # fork repo: a config repo points its `home-manager` flake input at
-      # indexable-inc/home-manager's `ix-patched` branch. Pinned by rev
+      # indexable-inc/home-manager's `ix-patched` bookmark. Pinned by rev
       # (autoUpdate = false): there is no `.#home-manager.updateScript` for
-      # the fork-sync cron to drive, so bump by hand. Clone the fork, merge
-      # `upstream/master` into `ix-patched` as an ordinary two-parent merge
-      # (never rebase: the branch is published history every flake.lock
-      # pins), resolve conflicts in the merge commit, build the module's own
-      # tests before pushing, then fast-forward the branch and bump
-      # flake.lock in one change. No pin ref is needed, because nothing
-      # rewrites a rev that was ever pinned.
-      #
-      # The fork has no CI on this branch: upstream's test.yml triggers on
-      # `pull_request` and a nightly cron, and the push-triggered workflows
-      # are all limited to `master`, so a push to `ix-patched` is gated only
-      # by whatever the pusher ran locally. ENG-11663.
+      # the fork-sync cron to drive, so bump by hand with the steps
+      # .github/workflows/fork-sync.yml runs. Clone the fork colocated (`jj
+      # git clone --colocate`), `jj rebase` the series onto the upstream tip,
+      # push nothing if a commit came out conflicted, then move the bookmark
+      # and mint the pin ref in ONE push (`git push --force origin
+      # "$sha:refs/heads/ix-patched" "$sha:refs/pins/<date>-<sha12>"`), in the
+      # same change that bumps flake.lock. The pin ref keeps the previously
+      # locked megamerge fetchable after jj rewrites history.
       name = "home-manager";
       input = "home-manager-src";
       upstreamUrl = "https://github.com/nix-community/home-manager.git";
@@ -279,10 +251,8 @@
       forkRepo = "indexable-inc/git";
       bookmark = "ix-patched";
       # The package overlays nixpkgs' git recipe onto this source, so the base
-      # must equal nixpkgs' git version tag (v2.55.0), never free-float under
-      # the fork-sync cron. Repin manually when nixpkgs bumps git;
-      # packages/git/default.nix asserts the two agree, so a stale pin fails
-      # eval rather than building the old tree under the new label.
+      # must equal nixpkgs' git version tag (v2.54.0), never free-float under
+      # the fork-sync cron. Repin manually when nixpkgs bumps git.
       autoUpdate = false;
       upstreamPolicy = {
         # git/git on GitHub is a read-only mirror: contributions go through the
@@ -305,57 +275,6 @@
       };
     }
     {
-      # ONE BRANCH, BOTH PATCH LINES. `ix-patched` now carries the submodule
-      # Phase 1 series and the views/vfs work together, and the input is pinned
-      # at its tip. Phase 1 used to sit alone on `submodules-phase1` while
-      # `ix-patched` held only the newer work, so neither branch could ship both
-      # and the views/vfs crates shipped nowhere at all. Replaying Phase 1 onto
-      # current upstream main (32bfcf3ba) and fast-forwarding it onto
-      # `ix-patched` is what joined them; `submodules-phase1` stays as the
-      # historical ref and the old pin remains fetchable from it.
-      #
-      # `bookmark` is stated explicitly even though "ix-patched" is also the
-      # `#[serde(default = "default_bookmark")]` value in upstream-sync's
-      # `mapping.rs`. That makes the field droppable today, and it should not be
-      # dropped: an omitted field is a silent default rather than "no bookmark",
-      # so the day this fork moves to another branch the omission would point
-      # confidently at the wrong one.
-      #
-      # The Phase 1 stances below did not change, and the move does not soften
-      # them. `upstream` records where a patch is going, not whether we build
-      # it, and the reasons jj will not take these are untouched: jj reversed
-      # direction on submodules in jj-vcs/jj#5954 (merged 2025-03-11, -313
-      # lines), which deleted the `.gitmodules` parser and
-      # `test_git_submodule.rs`, and Philip Metzger recorded on jj-vcs/jj#494
-      # that "there hasn't been any progress here" with the original design
-      # author having left source control two years earlier. Six patches stay
-      # `never` on that basis. The three standalone gitlink bug fixes are a
-      # separate case and stay `attempt`; see their individual entries.
-      #
-      # The views/vfs commits deliberately carry no intent entry. An
-      # unclassified series commit is `hold` by the fail-safe default in
-      # upstream-sync's `mapping.rs`, so it is never offered upstream, and
-      # writing a stance for each would assert a decision nobody made. They are
-      # our own crates and an in-tree experiment, not candidate upstream
-      # patches. Only the reverse direction is an error: an intent key matching
-      # no commit on the bookmark is dead intent, and
-      # `ensure_no_orphaned_intent` rejects it.
-      #
-      # Replaying Phase 1 linearly was not mechanical, which is recorded here
-      # because the next rebase pays the same cost. The nine patches are
-      # siblings rather than a stack, so three of them independently add the
-      # same `cli_util` accessor, two independently create a module root for
-      # `jj git submodule`, and the store and gix patches disagree about which
-      # module owns `SubmoduleName`. That last one is not cosmetic: the gix
-      # module is git-gated and the store is not, so the direction the
-      # individual patches take makes an ungated module depend on a gated one
-      # and breaks `--no-default-features`. The reviewed megamerge c1e8eece6 had
-      # resolved all of it once, so its tree was the authority wherever the
-      # replay collided, and the result is byte-identical to it for every
-      # submodule path upstream had not touched. Two behaviours exist only in
-      # that merge and were ported by hand: the not-cloned hint in
-      # `cli_util.rs` and the `print_group` bool it needs.
-      #
       # The series is large and reaches into working-copy internals, so a
       # rebase onto upstream main conflicts easily and a conflicted jj commit
       # must never be pushed to the bookmark. The input is pinned BY REV in
@@ -377,53 +296,44 @@
           reason = "Out: the PR checklist is a personal attestation that the submitter understands every line including LLM-drafted code and has copy-edited any LLM prose, and Google's CLA is signed by a person. An unattended PR would tick boxes nobody stood behind.";
         };
       };
-      # RETIRED but still built, and the stances below say which kind of
-      # retirement each patch got. Six are `never`: the five that implement the
-      # storage design, plus the doc commit that records it, because
-      # jj-vcs/jj#5954 deleted the ground all six stand on. Three are
-      # standalone bug fixes in gitlink handling that upstream still ships and
-      # stay `attempt`, because #5954 removed the `.gitmodules` PARSER, not
-      # gitlinks themselves. That distinction is load-bearing and was checked
-      # rather than assumed: jj's own `describe_file_type` still returns
-      # "git-submodule" for a gitlink on current main, so every code path these
-      # three fix is still reachable.
       patches = {
         "docs/design: record the submodule storage decision and guiding principles" = {
-          upstream = "never";
-          reason = "Was `attempt`, recording the 2023 storage decision that git-submodule-storage.md said 'will be recorded in ./git-submodules.md' and never was (jj-vcs/jj#494). Retired: upstream reversed direction in jj-vcs/jj#5954 (merged 2025-03-11, -313 lines, deleting the .gitmodules parser and test_git_submodule.rs), so writing that decision down now would document a plan the project has walked away from. Recording a dead decision as live is worse than the confusion it was meant to resolve. Carried on ix-patched and not offered upstream; reopen only if upstream restarts the design conversation on #494.";
+          upstream = "attempt";
+          reason = "Records a decision jj already made: git-submodule-storage.md reached a proposal in 2023 and says it 'will be recorded in ./git-submodules.md', which never happened, so the main design doc still reads 'under discussion' and a user said so on jj-vcs/jj#494. Also lands the guiding principles from the author's own unmerged PR #1611 and states honestly that none of Phase 1 is implemented.";
+          prExtra = "Records the decision from docs/design/git-submodule-storage.md as its own Objective asks. Guiding-principles content is adapted from jj-vcs/jj#1611 by the original design author. Confusion this resolves: jj-vcs/jj#494 (comment of 2025-12-22).";
         };
         "diff: emit Git submodules as gitlinks in git-format diffs" = {
           upstream = "attempt";
-          reason = "Standalone upstream bug fix: `jj diff --git` gave a gitlink git's TREE mode 040000 and an empty body, so `git apply` rejects the patch with 'corrupt patch for submodule'. The upstream source carried a TODO asking what it should do. Fix verified by applying the emitted patches with `git apply --cached`. Survives the Phase 1 retirement: jj-vcs/jj#5954 removed the .gitmodules parser, not gitlinks, and jj still emits them in git-format diffs, so this bug is live on current main. Depends on nothing else in the retired series.";
+          reason = "Standalone upstream bug fix: `jj diff --git` gave a gitlink git's TREE mode 040000 and an empty body, so `git apply` rejects the patch with 'corrupt patch for submodule'. The upstream source carried a TODO asking what it should do. Fix verified by applying the emitted patches with `git apply --cached`.";
         };
         "cli: name a submodule conflict as one and say what can resolve it" = {
           upstream = "attempt";
-          reason = "Fixes the 'incorrect suggestion' half of jj-vcs/jj#7806: a conflict whose every term is a gitlink was bucketed as generic and jj pointed at a merge tool that cannot resolve it. Now jj names it and points at `jj restore`, which was verified to actually clear the conflict. Survives the Phase 1 retirement: a gitlink can still land in a conflict on current main whatever jj decides about submodule storage. Depends on nothing else in the retired series.";
+          reason = "Fixes the 'incorrect suggestion' half of jj-vcs/jj#7806: a conflict whose every term is a gitlink was bucketed as generic and jj pointed at a merge tool that cannot resolve it. Now jj names it and points at `jj restore`, which was verified to actually clear the conflict.";
           prExtra = "Partially addresses jj-vcs/jj#7806. The other half of that report, the working copy dropping the submodule on the next snapshot, is not fixed here.";
         };
         "working_copy: report ignored Git submodules through checkout stats" = {
           upstream = "attempt";
-          reason = "Three eprintln! calls in jj-lib printed submodule notices straight to stderr, bypassing the Ui, so they ignored --quiet, colour and formatter labels and could only be tested by scraping raw stderr. Reports them as data on CheckoutStats instead, which is the channel jj already uses for skipped files. Survives the Phase 1 retirement: those eprintln! calls fire when a checkout SKIPS a gitlink, which is exactly what upstream still does after jj-vcs/jj#5954, so the reporting defect outlives the storage design. Depends on nothing else in the retired series.";
+          reason = "Three eprintln! calls in jj-lib printed submodule notices straight to stderr, bypassing the Ui, so they ignored --quiet, colour and formatter labels and could only be tested by scraping raw stderr. Reports them as data on CheckoutStats instead, which is the channel jj already uses for skipped files.";
         };
         "git: read `.gitmodules` through gix" = {
-          upstream = "never";
-          reason = "Was `hold`, pending the Phase 1 proposal that would consume it. Retired with that proposal: it restores the very capability jj-vcs/jj#5954 deleted as 'redundant with gix's native API and not used by anything', and with Phase 1 parked nothing consumes it, so the upstream objection now stands unanswered. Carried on ix-patched, not offered upstream.";
+          upstream = "hold";
+          reason = "Restores a capability jj deliberately deleted in #5954 as 'redundant with gix's native API and not used by anything', this time built on gix-submodule. Sound on its own but pointless upstream without the series that consumes it, so it goes as part of the Phase 1 proposal rather than alone.";
         };
         "submodule_store: give the store a name-keyed CRUD surface" = {
-          upstream = "never";
-          reason = "Was `hold`, pending maintainer agreement on the on-disk layout (hex-encoded names, since a submodule name may contain a slash and the 2023 prototype's slash-to-underscore sanitising is lossy) per jj's design-doc process. Retired: that conversation has no counterparty. Philip Metzger recorded on jj-vcs/jj#494 that 'there hasn't been any progress here' and the original design author left source control two years ago, so a layout decision nobody is in a position to agree to cannot become a PR. Implements jj-vcs/jj#1698; carried on ix-patched, not offered upstream.";
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1698 and the storage decision, and picks the on-disk layout the design never specified (hex-encoded names, because a submodule name may contain a slash and the 2023 prototype's slash-to-underscore sanitising is lossy). That layout choice wants maintainer agreement before a PR, per jj's design-doc process.";
         };
         "cli: add `jj git submodule clone`" = {
-          upstream = "never";
-          reason = "Was `hold`, waiting on the store-layout conversation above, which has no counterparty (jj-vcs/jj#494). Implements jj-vcs/jj#1755 and depends on the store, so it is retired with it. Carried on ix-patched, not offered upstream.";
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1755. Depends on the store layout above, so it waits on the same design conversation.";
         };
         "git submodule: report declared submodules and how the store disagrees" = {
-          upstream = "never";
-          reason = "Was `hold`, depending on the store layout above. Implements jj-vcs/jj#1754 and is retired with the store. Carried on ix-patched, not offered upstream.";
+          upstream = "hold";
+          reason = "Implements jj-vcs/jj#1754. Depends on the store layout above.";
         };
         "working_copy: populate Git submodule contents on checkout" = {
-          upstream = "never";
-          reason = "Was `hold`. The Phase 1 headline outcome (jj-vcs/jj#1757), gated on the design conversation on jj-vcs/jj#494 where a maintainer said in 2025-12 that submodules 'will probably require large design changes' and that the 2023 design's fit with current jj is unclear. That conversation did not happen and upstream went the other way in jj-vcs/jj#5954, so it is retired. It also changes the public LockedWorkingCopy::check_out signature to take CheckoutOptions, which no maintainer has signalled appetite to review. Carried on ix-patched, not offered upstream.";
+          upstream = "hold";
+          reason = "The Phase 1 headline outcome (jj-vcs/jj#1757), but it changes the public LockedWorkingCopy::check_out signature to take CheckoutOptions, which upstream will want to review on its own terms. Wants the design conversation on jj-vcs/jj#494 first, where a maintainer said in 2025-12 that submodules 'will probably require large design changes' and that the 2023 design's fit with current jj is unclear.";
         };
       };
     }
@@ -757,13 +667,6 @@
         "fix(libstore): a local-overlay store must not call a path it cannot read valid" = {
           upstream = "hold";
           reason = "A local-overlay store answered isValidPath from its lower store without checking that the merged directory can show the object, then copied that registration up, so every later reader was sent to bytes that are not there (ENG-10582: nine paths in one CI build, reported as store corruption). The fix gates both the copy-up and the lower fallthrough on visibility, which is self-healing -- the caller rebuilds into the upper layer, where it is readable. Verified A/B on one host and kernel: the deployed client calls the path valid, the patched client calls it invalid. Genuinely upstream, but it is the other half of the registerOutputs patch above and a human submits the pair with that framing; hold per NixOS/nix#15984.";
-        };
-        # Vendored from a NACKed upstream PR, so it is fork-only by construction;
-        # the reason records the NACK and the measured scope rather than letting
-        # a reader assume this closed #4336.
-        "libstore: Bit-reproducibly fix darwin Mach-O page hashes after rewriting" = {
-          upstream = "hold";
-          reason = "`RewritingSink` substitutes scratch-path bytes for final-path bytes in build outputs, but Apple's `ld` has already ad-hoc-signed every arm64 binary at link time and the CodeDirectory's SHA-256 page hashes cover exactly the bytes it rewrites, so the output carries a signature the kernel rejects (`cs_invalid_page` SIGKILL at first page-in). This recomputes only the mismatched slots in place, length-preserving, leaving the `linker-signed` flag, 4 KiB page size, identifier and special slots untouched, so the result is bit-identical to a cold build. Vendored from NixOS/nix#15638 at its pre-force-push revision 883e4331, the minimal in-process form (376-line darwin-only helper, 16-line `#ifdef __APPLE__` call site after `movePath`); the PR later grew a settings surface, a `nix __fixup-macho` subcommand and substitution-time verification, and was admin-closed 2026-07-05 with \"baking in support for MACH-O into Nix is a NACK\" and \"We should be doing less rewriting - not more\", the maintainer preferring a ~50-line early bail that refuses the rewrite rather than repairing it. #15638 itself credits NixOS/nix#14999, our own still-open draft using the non-reproducible `codesign -f -s -` approach. A human argues this upstream or drops it; hold per this fork's aiPrsAllowed = false. SCOPE, measured on aarch64-darwin (index#4336): it repairs the corruption -- claude-code's `--rebuild` `.check` wrapper goes from `invalid signature (code or signature have been modified)` to `valid on disk`, and the byte delta falls from 80 to 48 -- but it does NOT make `--check` pass. The residual 48 bytes are `LC_UUID` (16) plus the page-0 hash covering it; the helper preserves `LC_UUID` deliberately (that preservation is what makes it bit-reproducible), and `LC_UUID` is ld64's content hash over the redirected `$out`. rc=0 additionally requires `-Wl,-no_uuid`: measured rc=0 twice with both, rc=1 with either alone. That is a nixpkgs bintools decision which nixpkgs#188347 reversed in 23.11 to restore symbolication, so #4336 stays open on it. Two gaps from taking the minimal form: the Mach-O parse runs in the daemon as root (later #15638 revisions moved it behind a privilege-dropped hook for exactly that reason), and it re-signs any page whose stored hash disagrees with its bytes, so a file already corrupt for an unrelated reason is silently repaired rather than left detectably broken.";
         };
         # Fork-local test adaptations: they exist because fork patches changed
         # failure propagation / added features, so they are meaningless upstream.
@@ -1160,86 +1063,6 @@
           upstream = "hold";
           reason = "Lost-wakeup regression against libcurl 8.21.0: every cold `nix run` paid a 10s stall on its first transfer once the fleet's nixpkgs carried 8.21.0 (nix_run_hello p50 5.9s to 16.5s; indexable-inc/index#4122). Upstream-general and standalone, the contract change is upstream's to absorb; hold: humans submit Nix patches upstream per NixOS/nix#15984.";
         };
-        # Source paths under the store directory got no fingerprint, so
-        # `fetchToStore` skipped its cache and re-hashed and re-copied the
-        # subtree into the store on every eval, forever
-        # (indexable-inc/index#4323). Answers with the NAR hash the store
-        # already recorded for the enclosing store object, in the same
-        # `path:<sri>` namespace PathInputScheme uses, so the two share one
-        # cache entry per tree. Keyed on the hash and not the store path: an
-        # input-addressed path is a function of its derivation, not its
-        # content, so a non-reproducible rebuild after a GC could otherwise
-        # serve the pre-GC result. Unregistered content that merely sits under
-        # the store dir (a `<drv>.chroot` root) is declined rather than cached.
-        "libstore: fingerprint source paths that live inside the store" = {
-          upstream = "hold";
-          reason = "Source paths inside the store were uncacheable, so every eval re-hashed and re-copied the subtree (indexable-inc/index#4323). Verified on aarch64-darwin with lazy-trees off, five interleaved pairs: a 105 MB / 7,630-file store object as a source path goes 1394-1674 ms to 81-96 ms with a byte-identical output store path, `_NIX_TEST_BARF_ON_UNCACHEABLE=1` stops reporting the hydra home config uncacheable, and that config's activation-package drvPath is unchanged. Each assertion in the new tests/functional/store-path-fingerprint.sh was watched to fail against a deliberately broken implementation. Stock-nix behavior rather than a fork regression, so genuinely upstream, held: humans submit Nix patches upstream per NixOS/nix#15984.";
-        };
-        # `jj file list` reports a Git submodule as one entry naming a
-        # directory, and the workdir accessor consumed the list as allow-list
-        # PREFIXES, so that entry admitted every file physically under the
-        # submodule working tree, its own `.git` pointer file included
-        # (ENG-11616). This commit drops the `git-submodule` entries, which
-        # fixes the instance; the follow-up below closes the class.
-        "libfetchers: do not admit a Git submodule's whole tree in a jj workdir" = {
-          upstream = "hold";
-          reason = "A colocated repo with a submodule produced a source tree no git+file fetch can produce: submodule content without `submodules=1`, plus a `gitdir:` pointer baked into the store (ENG-11616). Verified on aarch64-darwin: store path and narHash now equal `git+file`'s byte for byte on a fixture with a submodule, a nested directory and a symlink, and tests/functional/jj-colocated.sh asserts that equality plus the stronger invariant that the fetched tree is exactly jj's tracked file set. Both assertions were watched to fail against the unfixed fetcher. Upstream-nix candidate for the jj scheme (NixOS/nix#16066), held: humans submit Nix patches upstream per NixOS/nix#15984.";
-        };
-        # Follow-up that closes the class the previous commit's fix instantiated.
-        # `CanonPath::isAllowed` grants access when either side is a parent, so
-        # ANY listed entry that happens to be a directory licences everything
-        # physically beneath it, tracked or not; a gitlink was merely the one
-        # way to get a directory into that list today. The list is now consumed
-        # as exact paths plus their explicit ancestors, which buys the walk's
-        # descent without the licence, and entry types are filtered by an
-        # allow-list (file, symlink, conflict) rather than a deny-list, so an
-        # unrecognised future type is skipped and reported instead of admitted.
-        "libfetchers: consume the jj file list as exact paths, not prefixes" = {
-          upstream = "hold";
-          reason = "Generalises the submodule fix above from the instance to the class: no listed entry can licence anything beneath it whatever its type, so a directory-naming entry renders as an empty directory rather than leaking a subtree (ENG-11616). Verified on aarch64-darwin: `git+file` and `jj+file` agree on both store path and narHash for one working copy, and the test additionally asserts the fetched tree equals exactly jj's tracked non-directory set, which is what catches an entry type nobody has thought of. Watched to fail against the unfixed fetcher with untracked junk planted inside the submodule, so the leak was visibly arbitrary rather than limited to the submodule's own files. Follow-up to the vendored jj scheme of the open upstream PR NixOS/nix#16066, so it belongs on that PR rather than a rival one; held: humans submit Nix patches upstream per NixOS/nix#15984.";
-        };
-        # The two jj tests were the entire gate on the jj fetcher series, and the
-        # gate was open: `jj` was declared in no Nix file, so both tests hit
-        # `skipTest` on every Nix-driven run, and a skip is counted next to the
-        # passes rather than next to the failures. Running them for the first
-        # time failed jj-colocated.sh immediately, which built its fixtures with
-        # a bare `git init` plus `git commit` and so could only ever work on a
-        # machine carrying a global git identity (ENG-11636).
-        "tests/functional: run the jj tests instead of skipping them" = {
-          upstream = "never";
-          reason = "Fork-local test infrastructure for a fork-local fetcher: declares jujutsu in tests/functional/package.nix and adds a requireJj that FAILS where requireGit skips, on the grounds that a tool named in the closure going missing is a broken closure rather than an unsupported environment. Upstream carries no jj scheme, so there is nothing there for this to gate. Verified on aarch64-darwin by building nix-functional-tests: fetchJj OK 2.49s and jj-colocated OK 3.14s, where the same build before the git-identity fix reported jj-colocated FAIL exit status 128 on `git commit` with no identity.";
-        };
-        # The fork's own `tests on ubuntu` was red at `Run VM tests` from the
-        # moment the fingerprint patch above landed, and for a reason unrelated to
-        # what it tests: the test's last assertion plants unregistered content
-        # inside the store directory, so it reads $NIX_STORE_DIR, which
-        # common/vars.sh exports only when `! isTestOnNixOS`. meson runs each
-        # script under `bash -u`, so on that lane the reference is an unbound
-        # variable. Not a daemon-store hole: the fingerprint was measured working
-        # through a live daemon store before the skip was reached for (ENG-11658).
-        "tests/functional: skip store-path-fingerprint on the NixOS lane" = {
-          upstream = "never";
-          reason = "Fork-local test infrastructure, and specific to a test that exists only on this branch: it guards store-path-fingerprint.sh with TODO_NixOS because that lane gives the test no store directory it may write into, which its unregistered-content assertion requires. TODO_NixOS rather than needLocalStore because the fingerprint itself does work through a daemon store, measured on aarch64-darwin with 2.34.7+ix.gf200a3a8d492 against the live daemon under _NIX_TEST_BARF_ON_UNCACHEABLE=1: the cold eval copies once and a warm eval in a fresh process reports `cache hit in` on the same output path. So the index#4323 speedup does apply on daemon stores and no follow-up patch is owed on that axis. Verified on aarch64-darwin: store-path-fingerprint, fetchJj and jj-colocated all OK.";
-        };
-        # The three commits below reconcile the in-process parallel evaluator
-        # with what it silently reverted when it was ported (ENG-11672). All
-        # three are `never` for the same underlying reason: they only make
-        # sense against a thunk protocol upstream does not have. The bug they
-        # describe does exist upstream OF THE PORT, in
-        # DeterminateSystems/nix-src, and goes there as a report a human sends,
-        # not as a PR this tool opens.
-        "libexpr: keep recoverable failures retryable after the parallel-eval port" = {
-          upstream = "never";
-          reason = "Reconciles upstream's recoverable errors (NixOS/nix 17f344cdd) with the ported parallel evaluator, whose value.hh predated them and reverted `mkFailed(exception_ptr, Value *)`, `Failed::recoveryValue` and the three `EvalState::handleEval*` helpers. Upstream already has the feature and has no pending/awaited thunk protocol to integrate it with, so there is nothing to send; the recovery is rebuilt as a fresh equivalent thunk carried on the finished `tFailed` value because `waitOnThunk()` asserts three times that a pending thunk never becomes a thunk again. Verified by nix_api_expr's nix_expr_thunk_re_evaluation_after_deployment passing again in both CI configurations (run 30668180224).";
-        };
-        "libexpr: rethrow a memoised failure as a clone again" = {
-          upstream = "never";
-          reason = "Restores `Value::Failed::rethrow()`, which upstream already carries and only this fork lost, via the same port: a bare `std::rethrow_exception` hands every force the one cached exception object, and adding a trace mutates it by reference, so a shared failing thunk accumulates a frame per attempt. Nothing to send upstream. DeterminateSystems/nix-src has the identical defect and commits the mutated trace as its expected output; that report is drafted and goes by hand (ENG-11672).";
-        };
-        "tests/functional: take the parallel evaluator's error positions" = {
-          upstream = "never";
-          reason = "Fork-local expectations for a fork-local evaluator: claiming a thunk overwrites the words holding its environment and expression, so an infinite recursion or stack overflow is reported at the forcing site rather than the recursive thunk's own expression. Five .err.exp files plus two misc.sh greps, each taken from DeterminateSystems/nix-src byte for byte after checking it against what our build printed. Upstream's positions are unchanged, so upstream would reject these. Ownership measured rather than assumed: 75202ed78 with no fix on top fails the same five tests in both configurations.";
-        };
       };
     }
     {
@@ -1279,17 +1102,13 @@
     {
       # nix-derivation is the Haskell .drv parser nix-output-monitor links;
       # packages/nix-output-monitor feeds this patched source into a
-      # haskellPackages.extend override. The first fork carried here as a
-      # derived view rather than fetched by rev: `vendor/nix-derivation`
-      # derives back to indexable-inc/Haskell-Nix-Derivation-Library's own
-      # hashes, and the fork repo's `derived-from-index` branch is that
-      # derivation published. The base is upstream main while its cabal version
-      # still reads 1.1.3 (the hackage release nixpkgs builds, plus the
-      # bound-relaxation cabal revisions hackage layers on top), so the tree
-      # here must not advance past that; packages/nix-output-monitor asserts
-      # the version and fails the build if nixpkgs moves first.
+      # haskellPackages.extend override. The base is upstream main while its
+      # cabal version still reads 1.1.3 (the hackage release nixpkgs builds,
+      # plus the bound-relaxation cabal revisions hackage layers on top), so
+      # it must not free-float: repin when nixpkgs moves past 1.1.3, then
+      # jj-rebasing indexable-inc/Haskell-Nix-Derivation-Library.
       name = "nix-derivation";
-      vendored = "vendor/nix-derivation";
+      input = "nix-derivation-src";
       upstreamUrl = "https://github.com/Gabriella439/Haskell-Nix-Derivation-Library.git";
       forkRepo = "indexable-inc/Haskell-Nix-Derivation-Library";
       bookmark = "ix-patched";

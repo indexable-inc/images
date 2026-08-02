@@ -12,7 +12,7 @@ use std::fmt::Write as _;
 
 use unibind_core::ir;
 
-use super::types::{doc_block, resource_close, type_name, value_name};
+use super::types::{self, doc_block, resource_close, type_name, value_name};
 
 pub fn render(interface: &ir::Interface, addon: &str) -> String {
     let mut out = String::new();
@@ -21,14 +21,14 @@ pub fn render(interface: &ir::Interface, addon: &str) -> String {
         error_classes(&mut out, error);
     }
     decoder(&mut out, interface);
-    if interface.has_streams() {
+    if types::has_streams(interface) {
         out.push_str(STREAM_HELPER);
     }
     if !interface.objects.is_empty() {
         out.push_str(HANDLE_TOKEN);
     }
     for object in &interface.objects {
-        object_class(&mut out, object);
+        object_class(&mut out, interface, object);
     }
     for function in &interface.functions {
         function_wrapper(&mut out, interface, function);
@@ -188,7 +188,7 @@ const nativeHandle = Symbol(\"unibind.nativeHandle\");
 /// The wrapper class over one native object handle: the constructor (when
 /// the object declares one), delegating methods with error decoding, and
 /// the resource close surface with `await using` disposal.
-fn object_class(out: &mut String, object: &ir::Object) {
+fn object_class(out: &mut String, interface: &ir::Interface, object: &ir::Object) {
     let class = type_name(&object.names, &object.name);
     doc_block(out, "", &object.docs);
     writeln!(out, "class {class} {{").expect("write to string");
@@ -217,12 +217,17 @@ fn object_class(out: &mut String, object: &ir::Object) {
         if close.is_some_and(|close| std::ptr::eq(close, method)) {
             continue;
         }
-        method_delegation(out, method, &value_name(&method.name, &method.names));
+        method_delegation(
+            out,
+            interface,
+            method,
+            &value_name(&method.name, &method.names),
+        );
     }
     if let Some(close) = close {
         // The generated native close is idempotent; delegate it like any
         // method, then wire disposal through it.
-        method_delegation(out, close, "close");
+        method_delegation(out, interface, close, "close");
         out.push_str("\n  /** `await using` support: closes the resource. */\n");
         out.push_str("  async [Symbol.asyncDispose]() {\n    await this.close();\n  }\n");
     }
@@ -230,37 +235,39 @@ fn object_class(out: &mut String, object: &ir::Object) {
 }
 
 /// One delegating method: forward the positional arguments (async methods
-/// take the optional trailing `AbortSignal` natively) and decode failures.
-fn method_delegation(out: &mut String, method: &ir::Function, name: &str) {
+/// take the optional trailing `AbortSignal` natively), decode failures, and
+/// wrap stream and object returns exactly as a free function's do -- a
+/// method handing back a raw native handle would skip the wrapper class
+/// (and its error decoding and disposal) the `.d.ts` promises.
+fn method_delegation(
+    out: &mut String,
+    interface: &ir::Interface,
+    method: &ir::Function,
+    name: &str,
+) {
     out.push('\n');
     doc_block(out, "  ", &method.docs);
-    match method.asyncness {
-        ir::Asyncness::Sync => {
-            writeln!(out, "  {name}(...args) {{\n    try {{").expect("write to string");
-            writeln!(out, "      return this.#handle.{name}(...args);").expect("write to string");
-        }
-        ir::Asyncness::Async => {
-            writeln!(out, "  async {name}(...args) {{\n    try {{").expect("write to string");
-            writeln!(out, "      return await this.#handle.{name}(...args);")
-                .expect("write to string");
-        }
+    let is_async = matches!(method.asyncness, ir::Asyncness::Async);
+    let call = if is_async {
+        format!("await this.#handle.{name}(...args)")
+    } else {
+        format!("this.#handle.{name}(...args)")
+    };
+    let value = returned_value(interface, method, call);
+    if is_async {
+        writeln!(out, "  async {name}(...args) {{\n    try {{").expect("write to string");
+    } else {
+        writeln!(out, "  {name}(...args) {{\n    try {{").expect("write to string");
     }
+    writeln!(out, "      return {value};").expect("write to string");
     out.push_str("    } catch (error) {\n      throw decodeError(error);\n    }\n  }\n");
 }
 
-/// One exported function: forward the positional arguments (async exports
-/// take the optional trailing `AbortSignal` natively), decode failures, and
-/// wrap stream and object returns.
-fn function_wrapper(out: &mut String, interface: &ir::Interface, function: &ir::Function) {
-    let name = value_name(&function.name, &function.names);
-    doc_block(out, "", &function.docs);
-    let is_async = matches!(function.asyncness, ir::Asyncness::Async);
-    let call = if is_async {
-        format!("await native.{name}(...args)")
-    } else {
-        format!("native.{name}(...args)")
-    };
-    let value = match &function.ret {
+/// What a wrapper hands back: stream handles become `AsyncIterable`s and
+/// object handles their wrapper class; every other value crosses as napi
+/// produced it.
+fn returned_value(interface: &ir::Interface, function: &ir::Function, call: String) -> String {
+    match &function.ret {
         Some(ir::Type::Stream(_)) => format!("wrapStream({call})"),
         Some(ir::Type::Named(named)) => interface
             .objects
@@ -276,7 +283,22 @@ fn function_wrapper(out: &mut String, interface: &ir::Interface, function: &ir::
                 },
             ),
         _ => call,
+    }
+}
+
+/// One exported function: forward the positional arguments (async exports
+/// take the optional trailing `AbortSignal` natively), decode failures, and
+/// wrap stream and object returns.
+fn function_wrapper(out: &mut String, interface: &ir::Interface, function: &ir::Function) {
+    let name = value_name(&function.name, &function.names);
+    doc_block(out, "", &function.docs);
+    let is_async = matches!(function.asyncness, ir::Asyncness::Async);
+    let call = if is_async {
+        format!("await native.{name}(...args)")
+    } else {
+        format!("native.{name}(...args)")
     };
+    let value = returned_value(interface, function, call);
     if is_async {
         writeln!(out, "async function {name}(...args) {{").expect("write to string");
     } else {

@@ -150,8 +150,6 @@ in {
 
     pkgs.pinentry_mac # GUI master-password prompt used by `rbw login`/`rbw unlock` (rbw itself is in common.nix)
     seedLaunchdSecrets # `seed-launchd-secrets`: stage launchd-agent Keychain secrets from op/rbw
-
-    indexPkgs.dia-cdp # "Dia CDP.app" in ~/Applications/Home Manager Apps: Raycast-launchable Dia with --remote-debugging-port=9222 (indexable-inc/index#3489)
   ];
 
   home.sessionVariables = {

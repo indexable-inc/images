@@ -41,6 +41,7 @@ impl Objects {
     /// through untouched (the backend wraps it rather than splicing
     /// attributes), so its fields carry no visibility rules.
     pub(super) fn declare(&mut self, item: &syn::ItemStruct, found: &marker::Marker) -> Result<()> {
+        reject_stray_meta(&item.attrs)?;
         found.meta.reject_default("an object")?;
         found.meta.reject_py_base("an object")?;
         found.meta.reject_jvm_base("an object")?;
@@ -192,6 +193,42 @@ impl ImplBlock {
         });
         Ok(())
     }
+}
+
+/// Refuse a bare `#[unibind(...)]` sitting next to an object's marker.
+///
+/// An object's options come from the marker's own argument list
+/// ([`marker::Marker::meta`]); a separate `#[unibind(...)]` attribute is
+/// never parsed here, and [`crate::strip_unibind_attrs`] then deletes it
+/// from the re-emitted Rust. Spelled `#[unibind(resource)]` -- the natural
+/// guess -- that silence costs the whole resource surface: no `close()`
+/// requirement, no leak warning, no `async with`, and no diagnostic. Fail
+/// loudly instead, naming the spelling that works.
+///
+/// Only the bare `unibind` path is refused. `#[unibind::object]`,
+/// `#[unibind::record]`, and `#[unibind::error]` are markers (two path
+/// segments), and the flags that legitimately use the bare form live on
+/// methods (`constructor`, `blocking`) and arguments (`default`), neither
+/// of which reaches here.
+fn reject_stray_meta(attributes: &[syn::Attribute]) -> Result<()> {
+    for attribute in attributes {
+        if !attribute.path().is_ident("unibind") {
+            continue;
+        }
+        let options = match &attribute.meta {
+            syn::Meta::List(list) => list.tokens.to_string(),
+            _ => "...".to_owned(),
+        };
+        return Err(LowerError::new(
+            attribute.span(),
+            format!(
+                "`#[unibind(...)]` next to an object marker is not read; \
+                 an object's options belong inside the marker: write \
+                 `#[unibind::object({options})]`"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// The bare type name an inherent impl block targets, if it is one.

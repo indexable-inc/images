@@ -172,12 +172,6 @@ Size is fixed for the life of the process; there is no runtime resize today.
 `env` pairs are applied to the child in order before the crate forces
 `TERM=xterm-256color` and `COLORTERM=truecolor`, so those two always win.
 
-The emulator answers the terminal queries a real terminal answers, writing the
-reply onto the child's input: DSR 6 (`CSI 6 n`) with the 1-based cursor
-position `CSI row ; col R`, DSR 5 with `CSI 0 n`, and DA1 (`CSI c`) with
-ghostty's VT220-with-color identity. crossterm's `cursor::position()` and
-vim's startup probes resolve instead of hanging until their timeout.
-
 ## Errors
 
 All fallible calls return `Result<T, Error>`, a `snafu`-derived enum:

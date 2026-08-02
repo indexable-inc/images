@@ -73,31 +73,11 @@ pub struct Store {
     root: PathBuf,
 }
 
-pub struct StoreLock {
-    _file: fs::File,
-}
-
 impl Store {
     pub fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(root.join("files"))
             .with_context(|| format!("creating state dir {}", root.display()))?;
         Ok(Self { root })
-    }
-
-    /// Serialize state mutations across index-delta processes. The operating
-    /// system releases the lock when the returned guard is dropped.
-    pub fn lock(&self) -> Result<StoreLock> {
-        let path = self.root.join("lock");
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .with_context(|| format!("opening state lock {}", path.display()))?;
-        file.lock()
-            .with_context(|| format!("locking state {}", self.root.display()))?;
-        Ok(StoreLock { _file: file })
     }
 
     /// Resolve the state root: explicit flag, then `INDEX_DELTA_STATE_DIR`,

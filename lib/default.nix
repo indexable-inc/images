@@ -26,6 +26,7 @@
   codex-src,
   nix-src,
   nix-fast-build-src,
+  nix-derivation-src,
   rnix-0-12-src,
   rnix-0-14-src,
   ghostty-src,
@@ -97,38 +98,10 @@
       inherit (pkgs) applyPatches;
       patchesRoot = paths.root;
     };
-  # Maintained-fork registry (name -> input or vendored path / forkRepo /
-  # bookmark / upstreaming intent), the single source of truth for the
-  # fork-sync workflow and upstream-sync. See lib/fork-packages.nix.
-  #
-  # Guarded here rather than in the data file, which takes no arguments and so
-  # has no `lib`. Both invariants fail at EVAL, for everyone, because both
-  # would otherwise fail late and quietly: a source-less entry sends every
-  # consumer looking up a flake.lock node that is not there, and an
-  # autoUpdate + vendored entry would be skipped by the fork-sync rebase loop
-  # (which floats flake inputs, and a vendored fork has none) without any
-  # in-tree lane rebasing it instead, so the fork would silently stop tracking
-  # upstream. ENG-11685 is the lane that would make the combination legal.
-  forkPackages = let
-    registry = (import ./fork-packages.nix).forkPackages;
-    sourceless = builtins.filter (f: (f ? input) == (f ? vendored)) registry;
-    floatingVendored =
-      builtins.filter (f: (f ? vendored) && (f.autoUpdate or false)) registry;
-    names = fs: lib.concatMapStringsSep ", " (f: f.name) fs;
-  in
-    lib.throwIf (sourceless != []) ''
-      lib/fork-packages.nix: ${names sourceless} declare(s) both `input` and
-      `vendored`, or neither. Exactly one: a fork is fetched by rev or carried
-      in this repo as a derived view, never both and never unspecified.
-    ''
-    lib.throwIf (floatingVendored != []) ''
-      lib/fork-packages.nix: ${names floatingVendored} declare(s) both
-      `vendored` and `autoUpdate = true`. The fork-sync cron rebases a floating
-      fork by moving its flake input, and a vendored fork has no input to move,
-      so it would silently stop being rebased. Set autoUpdate = false until
-      ENG-11685 gives vendored forks their own rebase lane.
-    ''
-    registry;
+  # Maintained-fork registry (name -> input / forkRepo / bookmark /
+  # upstreaming intent), the single source of truth for the fork-sync
+  # workflow and upstream-sync. See lib/fork-packages.nix.
+  inherit (import ./fork-packages.nix) forkPackages;
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -564,7 +537,7 @@
   dependency versions, and package builds. The filtered source keeps the Nix
   closure to Rust workspace inputs instead of the full repository.
 
-  `rustWorkspaceFor pkgs` returns `{ root; src; cargoLock; units; ghosttyLibDir; }` for the
+  `rustWorkspaceFor pkgs` returns `{ root; src; cargoLock; units; }` for the
   caller's package set. The default `rustWorkspace` uses the repo's
   `x86_64-linux` package set for image and module evaluation.
   */
@@ -786,27 +759,7 @@
     clippySrc = clippy-src;
     nixSrc = nix-src;
     nix-fast-buildSrc = nix-fast-build-src;
-    # Carried in this repo at `vendor/nix-derivation` as a jj-views derived
-    # view of indexable-inc/Haskell-Nix-Derivation-Library, not fetched by rev,
-    # so there is no pin to drift and a fork edit is an ordinary in-tree diff.
-    #
-    # `builtins.path` rather than a bare path literal or a
-    # `path:./vendor/nix-derivation` flake input, and this is the whole reason
-    # a vendored fork is affordable. Both of those resolve to a subpath of the
-    # WHOLE flake source (`<flake>/./vendor/nix-derivation`), so any commit
-    # anywhere in the repo moves the string and rebuilds the fork.
-    # `builtins.path` hashes just this directory, so the store path moves only
-    # when the fork does. lib/kernel/kbuild-unit.nix takes the same slice for
-    # the same reason.
-    #
-    # `paths.root + "/..."` rather than `../vendor/nix-derivation` because
-    # astlog's no-parent-path rule forbids a `../` literal that reaches across
-    # a directory. Same directory either way, so the same store path
-    # (`am4z46cf...-nix-derivation-source`), verified after the change.
-    nix-derivationSrc = builtins.path {
-      path = paths.root + "/vendor/nix-derivation";
-      name = "nix-derivation-source";
-    };
+    nix-derivationSrc = nix-derivation-src;
     rnix-0-12Src = rnix-0-12-src;
     rnix-0-14Src = rnix-0-14-src;
     drgnSrc = drgn-src;

@@ -254,34 +254,3 @@ fn scrollback_captures_lines_beyond_viewport() {
         );
     }
 }
-
-/// #3103: a child that asks for the cursor position (`CSI 6 n`) must receive
-/// `CSI row ; col R` on its input, like under a real terminal. The script
-/// enters raw mode (so the 6-byte reply is readable without a newline), asks,
-/// reads the reply, and prints it with the leading ESC stripped so it lands
-/// visibly in the viewport.
-#[test]
-fn dsr_cursor_position_reply_reaches_child() {
-    let manager = TuiManager::new();
-    let instance = spawn(
-        &manager,
-        "sh",
-        &[
-            "-c",
-            r#"stty raw -echo; printf '\033[6n'; reply=$(dd bs=1 count=6 2>/dev/null); stty sane; printf '\nreply:%s\n' "${reply#?}""#,
-        ],
-    );
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let viewport = instance.read_viewport().unwrap_or_default();
-        if viewport.iter().any(|line| line.contains("reply:[1;1R")) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no DSR reply reached the child within 5s (#3103), viewport: {viewport:?}"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}

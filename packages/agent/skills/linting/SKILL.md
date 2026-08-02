@@ -14,9 +14,9 @@ git remote get-url origin
 | `indexable-inc/index` | `nix run .#lint` |
 | `indexable-inc/ix` | `just lint` |
 
-`ix` vendors index's history under `ix/index/`, so one checkout holds both. The
-origin is what decides, not the directory you started in: inside `ix/index/` you
-are in an ix checkout, and `just lint` is the command for the whole thing.
+`index` is a submodule of `ix`, so one checkout holds both. The origin is what
+decides, not the directory you started in: inside `ix/index/` you are in index
+and `nix run .#lint` is correct.
 
 Neither command is platform-gated. Both run on darwin and Linux.
 
@@ -33,24 +33,26 @@ was unavailable to them, and each filed the same ticket (ENG-9808 and eight
 duplicates). The command had never existed in ix on any platform, so every one
 of those reports diagnosed a darwin gap that was not there.
 
-## Neither repo runs any git hook, so nothing lints for you
+## No commit hook runs the full lint in either repo
 
-There is no `.githooks/` and no `.pre-commit-config.yaml` in either tree, and
-nothing is installed into `.git/hooks`. Cloning is the whole setup. index's last
-hook went on 2026-07-19 (the `drop-direnv-and-hooks` site update) and ix's three
-went in ENG-11624, once every check they ran had a CI gate that was the same or
-wider.
+Do not treat a green commit as a green lint. What actually runs:
 
-So a clean commit and a clean push say nothing about lint. Run the command in the
-table above before you push, or read the verdict off CI after you do. Those are
-the only two ways to know.
+- **index**: nothing. There is no `.githooks/`, no `.pre-commit-config.yaml`,
+  and no installed hook -- the last one was removed on 2026-07-19 (the
+  `drop-direnv-and-hooks` site update). Cloning is the whole setup, and running
+  the lint is on you.
+- **ix**: `.githooks/pre-commit`, installed by entering the devshell, which
+  points `core.hooksPath` at `.githooks/`. It runs astlog over the staged
+  `.nix` files -- 1 of the 15 stages in the bundle -- and prints the stages it
+  skipped on every commit, including the ones it passes. Take that footer
+  literally.
 
-Do not install a hook to get the check back. `pre-commit install` in either repo
-refuses with `No .pre-commit-config.yaml file was found`, and writing one is how
-this went wrong the first time: ix had a config for its whole life that
-`core.hooksPath` made unreachable, so the `no-raw-config-in-nix` rule listed in
-it had never run on a single commit. A gate reporting nothing is indistinguishable
-from a gate reporting clean.
+ix also carries a `.pre-commit-config.yaml`, and it is not the installed hook.
+`core.hooksPath` and the pre-commit framework are mutually exclusive: with the
+path set, `pre-commit install` refuses outright; unset it and the framework's
+`.git/hooks/pre-commit` runs *instead of* `.githooks/pre-commit`, silently
+dropping the submodule-gitlink/flake.lock desync refusal. Never run
+`pre-commit install` in ix.
 
 ## Run every gate through nix, never an ambient tool
 
@@ -78,28 +80,6 @@ function over the hundred-line limit.
 So check the exit code, never the absence of a string in a log. `grep -c error`
 returning zero is not a pass when the exit code was 101.
 
-### And an empty run is the good case; the bad one is a full one
-
-On 2026-08-01 the same command produced the opposite shape, which is worse. An
-agent ran `cargo clippy -p ix2nix -- -D clippy::doc_markdown` to confirm a CI
-clippy failure was fixed. Stock clippy raised `E0602` for both fork lints, as
-above, **and then emitted fourteen `doc_markdown` findings anyway**, in
-`lib.rs`, `ty.rs`, `map.rs`, `checker.rs` and `schema.rs`.
-
-The crate's CI clippy check was green before that day's change, so the forked
-driver flags none of those fourteen. They are the stock driver's findings for a
-lint both drivers implement and disagree about.
-
-So the abort does not reliably leave you with nothing. It can leave you with a
-plausible, non-empty, entirely irrelevant report, and a report is far more
-convincing than silence. An agent reading it would either chase fourteen
-phantom defects or, having fixed the real one, conclude from the remaining
-thirteen that the fix had failed.
-
-The rule that survives both shapes: a stock clippy run is not evidence about
-this repo's clippy, whatever it prints. Only the forked driver or the per-crate
-gate answers the question.
-
 In index, put the pinned driver on PATH directly:
 
 ```sh
@@ -110,35 +90,7 @@ ix exposes no such output -- `just lint` does not cover Rust there at all
 (clippy runs in the `rust` CI phase, per cargo-unit crate). Reach it through
 the unit build rather than a bare `cargo clippy`.
 
-## A green `nix run .#lint` does not mean the clone gate is green
-
-The lint app runs the clone detector's GLOBAL gate (whole-tree duplication under
-`[budget] global_pct`) and NOT its DIFF gate (duplication over the lines this
-branch changed, budget `0%`). The exclusion is deliberate: the diff gate needs a
-`.git` directory to resolve the merge base, and the CI lint derivation is handed
-a `.git`-less source tree. It is also invisible, because a lint run says nothing
-about the gate it did not run.
-
-So `flake-check` can fail on duplication minutes after 15/15 stages passed
-locally. Reproduce it before pushing:
-
-```sh
-nix run .#clone -- . --diff origin/main --pretty
-```
-
-`--pretty` is what makes the result actionable. The JSON names each clone
-instance's `fragments` with file and line ranges, which turns "33/793 changed
-lines duplicated" into "you copied `render_table` out of `drift.rs`". Without it
-you get a percentage and no location.
-
-Both gates are ratchets, so the fix is to delete the duplication rather than to
-raise a budget: extract the shared thing and confirm whole-tree duplication went
-DOWN. On index#4497 that was a copied markdown-table renderer plus a fifth copy
-of an enum-to-string `match`; factoring them into one module took the tree from
-0.2300% to 0.2246% and the diff gate to 0/865.
-
 ## index only: --json and --fix
-
 
 Both are flags of index's lint app, which ix has no equivalent of. `just lint`
 forwards its arguments to `nix build`, so `just lint --json` is nix's `--json`

@@ -5,14 +5,14 @@
 //! in its GitHub fork repo (`lib/fork-packages.nix` `forkRepo`/`bookmark`):
 //! every patch is a commit whose parents are its true dependencies, sealed by
 //! an "ix megamerge" commit whose tree is the full series applied linearly.
-//! This module opens a scratch commits-only clone, derives the series (see
-//! [`series`]: the read depends on whether the branch still carries a
-//! megamerge seal, and the base is anchored on the registry's `upstreamRef`
-//! when it sits off the default branch), and exposes the ancestry closure
-//! that decides what an upstream contribution drags along. Patch identity is
-//! the commit SUBJECT, and the intent map in the registry is keyed by it.
+//! This module opens a scratch commits-only clone, derives the series
+//! (bookmark ancestry minus the upstream base -- anchored on the registry's
+//! `upstreamRef` when the base sits off the default branch -- minus the
+//! seal), and exposes
+//! the ancestry closure that decides what an upstream contribution drags
+//! along. Patch identity is the commit SUBJECT: it survives jj rebases, and
+//! the intent map in the registry is keyed by it.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anstream::eprintln;
@@ -277,40 +277,11 @@ fn default_branch(dir: &Path, fork: &str, url: &str) -> Result<String> {
         .ok_or_else(|| eyre!("{fork}: cannot discover the default branch of {url}"))
 }
 
-/// The series: the fork's patch commits between the base and the bookmark,
-/// topo order.
-///
-/// Two branch shapes exist and they need opposite reads, so the shape is
-/// detected rather than assumed.
-///
-/// A branch still in the jj megamerge shape ends in an "ix megamerge" seal
-/// whose PARENTS are the patches (5 of them on rust-clippy), and a patch there
-/// can itself be a merge commit, because a patch's parents are its declared
-/// dependencies. Neither `--first-parent` nor `--no-merges` is safe on that
-/// shape: both drop real patches. So it keeps the full-ancestry walk, minus
-/// the seal by subject.
-///
-/// A branch in the merge-forward shape the `forkBranches` doctrine mandates
-/// has no seal: patches are ordinary commits on it, upstream is merged in
-/// rather than rebased onto, and an earlier revision of a patch may be merged
-/// back so a rev some flake.lock pinned stays reachable. There the full walk
-/// reads the merge commits as patches (offering to upstream "Merge
-/// nix-community/home-manager master") and reads those earlier revisions as
-/// extra patches, which is fatal because patch identity is the subject and two
-/// revisions of one patch usually share one. `--first-parent --no-merges` is
-/// the branch's own line, and it is the whole series only while every patch
-/// reaches the branch as a commit ON it.
-///
-/// That last condition does not hold, so the branch's own line is the SPINE
-/// and [`recover_merged_patches`] adds back the patches that arrived on a
-/// merge's second parent. Both flags stay: dropping either is what read three
-/// revisions of one home-manager patch as three patches (ENG-11646).
-///
-/// The megamerge arm is transitional: megamerges are banned, and it becomes
-/// dead code to delete once the last fork is migrated (ENG-11665).
+/// The series: bookmark ancestry minus the base, topo order, minus the
+/// megamerge seal commit (subject "ix megamerge: ..."), which is bookkeeping
+/// (tree = series applied linearly), not a patch.
 fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> {
-    let range = format!("^{base}");
-    let full = cmd::run_in(
+    let out = cmd::run_in(
         dir,
         "git",
         &[
@@ -319,46 +290,13 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
             "--reverse",
             "--format=%H%x1f%s",
             tip,
-            &range,
+            &format!("^{base}"),
         ],
     )?;
-    let all = parse_log(&full);
-    let series: Vec<Commit> = if all.iter().any(is_seal) {
-        all.into_iter().filter(|c| !is_seal(c)).collect()
-    } else {
-        let out = cmd::run_in(
-            dir,
-            "git",
-            &[
-                "log",
-                "--topo-order",
-                "--reverse",
-                "--first-parent",
-                "--no-merges",
-                "--format=%H%x1f%s",
-                tip,
-                &range,
-            ],
-        )?;
-        let spine = parse_log(&out);
-        let recovered = recover_merged_patches(dir, fork, tip, &range, &all, &spine)?;
-        if recovered.is_empty() {
-            spine
-        } else {
-            let keep: HashSet<&str> = spine
-                .iter()
-                .chain(&recovered)
-                .map(|c| c.sha.as_str())
-                .collect();
-            // Filtering the full walk rather than concatenating puts each
-            // recovered patch in its real topological place among the
-            // branch's own commits, which is the order the series promises.
-            all.iter()
-                .filter(|c| keep.contains(c.sha.as_str()))
-                .cloned()
-                .collect()
-        }
-    };
+    let series: Vec<Commit> = parse_log(&out)
+        .into_iter()
+        .filter(|c| !c.subject.starts_with("ix megamerge"))
+        .collect();
 
     // Subjects are the patch identity (intent keys, branch slugs); a
     // duplicate would make every subject-keyed lookup ambiguous.
@@ -373,128 +311,6 @@ fn series(dir: &Path, fork: &str, tip: &str, base: &str) -> Result<Vec<Commit>> 
         seen.push(&commit.subject);
     }
     Ok(series)
-}
-
-/// The patches that reached the branch on a merge's second parent, which the
-/// spine walk cannot see.
-///
-/// A patch that arrived as a merged pull request sits off the branch's own
-/// line, so `--first-parent` never reaches it and `--no-merges` drops the
-/// merge that would have led there. It is then absent rather than
-/// unclassified, which is the worse of the two: an unclassified patch defaults
-/// to `hold` and one intent entry fixes it, while an entry naming an absent
-/// one is an orphaned key that `ensure_no_orphaned_intent` rejects, so the gap
-/// resists being documented. On indexable-inc/nix that is 22 patches across 7
-/// merged pull requests, and on indexable-inc/jj 11 across 5 (ENG-11686).
-///
-/// Recovering them cannot mean walking second parents generally, which is the
-/// fence `--first-parent` puts up and ENG-11646 paid for. Three filters keep
-/// it, and each one is load-bearing on a fork we actually have:
-///
-///  1. Only merges that CHANGED THE TREE. The doctrine's merge-back of an
-///     earlier revision, so a rev some flake.lock still pins stays reachable,
-///     is a `-s ours` merge whose tree equals its first parent's: it carried
-///     ancestry, not a patch. home-manager has two, and reading them as
-///     patches is what ENG-11646 was.
-///  2. Nothing already on the spine, by SHA.
-///  3. Nothing whose SUBJECT is already on the spine. An earlier revision
-///     under a merge that did change the tree still is not a second patch;
-///     the branch's own copy represents it. indexable-inc/git has exactly
-///     this, and the two commits share a patch-id.
-///
-/// Upstream's own commits need no filter: `base` is `merge-base(tip,
-/// upstream)`, so everything upstream merged forward is already behind it.
-///
-/// The set is derived by COMPARING THE WALKS rather than by asserting a
-/// count, so this cannot pass by both walks returning the same wrong thing.
-/// It warns as well as recovering, because the shape is against
-/// `forkBranches` -- a change is meant to land as a commit on the branch --
-/// and a silently absorbed merge is one nobody stops producing.
-fn recover_merged_patches(
-    dir: &Path,
-    fork: &str,
-    tip: &str,
-    range: &str,
-    all: &[Commit],
-    spine: &[Commit],
-) -> Result<Vec<Commit>> {
-    let merges = cmd::run_in(dir, "git", &["rev-list", "--merges", tip, range])?;
-    let merge_shas: HashSet<&str> = merges.split_whitespace().collect();
-    let spine_shas: HashSet<&str> = spine.iter().map(|c| c.sha.as_str()).collect();
-    let spine_subjects: HashSet<&str> = spine.iter().map(|c| c.subject.as_str()).collect();
-    let brought = commits_a_merge_brought_in(dir, tip, range)?;
-
-    let recovered: Vec<Commit> = all
-        .iter()
-        .filter(|c| {
-            brought.contains(c.sha.as_str())
-                && !spine_shas.contains(c.sha.as_str())
-                && !merge_shas.contains(c.sha.as_str())
-                && !spine_subjects.contains(c.subject.as_str())
-        })
-        .cloned()
-        .collect();
-    if recovered.is_empty() {
-        return Ok(recovered);
-    }
-
-    let found = recovered.len();
-    let listed = recovered
-        .iter()
-        .map(|c| format!("  - {}", c.subject))
-        .collect::<Vec<_>>()
-        .join("\n");
-    eprintln!(
-        "{}",
-        paint(
-            YELLOW,
-            &format!(
-                "upstream-sync: {fork}: {found} patch(es) reached the branch on a merge commit's \
-                 second parent rather than as a commit on it, which is against `forkBranches`. \
-                 They are in the series, so they can be classified and offered upstream, but land \
-                 the next one as a commit on the branch (ENG-11686):\n{listed}"
-            )
-        )
-    );
-    Ok(recovered)
-}
-
-/// The commits each merge on the branch's own line brought in with it,
-/// skipping the merges that brought in no content.
-///
-/// A merge whose tree equals its first parent's changed nothing, so its second
-/// parent is ancestry rather than a patch: that is the `-s ours` merge-back
-/// keeping a pinned revision reachable. Only merges on the FIRST-PARENT line
-/// are walked; a merge deeper in is already inside the range one of those
-/// contributes.
-fn commits_a_merge_brought_in(dir: &Path, tip: &str, range: &str) -> Result<HashSet<String>> {
-    let merges = cmd::run_in(
-        dir,
-        "git",
-        &["rev-list", "--first-parent", "--merges", tip, range],
-    )?;
-    let mut brought = HashSet::new();
-    for merge in merges.split_whitespace() {
-        let tree = cmd::run_in(dir, "git", &["rev-parse", &format!("{merge}^{{tree}}")])?;
-        let first = cmd::run_in(dir, "git", &["rev-parse", &format!("{merge}^1^{{tree}}")])?;
-        if tree == first {
-            continue;
-        }
-        let side = cmd::run_in(
-            dir,
-            "git",
-            &["rev-list", &format!("{merge}^2"), &format!("^{merge}^1")],
-        )?;
-        brought.extend(side.split_whitespace().map(ToOwned::to_owned));
-    }
-    Ok(brought)
-}
-
-/// The megamerge seal: bookkeeping (tree = series applied linearly), not a
-/// patch. Its presence is also what says the branch is still in the megamerge
-/// shape.
-fn is_seal(commit: &Commit) -> bool {
-    commit.subject.starts_with("ix megamerge")
 }
 
 /// Parse `--format=%H%x1f%s` output.

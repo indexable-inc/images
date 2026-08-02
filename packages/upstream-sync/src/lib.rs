@@ -12,8 +12,6 @@ pub mod drift;
 pub mod gh;
 pub mod mapping;
 pub mod notify;
-pub mod pin;
-pub mod report;
 pub mod series;
 pub mod status;
 pub mod style;

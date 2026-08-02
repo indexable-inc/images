@@ -46,7 +46,6 @@ fn fragment(file: &str, start: usize, end: usize) -> Fragment {
         lines: LineRange { start, end },
         kind: "function_item".to_owned(),
         generated: false,
-        fingerprint: 0,
     }
 }
 

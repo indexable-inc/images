@@ -1,6 +1,6 @@
 # nix-web-monitor internals
 
-The state machine, transport, and dependency resolution behind
+The state machine, transport, dependency resolution, and daemon tracing behind
 [overview](overview.md).
 
 ## Event parsing (`parser/src/lib.rs:1073`)
@@ -16,7 +16,7 @@ Result codes and activity codes are named constants (`result_code`,
 
 `apply_parsed_line` mutates an in-memory model: `activities` (by id), `builds`
 (by derivation path), a capped `logs` tail, `errors`, aggregate `progress`,
-`optimise` totals, and `expected` counts. Two outputs ride out:
+`optimise` totals, `daemon` view, and `expected` counts. Two outputs ride out:
 
 - **`snapshot()`** (`:342`): a full `MonitorSnapshot`, used once to seed a new
   client. The log tail is capped at `SNAPSHOT_LOG_LIMIT` (500, `:26`) because the
@@ -26,7 +26,7 @@ Result codes and activity codes are named constants (`result_code`,
 - **`drain_deltas()`** (`:367`): the incremental `Delta`s accumulated since the
   last drain, broadcast per applied line. `Delta` (`:248`) is a tagged union
   (`BuildUpsert`, `ActivityUpsert`, `LogsAppend`, `ProgressSet`, `OptimiseSet`,
-  `ExpectedSet`, `ErrorAppend`, `DependenciesSet`, `Finished`, plus
+  `DaemonSet`, `ExpectedSet`, `ErrorAppend`, `DependenciesSet`, `Finished`, plus
   `Reset` used only for the seed).
 
 Non-obvious behaviors:
@@ -88,6 +88,32 @@ gitignore semantics (skipping `.git`, `parents(false)`), sums apparent file
 sizes, and attaches the figure with `set_activity_size` (`:396`). It is an
 approximate hint: a failed walk leaves the row unannotated rather than failing
 the build (`copied_size`, `:516`).
+
+## Daemon syscall tracer (`server/src/daemon.rs`)
+
+`run_daemon_probe` (`:43`) is the one view the internal-json stream cannot give:
+it attaches a platform tracer to the running `nix-daemon` so the silent
+`addToStore` phase is visible. The probe parks (publishing an "idle" status)
+until a dashboard client subscribes to the delta feed, and ends the tracer once
+the last client leaves: only the WebSocket clients consume the panel, and an
+unwatched tracer would monopolize the kernel's single machine-wide ktrace
+session. While watched it finds daemon pids via `pgrep`, then spawns
+`fs_usage -w -f filesys nix-daemon` on macOS or `strace -f -p <pid>` on Linux
+(`tracer_command`), wrapped in `sudo -n` when not root (`-n` never prompts, so a
+user without privilege gets a "needs root" status instead of a hang). The tracer
+runs under a babysitter shell whose stdin-EOF kill path both reaps orphans when
+the monitor dies and gives the gate its off switch. The tracer's stdout lines are parsed by the parser's
+`parse_fs_usage_line`/`parse_strace_line`, folded into a `DaemonTrace`, and a
+`DaemonInfo` is published every `SAMPLE_INTERVAL` (exactly 1s, so the per-window
+syscall delta is the per-second rate with no division, `:30`). Path-bearing
+syscalls also update a one-second hot-path window; the panel lists the busiest
+paths by current rate, then cumulative count, so a silent build has a concrete
+\"what is doing the most\" readout instead of only the latest touched path. Every
+failure path (no daemon, missing tracer, denied attach) degrades to a status
+string the panel shows and the loop retries after `RETRY_INTERVAL` (5s); the
+probe never returns an error (`:41`). `OpClass::classify`
+(`parser/src/daemon.rs:37`) groups syscalls so the panel shows work kind
+(Link/Rename dominate store optimisation, Write/Fsync dominate writing a path).
 
 ## Machine-wide build view (`server/src/global.rs`)
 

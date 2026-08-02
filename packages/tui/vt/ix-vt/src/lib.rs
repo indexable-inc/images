@@ -839,20 +839,6 @@ impl Terminal {
         })
     }
 
-    /// Read the cursor state without materializing the full viewport.
-    ///
-    /// This is [`render`](Self::render) minus the row iteration, for callers
-    /// that only need the cursor (e.g. answering a DSR cursor-position query).
-    ///
-    /// # Errors
-    /// Returns an [`Error`] if the render state cannot be allocated, updated
-    /// from the terminal, or read back.
-    pub fn cursor(&self) -> Result<Cursor> {
-        let state = RenderState::new()?;
-        check(unsafe { sys::ghostty_render_state_update(state.raw, self.raw) })?;
-        state.cursor()
-    }
-
     /// Number of scrollback rows above the viewport.
     ///
     /// Derived from the terminal scrollbar: `total - len`, where `total` is the

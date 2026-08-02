@@ -1,5 +1,4 @@
 pub mod engine;
-pub mod query;
 
 use std::sync::Arc;
 
@@ -11,7 +10,7 @@ use uuid::Uuid;
 use crate::types::ExitState;
 use crate::{Error, error::Result};
 use engine::{
-    EngineLink, EngineRequest, snapshot_to_chars, snapshot_to_cursor, snapshot_to_styled_cells,
+    EngineRequest, snapshot_to_chars, snapshot_to_cursor, snapshot_to_styled_cells,
     snapshot_to_viewport_lines,
 };
 
@@ -62,14 +61,10 @@ pub async fn pty_actor(
     mut pty: pty_process::Pty,
     mut child: tokio::process::Child,
     mut commands: mpsc::Receiver<PtyCommand>,
-    engine: EngineLink,
+    engine_tx: std::sync::mpsc::Sender<EngineRequest>,
     exit_tx: watch::Sender<ExitState>,
     app_cursor_keys: Arc<SyncRwLock<bool>>,
 ) {
-    let EngineLink {
-        requests: engine_tx,
-        query_replies: mut engine_query_replies,
-    } = engine;
     let mut read_buffer = [0u8; 8192];
     let mut pty_active = true;
     let mut child_exited = false;
@@ -171,16 +166,6 @@ pub async fn pty_actor(
                             pty_active = false;
                         }
                     }
-                }
-            }
-
-            // The engine detected a terminal query (DSR, DA1) in the output
-            // stream; write its reply to the PTY exactly as a real terminal
-            // answers, as input on the line (#3103). A write failure means
-            // the PTY is gone, same as a failed read.
-            Some(reply) = engine_query_replies.recv(), if pty_active => {
-                if pty.write_all(&reply).await.is_err() {
-                    pty_active = false;
                 }
             }
 

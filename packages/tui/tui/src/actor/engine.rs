@@ -15,7 +15,6 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::Error;
-use crate::actor::query::{QueryScanner, TerminalQuery};
 use crate::error::Result;
 use crate::types::{CursorPos, CursorShape, StyledCell};
 
@@ -40,18 +39,6 @@ pub enum EngineRequest {
     Scrollback {
         reply: oneshot::Sender<Result<Vec<String>>>,
     },
-}
-
-/// The actor's two-way link to the VT engine thread: requests flow in, and
-/// replies to terminal queries (DSR, DA1) flow back out to be written to the
-/// PTY as terminal input.
-pub struct EngineLink {
-    /// Byte feeds and read requests into the engine thread.
-    pub requests: Sender<EngineRequest>,
-    /// Reply bytes for queries the engine detected in the output stream.
-    /// Unbounded so the sync engine thread never blocks on the async actor;
-    /// replies are rare (one per query) and a few bytes each.
-    pub query_replies: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
 /// Map an `ix_vt` error into the crate's observable VT-engine error.
@@ -79,10 +66,9 @@ pub fn spawn(
     scrollback_lines: usize,
     cursor_shape: Arc<SyncRwLock<CursorShape>>,
     app_cursor_keys: Arc<SyncRwLock<bool>>,
-) -> Result<EngineLink> {
+) -> Result<Sender<EngineRequest>> {
     let (tx, rx) = std::sync::mpsc::channel::<EngineRequest>();
     let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
-    let (query_reply_tx, query_replies) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
     std::thread::Builder::new()
         .name("ix-vt-engine".to_owned())
@@ -98,7 +84,6 @@ pub fn spawn(
                 &app_cursor_keys,
                 &rx,
                 &init_tx,
-                &query_reply_tx,
             );
         })
         .map_err(|e| vt_engine_error_io(id, &e))?;
@@ -110,10 +95,7 @@ pub fn spawn(
         message: format!("VT engine thread exited before init: {e}"),
     })??;
 
-    Ok(EngineLink {
-        requests: tx,
-        query_replies,
-    })
+    Ok(tx)
 }
 
 /// Map a thread-spawn io error into the crate's VT-engine error.
@@ -145,7 +127,6 @@ fn engine_loop(
     app_cursor_keys: &Arc<SyncRwLock<bool>>,
     rx: &Receiver<EngineRequest>,
     init_tx: &SyncSender<Result<()>>,
-    query_reply_tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
 ) {
     let EngineConfig {
         id,
@@ -166,28 +147,10 @@ fn engine_loop(
     };
     let _ = init_tx.send(Ok(()));
 
-    let mut queries = QueryScanner::new();
     while let Ok(request) = rx.recv() {
         match request {
             EngineRequest::Process(bytes) => {
-                // Feed in segments split one past each detected query so a
-                // cursor-position reply reflects every byte the program
-                // printed before asking (#3103).
-                let mut fed = 0;
-                for detected in queries.scan(&bytes) {
-                    #[allow(
-                        clippy::indexing_slicing,
-                        reason = "scan yields offsets bounded by bytes.len()"
-                    )]
-                    terminal.vt_write(&bytes[fed..detected.end]);
-                    fed = detected.end;
-                    answer_query(&terminal, detected.query, query_reply_tx);
-                }
-                #[allow(
-                    clippy::indexing_slicing,
-                    reason = "fed is a scan offset bounded by bytes.len()"
-                )]
-                terminal.vt_write(&bytes[fed..]);
+                terminal.vt_write(&bytes);
                 // Refresh the cached cursor-key mode so the actor picks the
                 // right arrow-key form on the next write. The mode is set by
                 // the program's own output (terminfo `smkx`/`rmkx`), so reading
@@ -216,30 +179,6 @@ fn engine_loop(
             }
         }
     }
-}
-
-/// Answer a terminal query detected in the output stream, sending the reply
-/// bytes back to the actor to be written to the PTY as terminal input.
-///
-/// A dropped receiver means the actor is gone and the reply has nowhere to go;
-/// the engine keeps serving reads either way, so the send result is ignored.
-fn answer_query(
-    terminal: &ix_vt::Terminal,
-    query: TerminalQuery,
-    reply_tx: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-) {
-    let cursor = match query {
-        TerminalQuery::CursorPosition => match terminal.cursor() {
-            Ok(cursor) => cursor.viewport,
-            // No readable cursor means no honest position to report; staying
-            // silent behaves like a mute terminal, which the program's own
-            // timeout already handles (the pre-#3103 status quo, now only on
-            // this error path).
-            Err(_) => return,
-        },
-        TerminalQuery::OperatingStatus | TerminalQuery::PrimaryDeviceAttributes => None,
-    };
-    let _ = reply_tx.send(query.reply(cursor));
 }
 
 /// Read the full scrollback history, oldest line first.
@@ -368,64 +307,5 @@ pub fn snapshot_to_cursor(snapshot: &ix_vt::Snapshot) -> CursorPos {
         row,
         col,
         visible: cursor.visible,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use parking_lot::RwLock as SyncRwLock;
-    use uuid::Uuid;
-
-    use super::{EngineLink, EngineRequest};
-    use crate::types::CursorShape;
-
-    fn spawn_engine() -> EngineLink {
-        super::spawn(
-            Uuid::new_v4(),
-            24,
-            80,
-            100,
-            Arc::new(SyncRwLock::new(CursorShape::default())),
-            Arc::new(SyncRwLock::new(false)),
-        )
-        .expect("engine spawn failed")
-    }
-
-    async fn recv_reply(link: &mut EngineLink) -> Vec<u8> {
-        tokio::time::timeout(Duration::from_secs(5), link.query_replies.recv())
-            .await
-            .expect("no query reply within 5s (#3103 regression)")
-            .expect("engine closed the reply channel")
-    }
-
-    /// #3103: a program that writes DSR 6 must get `CSI row ; col R` back,
-    /// 1-based and reflecting the output that preceded the query, even when
-    /// the query bytes are split across PTY reads.
-    #[tokio::test]
-    async fn dsr_cursor_position_is_answered() {
-        let mut link = spawn_engine();
-        link.requests
-            .send(EngineRequest::Process(b"hello".to_vec()))
-            .expect("engine gone");
-        link.requests
-            .send(EngineRequest::Process(b"\x1b[6".to_vec()))
-            .expect("engine gone");
-        link.requests
-            .send(EngineRequest::Process(b"n".to_vec()))
-            .expect("engine gone");
-        assert_eq!(recv_reply(&mut link).await, b"\x1b[1;6R");
-    }
-
-    #[tokio::test]
-    async fn da1_and_operating_status_are_answered() {
-        let mut link = spawn_engine();
-        link.requests
-            .send(EngineRequest::Process(b"\x1b[c\x1b[5n".to_vec()))
-            .expect("engine gone");
-        assert_eq!(recv_reply(&mut link).await, b"\x1b[?62;22c");
-        assert_eq!(recv_reply(&mut link).await, b"\x1b[0n");
     }
 }
