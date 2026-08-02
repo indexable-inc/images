@@ -183,3 +183,119 @@ fn a_remote_delete_refuses_a_path_outside_the_destination() {
     );
     assert!(hostage.is_file());
 }
+
+/// Every file in a macOS checkout carries at least one extended attribute
+/// (`com.apple.provenance`), and bsdtar serialises xattrs as AppleDouble
+/// sidecars: a `._<name>` companion written next to every real file. A tree
+/// synced that way arrives with twice the files it should have, and the extra
+/// ones are not in the repo.
+///
+/// `tree-sync` is immune BY CONSTRUCTION, because `write_archive` builds the
+/// stream with the Rust `tar` crate rather than shelling out to the system
+/// `tar`, and it writes exactly the entries it is handed. This test exists to
+/// keep it that way: an "optimisation" that pipes through `/usr/bin/tar` on the
+/// sending side would reintroduce the fault, and it would not be caught by any
+/// other test here because every existing fixture writes files with no xattrs.
+///
+/// Observed cost of the fault before it was understood (ENG-11861): 14,528
+/// stray files in one sync, surfacing three layers away as a nix evaluation
+/// error about a patch series filename, because one of the sidecars was
+/// `._0001-update-nox.patch` and a guard correctly refused it.
+#[test]
+fn a_file_with_extended_attributes_arrives_without_an_appledouble_sidecar() {
+    let scratch = TempDir::new().expect("tempdir");
+    let source = scratch.path().join("source");
+    std::fs::create_dir_all(&source).expect("dirs");
+    source_repo(&source);
+
+    // Only meaningful where the platform actually has xattrs to serialise; the
+    // assertion below is unconditional so a Linux CI run still guards the
+    // destination, it simply cannot reproduce the source condition.
+    set_xattr(&source.join("src/main.rs"));
+
+    let dest = scratch.path().join("far/end");
+    let remote = remote(scratch.path());
+    let listing = tree::list(&source).expect("lists");
+    remote
+        .push(&source, &listing.entries, &dest, false, false)
+        .expect("pushes");
+
+    assert!(dest.join("src/main.rs").is_file(), "the real file arrived");
+    assert_no_apple_double(&dest);
+}
+
+/// Best-effort: tag a file with an extended attribute on platforms that have
+/// them. A failure here is not a test failure -- the destination assertion is
+/// the guard, and it holds whether or not the source could be tagged.
+fn set_xattr(path: &Path) {
+    let _ = std::process::Command::new("xattr")
+        .args(["-w", "com.apple.provenance", "tree-sync-test"])
+        .arg(path)
+        .status();
+}
+
+/// Fail if any AppleDouble sidecar reached `root`, naming the files rather than
+/// leaving the next reader to decode a `._` prefix.
+///
+/// Named separately from the test so it can be exercised directly; see
+/// `the_appledouble_assertion_actually_fires`.
+fn assert_no_apple_double(root: &Path) {
+    let strays = apple_double_files(root);
+    assert!(
+        strays.is_empty(),
+        "the transport added {} AppleDouble sidecar(s) that are not in the repo: {:?}. \
+         This is bsdtar serialising extended attributes; the sending side must build the \
+         archive itself (see `write_archive`) or set COPYFILE_DISABLE=1.",
+        strays.len(),
+        strays
+    );
+}
+
+fn apple_double_files(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("._")
+            {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The guard on the guard. `assert_no_apple_double` passing means nothing
+/// unless it can fail, and a sidecar-detector that never detects one is exactly
+/// the absence-shaped pass this whole ticket is about.
+#[test]
+fn the_appledouble_assertion_actually_fires() {
+    let scratch = TempDir::new().expect("tempdir");
+    let dir = scratch.path().join("planted");
+    std::fs::create_dir_all(dir.join("nested")).expect("dirs");
+    std::fs::write(dir.join("nested/._0001-update-nox.patch"), b"").expect("write");
+
+    assert_eq!(
+        apple_double_files(&dir).len(),
+        1,
+        "the detector must find a planted sidecar, including one nested below the root"
+    );
+
+    let caught = std::panic::catch_unwind(|| assert_no_apple_double(&dir));
+    assert!(
+        caught.is_err(),
+        "assert_no_apple_double must panic when a sidecar is present"
+    );
+}
