@@ -129,7 +129,7 @@ A **service** failing takes the whole group down. That is the difference between
 
 A service is `failed` only when the service itself failed: it exited before becoming ready, it exited while the run was still going, or it never satisfied `ready_when`. A service the runner stopped for any other reason — the run finished, the operator hit Ctrl-C, some other node failed — is `stopped`, which contributes nothing to the exit code.
 
-One consequence worth knowing: the runner learns that a node's process has exited by draining its output streams first and reaping it second, deliberately, so that the process group ID cannot be recycled while teardown is still using it. A surviving grandchild that holds the inherited pipe open therefore delays that detection. Nodes using `"stdio": "inherit"` have no pipes and so are detected the instant they exit.
+A service's death is noticed whether or not anything is still holding its output open. The runner normally learns a node exited by draining its streams and reaping it second — deliberately, so the process group ID cannot be recycled while teardown is still using it — but that alone cannot see an exit while a descendant holds a stream, and a service that backgrounds a child hands that child its stdout. Services therefore also carry a `waitid(WNOWAIT)` watch, which reports the exit and leaves the child reapable, so the group ID is still the runner's when it signals whatever is left. Measured before that existed: a service that exited `5` immediately was reported `stopped`, its dependent ran its full 90 seconds, and the run exited `0`. Same spec now finishes in 0.8s, reports `failed` with exit code 5, and exits 143.
 
 ## Child output
 

@@ -994,3 +994,44 @@ fn a_misspelled_field_is_rejected_rather_than_ignored() {
         "the error should name the typo and the field it was probably meant to be: {stderr}"
     );
 }
+
+#[test]
+fn a_grandchild_holding_the_pipe_cannot_hide_a_dead_service() {
+    // The regression this exists for: the runner used to learn a child had
+    // exited only by draining its streams first, and a backgrounded
+    // grandchild inherits stdout and holds it open. A service that exited 5
+    // immediately was reported `stopped`, the client ran its full 90 seconds,
+    // and the run exited 0. A dead dependency reported as a clean shutdown is
+    // the worst answer available, so this asserts the outcome and the code,
+    // not just the latency.
+    let spec = serde_json::json!({"nodes": {
+        "server": {
+            "kind": "service",
+            // `sleep 120 &` keeps the inherited stdout open after the leader
+            // is gone. That is the whole point of the fixture.
+            "command": ["sh", "-c", "sleep 120 & echo READY; exit 5"],
+            "ready_when": {"log_line": {"pattern": "READY"}},
+            "ready_timeout_secs": 20,
+        },
+        "client": {"command": ["sh", "-c", "sleep 90"], "depends_on": ["server"]},
+    }});
+    let started = Instant::now();
+    let RunResult { output, _dir } = run_spec(&spec, &["--output", "json"]);
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "the dead service went unnoticed until the client finished ({elapsed:?})"
+    );
+    let events = parse_events(&output.stdout);
+    let server = events
+        .iter()
+        .find(|e| e["event"] == "node_finished" && e["node"] == "server")
+        .expect("server finished");
+    assert_eq!(
+        server["outcome"], "failed",
+        "a service that exited must not be reported as one the runner stopped: {events:?}"
+    );
+    assert_eq!(server["exit_code"], 5, "the service's own code, not a signal");
+    assert_ne!(output.status.code(), Some(0), "the run must not exit clean");
+}

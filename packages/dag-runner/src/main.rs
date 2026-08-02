@@ -1137,6 +1137,55 @@ fn spawn_failed(
     }
 }
 
+/// Wait for `pid` to exit **without reaping it**, and answer with its exit
+/// code.
+///
+/// `capture_exit` drains both pipes before reaping, deliberately, so that the
+/// leader's process group ID cannot be recycled while teardown is still using
+/// it. The cost is that it cannot see an exit at all while anything still
+/// holds a stream open -- and a service that backgrounds a child hands that
+/// child its stdout. Measured before this existed: a service that exited 5
+/// immediately was reported `stopped`, and the run exited 0. A dead dependency
+/// reported as a clean shutdown is the worst answer available.
+///
+/// `WNOWAIT` is the primitive that resolves it: it reports the exit and leaves
+/// the child reapable, so the group ID is still ours and `killpg` is still
+/// safe when the caller tears the rest of the group down.
+async fn wait_for_death(pid: libc::pid_t) -> i32 {
+    tokio::task::spawn_blocking(move || {
+        // SAFETY: `siginfo_t` is a C struct `waitid` fills in; zeroing it is
+        // the documented way to prepare one. `WNOWAIT` leaves the child in a
+        // reapable state, so tokio still owns the reap.
+        let info = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            if libc::waitid(
+                libc::P_PID,
+                pid.cast_unsigned(),
+                &raw mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            ) != 0
+            {
+                // ECHILD means someone reaped first, which can only be the
+                // other `select!` arm; it has the status and wins the race.
+                return None;
+            }
+            info
+        };
+        // SAFETY: reading the `si_status` of a `WEXITED` result is exactly
+        // what the field is for.
+        Some(unsafe { info.si_status() })
+    })
+    .await
+    .unwrap_or(None)
+    // A join failure or a lost race both mean "let the other arm answer",
+    // which it does by resolving first; parking keeps this one out of the way.
+    .unwrap_or_else(|| {
+        // Unreachable in practice: `None` only happens when the reaping arm
+        // already won, and `select!` will have taken it.
+        1
+    })
+}
+
 /// Drain what the readers have and hand it back. A still-armed group means
 /// termination did not reap cleanly, so a descendant may hold a stream open
 /// indefinitely; abort the readers rather than wait on them.
@@ -1265,6 +1314,7 @@ async fn run_service(
     report_ready(&ctx.name, ctx.started, ctx.mode, ctx.pb.as_ref());
     let _ = ready_tx.send(Some(Readiness::Ready));
 
+    let pid = group.id.0;
     tokio::select! {
         biased;
         _ = wait_for_shutdown(&mut rx) => {
@@ -1281,6 +1331,27 @@ async fn run_service(
             // this point can produce a result anyone should believe.
             ctx.shutdown.request(Reason::Aborted);
             service_exit(group, exit, "while the run was still going")
+        }
+        code = wait_for_death(pid) => {
+            // The same event, seen without waiting on the pipes. Reached when
+            // a descendant still holds a stream open; the leader is a zombie
+            // here, so the group ID is still ours and the teardown below can
+            // safely signal whatever is left holding it.
+            ctx.shutdown.request(Reason::Aborted);
+            let streams = stop(
+                child,
+                group,
+                capture,
+                format!(
+                    "dag-runner: service exited (status {code}) while the run was still going\n"
+                ),
+            )
+            .await;
+            CommandOutput {
+                outcome: Outcome::Failed(code),
+                stdout: streams.stdout,
+                stderr: streams.stderr,
+            }
         }
     }
 }
