@@ -426,14 +426,18 @@ fn cycle_is_rejected_before_running() {
 
 #[test]
 fn sigint_cancels_running_nodes_with_exit_130() {
-    use std::thread;
-    use std::time::Duration;
-    let spec = r#"{"nodes":{
-        "a":{"command":["sh","-c","sleep 30"]}
-    }}"#;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("spec.json");
-    std::fs::write(&path, spec).unwrap();
+    let pid_path = dir.path().join("node.pid");
+    // Wait for the node to say it is running rather than guessing at how long
+    // that takes. A fixed sleep raced the runner's own start-up -- SIGINT
+    // before the handler is installed kills the runner outright, so the test
+    // failed under parallel load and passed alone.
+    let spec = serde_json::json!({"nodes": {"a": {
+        "command": ["sh", "-c", "echo $$ > \"$DAG_RUNNER_PID_FILE\"; sleep 30"],
+        "env": {"DAG_RUNNER_PID_FILE": pid_path.to_str().expect("utf-8 temp path")},
+    }}});
+    std::fs::write(&path, serde_json::to_vec(&spec).expect("serialize spec")).unwrap();
     let bin = env!("CARGO_BIN_EXE_dag-runner");
     let mut child = std::process::Command::new(bin)
         .arg("--output")
@@ -442,8 +446,7 @@ fn sigint_cancels_running_nodes_with_exit_130() {
         .spawn()
         .expect("spawn");
     let pid = child.id();
-    // Give the runner time to spawn the sleep child and enter its wait.
-    thread::sleep(Duration::from_millis(300));
+    wait_for_pid(&pid_path);
     send_sigint(pid);
     let exit = child.wait().expect("wait for runner");
     assert_eq!(exit.code(), Some(130), "expected exit 130 after SIGINT");
