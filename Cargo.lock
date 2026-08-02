@@ -2872,10 +2872,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "futures",
  "indicatif",
  "libc",
  "progress-style",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
