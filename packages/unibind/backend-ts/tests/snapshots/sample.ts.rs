@@ -67,32 +67,31 @@ mod __unibind_ts_sample_ts {
             ::std::option::Option::None => ::std::result::Result::Ok(future.await),
         }
     }
-    /// A `bigint` JavaScript sent that the declared Rust width cannot
-    /// hold. Deliberately not a `__unibind__:` reason: this is a caller
-    /// mistake, not a boundary failure the user's error enum declared,
-    /// so it surfaces as a plain napi error rather than one of the
-    /// generated classes.
+    /// A `number` JavaScript sent that the declared Rust width cannot
+    /// hold exactly: fractional, non-finite, negative where unsigned,
+    /// or outside the double-exact +/-(2^53 - 1) range. Deliberately not
+    /// a `__unibind__:` reason: this is a caller mistake, not a boundary
+    /// failure the user's error enum declared, so it surfaces as a plain
+    /// napi error rather than one of the generated classes.
     #[allow(dead_code)]
-    fn __unibind_bigint_out_of_range(width: &str) -> ::napi::Error {
+    fn __unibind_int_out_of_range(width: &str, value: f64) -> ::napi::Error {
         ::napi::Error::new(
             ::napi::Status::InvalidArg,
-            ::std::format!("bigint does not fit in a Rust `{}`", width),
+            ::std::format!("{} is not a safe integer for a Rust `{}`", value, width),
         )
     }
-    /// Narrow a JavaScript `bigint` to `i64`, refusing a value outside the width instead of truncating it.
+    /// Narrow a JavaScript `number` to `i64`, refusing a value that is not a safe integer in the width instead of truncating it.
     #[allow(dead_code)]
-    fn __unibind_bigint_to_i64(
-        value: ::napi::bindgen_prelude::BigInt,
-    ) -> ::napi::Result<i64> {
-        let (__unibind_value, __unibind_exact) = value.get_i64();
-        if !__unibind_exact {
-            return ::std::result::Result::Err(__unibind_bigint_out_of_range("i64"));
+    fn __unibind_number_to_i64(value: f64) -> ::napi::Result<i64> {
+        const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+        if !value.is_finite() || value.fract() != 0.0 || value.abs() > MAX_SAFE_INTEGER {
+            return ::std::result::Result::Err(__unibind_int_out_of_range("i64", value));
         }
-        ::std::result::Result::Ok(__unibind_value)
+        ::std::result::Result::Ok(value as i64)
     }
     #[::napi_derive::napi(object, js_name = "SampleRow")]
     pub struct __UnibindRecordRow {
-        pub id: ::napi::bindgen_prelude::BigInt,
+        pub id: f64,
         #[napi(js_name = "rowLabel")]
         pub name: ::std::string::String,
         pub tags: ::std::vec::Vec<::std::string::String>,
@@ -105,7 +104,7 @@ mod __unibind_ts_sample_ts {
         /// The record as JavaScript sees it.
         fn __unibind_from(value: __unibind_user::Row) -> Self {
             Self {
-                id: ::napi::bindgen_prelude::BigInt::from(value.id),
+                id: value.id as f64,
                 name: value.name,
                 tags: value.tags,
                 weights: value.weights,
@@ -113,11 +112,11 @@ mod __unibind_ts_sample_ts {
                 home: value.home,
             }
         }
-        /// The record as the user's code takes it; a `bigint` outside a
+        /// The record as the user's code takes it; a `number` outside a
         /// field's declared width is refused here rather than truncated.
         fn __unibind_into(self) -> ::napi::Result<__unibind_user::Row> {
             ::std::result::Result::Ok(__unibind_user::Row {
-                id: __unibind_bigint_to_i64(self.id)?,
+                id: __unibind_number_to_i64(self.id)?,
                 name: self.name,
                 tags: self.tags,
                 weights: self.weights,
@@ -202,18 +201,18 @@ mod __unibind_ts_sample_ts {
     ///Add, slowly.
     #[::napi_derive::napi]
     pub async fn slow_add(
-        a: ::napi::bindgen_prelude::BigInt,
-        b: ::napi::bindgen_prelude::BigInt,
+        a: f64,
+        b: f64,
         __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
-    ) -> ::napi::Result<::napi::bindgen_prelude::BigInt> {
-        let a = __unibind_bigint_to_i64(a)?;
-        let b = __unibind_bigint_to_i64(b)?;
+    ) -> ::napi::Result<f64> {
+        let a = __unibind_number_to_i64(a)?;
+        let b = __unibind_number_to_i64(b)?;
         let value = __unibind_with_abort(
                 __unibind_signal,
                 __unibind_user::slow_add(a, b),
             )
             .await?;
-        ::std::result::Result::Ok(::napi::bindgen_prelude::BigInt::from(value))
+        ::std::result::Result::Ok(value as f64)
     }
     ///Fetch one row.
     #[::napi_derive::napi]
@@ -262,10 +261,8 @@ mod __unibind_ts_sample_ts {
     }
     ///Open a counter from a free function (the non-constructor path).
     #[::napi_derive::napi]
-    pub fn open_counter(
-        start: ::napi::bindgen_prelude::BigInt,
-    ) -> ::napi::Result<__UnibindObjectCounter> {
-        let start = __unibind_bigint_to_i64(start)?;
+    pub fn open_counter(start: f64) -> ::napi::Result<__UnibindObjectCounter> {
+        let start = __unibind_number_to_i64(start)?;
         let value = __unibind_user::open_counter(start);
         ::std::result::Result::Ok(__UnibindObjectCounter::__unibind_from(value))
     }
@@ -287,11 +284,9 @@ mod __unibind_ts_sample_ts {
     impl __UnibindObjectCounter {
         ///Open a counter.
         #[::napi_derive::napi(constructor)]
-        pub fn new(
-            start: ::std::option::Option<::napi::bindgen_prelude::BigInt>,
-        ) -> ::napi::Result<Self> {
+        pub fn new(start: ::std::option::Option<f64>) -> ::napi::Result<Self> {
             let start = match start {
-                ::std::option::Option::Some(start) => __unibind_bigint_to_i64(start)?,
+                ::std::option::Option::Some(start) => __unibind_number_to_i64(start)?,
                 ::std::option::Option::None => 0,
             };
             match __unibind_user::Counter::new(start) {
@@ -305,18 +300,18 @@ mod __unibind_ts_sample_ts {
         }
         ///Current value.
         #[::napi_derive::napi]
-        pub fn value(&self) -> ::napi::bindgen_prelude::BigInt {
+        pub fn value(&self) -> f64 {
             let value = self.inner.value();
-            ::napi::bindgen_prelude::BigInt::from(value)
+            value as f64
         }
         ///Add and return the new value.
         #[::napi_derive::napi(js_name = "addSlowly")]
         pub async fn add(
             &self,
-            amount: ::napi::bindgen_prelude::BigInt,
+            amount: f64,
             __unibind_signal: ::std::option::Option<__UnibindAbortSignal>,
-        ) -> ::napi::Result<::napi::bindgen_prelude::BigInt> {
-            let amount = __unibind_bigint_to_i64(amount)?;
+        ) -> ::napi::Result<f64> {
+            let amount = __unibind_number_to_i64(amount)?;
             let value = __unibind_with_abort(
                     __unibind_signal,
                     {
@@ -327,9 +322,7 @@ mod __unibind_ts_sample_ts {
                 .await?;
             match value {
                 ::std::result::Result::Ok(value) => {
-                    ::std::result::Result::Ok(
-                        ::napi::bindgen_prelude::BigInt::from(value),
-                    )
+                    ::std::result::Result::Ok(value as f64)
                 }
                 ::std::result::Result::Err(error) => {
                     ::std::result::Result::Err(::napi::Error::from(error))
@@ -472,11 +465,9 @@ mod __unibind_ts_sample_ts {
     impl __UnibindStreamCounterWatch {
         /// The next element, or `null` once the stream ends or closes.
         #[::napi_derive::napi]
-        pub async fn next(
-            &self,
-        ) -> ::std::option::Option<::napi::bindgen_prelude::BigInt> {
+        pub async fn next(&self) -> ::std::option::Option<f64> {
             let value = self.stream.next().await?;
-            ::std::option::Option::Some(::napi::bindgen_prelude::BigInt::from(value))
+            ::std::option::Option::Some(value as f64)
         }
         /// Drop the stream early; a pull in flight resolves `null`, and
         /// the producer sees its stream dropped.

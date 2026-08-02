@@ -7,6 +7,9 @@ Everything the py generator renders appears here once.
 import os
 
 
+import collections.abc
+
+
 class SampleError(ValueError):
     """Everything the sample boundary raises."""
 
@@ -36,6 +39,28 @@ class Row:
     @property
     def scores(self) -> dict[str, float]: ...
 
+    def to_dict(self) -> dict[str, object]:
+        """Shallow dict of this record's fields, keyed by their Python
+        names. Nested records stay objects; call `to_dict` on them to
+        go deeper.
+        """
+
+    def keys(self) -> list[str]: ...
+
+    def values(self) -> list[object]: ...
+
+    def items(self) -> list[tuple[str, object]]: ...
+
+    def get(self, key: str, default: object | None = None) -> object | None: ...
+
+    def __getitem__(self, key: str) -> object: ...
+
+    def __contains__(self, key: str) -> bool: ...
+
+    def __len__(self) -> int: ...
+
+    def __iter__(self) -> collections.abc.Iterator[str]: ...
+
 
 class Source:
     def __init__(self, path: str | os.PathLike[str]) -> None: ...
@@ -43,6 +68,28 @@ class Source:
     @property
     def path(self) -> str:
         """Where the row came from."""
+
+    def to_dict(self) -> dict[str, object]:
+        """Shallow dict of this record's fields, keyed by their Python
+        names. Nested records stay objects; call `to_dict` on them to
+        go deeper.
+        """
+
+    def keys(self) -> list[str]: ...
+
+    def values(self) -> list[object]: ...
+
+    def items(self) -> list[tuple[str, object]]: ...
+
+    def get(self, key: str, default: object | None = None) -> object | None: ...
+
+    def __getitem__(self, key: str) -> object: ...
+
+    def __contains__(self, key: str) -> bool: ...
+
+    def __len__(self) -> int: ...
+
+    def __iter__(self) -> collections.abc.Iterator[str]: ...
 
 
 class Store:
@@ -137,3 +184,4 @@ async def ping() -> bool:
 
 
 __version__: str
+

@@ -41,3 +41,12 @@ __all__ = [
     "write_file",
 ]
 
+import collections.abc as _collections_abc
+
+for _record in (
+    Row,
+    Source,
+):
+    _collections_abc.Mapping.register(_record)
+del _collections_abc, _record
+

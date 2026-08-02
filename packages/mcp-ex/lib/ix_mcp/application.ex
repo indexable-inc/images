@@ -67,7 +67,8 @@ defmodule IxMcp.Application do
         {Task.Supervisor, name: IxMcp.PrWatch.Supervisor},
         # The depth-1 subagent surface (index#3700): harness first, then the
         # ledger that drains its lead mailbox.
-        {AgentHarness, name: IxMcp.Agents.Harness, runner: IxMcp.Agents.CliRunner},
+        {IxMcp.Agents.ForkGuard, enabled: loom?()},
+        {AgentHarness, name: IxMcp.Agents.Harness, runner: agent_runner()},
         {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
       ] ++ issue_watch() ++ transport()
 
@@ -84,6 +85,12 @@ defmodule IxMcp.Application do
       max_restarts: 10,
       name: IxMcp.Supervisor
     )
+  end
+
+  defp loom?, do: is_binary(System.get_env("LOOM_PARENT_VM"))
+
+  defp agent_runner do
+    if loom?(), do: IxMcp.Agents.LoomRunner, else: IxMcp.Agents.CliRunner
   end
 
   # index#3539: without ERL_CRASH_DUMP the BEAM writes erl_crash.dump into

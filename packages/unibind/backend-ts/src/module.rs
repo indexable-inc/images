@@ -47,7 +47,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     for rec in &interface.records {
         record::check_record(rec)?;
     }
-    let bigint = convert::helpers(interface, &mirrored);
+    let narrowers = convert::helpers(interface, &mirrored);
     let mirrors = interface
         .records
         .iter()
@@ -85,7 +85,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         mod #glue_ident {
             #user_alias
             #signal
-            #bigint
+            #narrowers
             #(#mirrors)*
             #(#conversions)*
             #(#wrappers)*

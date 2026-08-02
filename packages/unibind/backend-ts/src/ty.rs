@@ -168,7 +168,7 @@ pub fn pass(ty: &ir::Type, expr: &TokenStream) -> TokenStream {
 }
 
 /// Adapt the user's return value to the wrapper's declared return type:
-/// widen 64-bit integers (and the records holding them) into their `BigInt`
+/// widen 64-bit integers (and the records holding them) into their `f64`
 /// shape, wrap bytes into `Buffer`, wrap constructed objects into their
 /// handle.
 pub fn ret(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> TokenStream {
@@ -217,13 +217,14 @@ pub fn stream_class_ident(owner: Option<&str>, export: &str) -> Ident {
     Ident::new(&name, Span::call_site())
 }
 
-/// A 64-bit integer is declared as napi's `BigInt` in both directions;
-/// `crate::convert` owns the adaptation to and from the user's own width.
-/// Everything narrower crosses as its own Rust type, which napi carries as
-/// a JavaScript `number`.
+/// A 64-bit integer is declared as `f64` -- a JavaScript `number` -- in both
+/// directions; `crate::convert` owns the checked adaptation to and from the
+/// user's own width (inbound values that are fractional or outside the safe
+/// integer range are refused, never truncated). Everything narrower crosses
+/// as its own Rust type, which napi carries as a `number` natively.
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
-    if convert::is_bigint(kind) {
-        return quote!(::napi::bindgen_prelude::BigInt);
+    if convert::is_wide_int(kind) {
+        return quote!(f64);
     }
     let ident = Ident::new(kind.rust_name(), Span::call_site());
     quote!(#ident)

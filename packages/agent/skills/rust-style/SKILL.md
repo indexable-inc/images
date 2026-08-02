@@ -9,12 +9,27 @@ Repo-owned crates, fixtures, examples, and generated manifests use Rust edition
 2024. Fix compatibility issues directly and document unavoidable upstream
 blockers next to the exception.
 
-Do not run `cargo fmt`. The repo does not enforce `rustfmt`, and running it
-produces diff noise unrelated to the change. Style is enforced by Clippy and
-code review.
+Whether to format Rust depends on the repo, and this skill loads in both.
+
+In **ix**, run `nix fmt -- <paths>`. Formatting is enforced: the `treefmt-check`
+stage of `just lint` runs the exact rustfmt the `rust-toolchain.toml` nightly
+pins, over `crates/**/*.rs` and `nix/**/*.rs`
+(`nix/checks/treefmt.nix`). It has been enforced since ix#8162, before which
+committed code had drifted from that rustfmt.
+
+In **index**, do not run `cargo fmt`. Nothing enforces `rustfmt` there -- the
+repo has no `rustfmt.toml` and none of the fifteen `nix run .#lint` stages
+formats Rust -- so running it produces diff noise unrelated to the change.
+Style is enforced by Clippy and code review.
 
 To run the same per-unit clippy that CI runs (the `llm-clippy` fork with
-`fallible_int_fallback` and `anonymous_tuple_return_type`):
+`fallible_int_fallback` and `anonymous_tuple_return_type`), reach for the
+attribute belonging to the repo you are in. They are spelled differently and
+neither resolves in the other, so the wrong one fails with a bare
+`does not provide attribute`, whose obvious recovery is the bare `cargo clippy`
+this whole section exists to stop you running.
+
+In **index**:
 
 ```sh
 nix build .#ciChecks.x86_64-linux.<unit>.clippy   # <unit> is usually rust-<crate-name>
@@ -29,6 +44,25 @@ top-level names for it returns a single false positive:
 ```sh
 nix eval --json .#ciChecks.x86_64-linux \
   --apply 'cs: builtins.filter (n: cs.${n} ? clippy) (builtins.attrNames cs)'
+```
+
+In **ix**, there is no `ciChecks`. The per-crate checks hang off
+`legacyPackages`, keyed by the **cargo package name** -- the `[package] name` in
+the crate's `Cargo.toml`, not the directory and not a `rust-` prefix:
+
+```sh
+nix build .#legacyPackages.x86_64-linux.rustClippyChecksByPackage.<cargo-package-name>
+```
+
+The CLI lives at `crates/ix/cli` and its package is `ix`, so its check is
+`rustClippyChecksByPackage.ix`. It sits under `legacyPackages` rather than
+`checks` because the names come from a planner IFD and the values are nested
+attrsets, and it evaluates only on Linux systems
+(`nix/flake/outputs/workspace.nix`). To list the 250 keys rather than guess:
+
+```sh
+nix eval --json .#legacyPackages.x86_64-linux.rustClippyChecksByPackage \
+  --apply builtins.attrNames
 ```
 
 Prefer names that preserve the concept's path. Local aliases may shorten noisy

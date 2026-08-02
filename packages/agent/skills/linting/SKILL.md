@@ -64,19 +64,89 @@ Rust is where the gap is widest and fails most quietly. Both repos build Rust
 against a jj megamerge fork of clippy carrying eleven restriction lints that
 stock clippy has never heard of (`packages/llm-clippy`, `lib/fork-packages.nix`
 in index; ix reaches the same fork through its per-unit clippy graphs in
-`lib/workspace-cargo-unit.nix`). Stock clippy does not skip an unknown lint; it
-raises `error[E0602]: unknown lint` and the crate never compiles, so no lint
-pass runs over the code at all.
+`lib/workspace-cargo-unit.nix`).
 
-That failure is dangerous because of its shape: the run produces no findings,
-and no findings looks like a pass. On 2026-07-28 an agent ran `cargo clippy`,
-grepped the output for findings, found none, and reported the crate clean. The
-compile had aborted. Running the forked driver over the same code found two
-real violations, both already merged: a struct over the three-bool limit and a
-function over the hundred-line limit.
+An unknown lint is not what breaks. Measured against stock clippy 0.1.97 on
+2026-08-02, a fork-only lint name produces `warning[E0602]: unknown lint`, exit
+0, and every real finding still reported:
+
+```
+$ cargo clippy -- -D clippy::anonymous_tuple_return_type   # fork-only name
+warning[E0602]: unknown lint: `clippy::anonymous_tuple_return_type`
+  = note: `#[warn(unknown_lints)]` on by default
+warning: the loop variable `i` is only used to index `v`    # the real finding, still there
+$ echo $?
+0
+```
+
+The same holds through `[lints.clippy]` in Cargo.toml, which is how both
+workspaces declare them. Under `-D warnings` the run does fail, exit 101, but
+loudly rather than silently. So an ambient clippy still misses the eleven
+fork-only lints, which is reason enough to use the pinned driver, but it does
+not go blind.
+
+**An unknown `clippy.toml` key is what breaks, and it breaks silently.** Clippy
+reads the config before it lints anything, so one unrecognised field aborts the
+run with no findings at all:
+
+```
+$ cat clippy.toml
+max-fn-line-count = 100
+$ cargo clippy
+error: error reading Clippy's configuration file: unknown field `max-fn-line-count`,
+       expected one of absolute-paths-allowed-crates, ...
+$ echo $?
+101
+```
+
+Zero findings, and a grep for findings sees exactly what a clean crate looks
+like. That is the shape worth fearing, and `clippy.toml` is resolved from the
+crate directory upward, so a single fork-only key at the repo root silences
+every crate under it.
+
+ix's committed `clippy.toml` is clean today: 16 keys, all of which stock clippy
+0.1.97 accepts. The hazard is latent, and it arms the moment anyone adds a key
+the fork understands and stock clippy does not.
 
 So check the exit code, never the absence of a string in a log. `grep -c error`
 returning zero is not a pass when the exit code was 101.
+
+A `clippy.toml` key must land in the same change that ships its lint in the
+fork, never ahead of it. A forward declaration, the key added first so the lint
+has its config waiting, aborts clippy for every crate in the workspace until the
+fork catches up. Measured on 2026-08-02: with such a key, 4 crates failed purely
+from the config error; with it removed, 1 failed for a pre-existing and
+unrelated reason. It nearly reached main the same night.
+
+## Reading a failed build: two traps that compose
+
+The excerpt nix prints on failure is a fixed-length tail, so a chatty epilogue
+pushes the real diagnostic out of it. On a failing clippy gate on 2026-08-02 the
+last twelve lines of that excerpt were `+ return 0` shell-hook noise and the
+path to `nix log`, with the diagnostic surviving only higher up. Where the tail
+is all epilogue, `nix log <drv>` is the only way to see anything.
+
+Then the second trap fires on what `nix log` gives you. The stored log keeps the
+builder's ANSI colour codes, even though the live `nix build` output on a pipe
+has none, so an anchored match against it silently finds nothing. Same
+derivation, same failure, both counts measured:
+
+```
+                     escapes   grep -c '^error'  after stripping
+nix log <drv>             24                  0                2
+nix build stderr           0                  2                2
+```
+
+Zero from the first row reads exactly like a clean build. Strip the escapes
+before matching:
+
+```sh
+nix log <drv> | sed 's/\x1b\[[0-9;]*m//g' | grep -n '^error'
+```
+
+Together they are how a failing build gets looked at twice and reported clean:
+the excerpt shows only hook noise, so you reach for `nix log`, and the grep on
+its coloured output returns zero.
 
 ### And an empty run is the good case; the bad one is a full one
 
@@ -106,9 +176,16 @@ In index, put the pinned driver on PATH directly:
 nix build .#llm-clippy --no-link --print-out-paths   # then PATH=<out>/bin:$PATH
 ```
 
-ix exposes no such output -- `just lint` does not cover Rust there at all
-(clippy runs in the `rust` CI phase, per cargo-unit crate). Reach it through
-the unit build rather than a bare `cargo clippy`.
+ix exposes no such output, and `just lint` does not run clippy there at all
+(clippy runs in the `rust` CI phase, per cargo-unit crate). Build the per-crate
+check, which carries the forked driver:
+
+```sh
+nix build .#legacyPackages.x86_64-linux.rustClippyChecksByPackage.<cargo-package-name>
+```
+
+keyed by the crate's `[package] name`. Never substitute a bare `cargo clippy`
+for it -- that is the abort described above.
 
 ## A green `nix run .#lint` does not mean the clone gate is green
 

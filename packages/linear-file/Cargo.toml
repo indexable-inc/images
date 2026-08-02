@@ -1,0 +1,23 @@
+[package]
+name = "linear-file"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "File a Linear issue from the command line and print the identifier and URL as JSON"
+license = "MIT"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+# One short-lived synchronous process, so a blocking client keeps it free of an
+# async runtime. Same client the friction-report hook uses against this API.
+reqwest = { workspace = true, features = ["blocking", "json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[[bin]]
+name = "linear-file"
+path = "src/main.rs"

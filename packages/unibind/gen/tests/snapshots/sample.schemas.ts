@@ -7,7 +7,7 @@ import { z } from "zod";
 
 export const SampleRow = z
   .object({
-    id: z.bigint().describe("Identifier."),
+    id: z.number().int().describe("Identifier."),
     rowLabel: z.string(),
     tags: z.array(z.string()),
     weights: z.record(z.string(), z.number()),
@@ -17,3 +17,4 @@ export const SampleRow = z
   })
   .describe("A row.");
 export type SampleRow = z.infer<typeof SampleRow>;
+

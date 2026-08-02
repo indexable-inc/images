@@ -1,6 +1,7 @@
 {
   lib,
   ix,
+  repoPackages,
 }: let
   inherit (ix) pkgs;
 
@@ -38,6 +39,27 @@
   };
 
   ixCli = pkgs.callPackage ./ix-cli.nix {inherit ix;};
+  claudeCode = repoPackages.claude-code.override {
+    systemTools.Agent = false;
+  };
+  loomPrompt = pkgs.writeText "loom-system-prompt.md" ''
+    You are the lead coding agent in a Loom control VM. Work normally and talk
+    to the user normally. For every delegated subagent, use the index MCP exec
+    tool and call `Agents.spawn(brief, backend: :claude, cwd: cwd)`. Loom runs
+    that agent in its own snapshot fork of this VM and stops the fork when the
+    agent finishes. Use `Agents.status`, `Agents.await`, `Agents.send`, and
+    `Agents.report` to coordinate them. The native Agent tool is intentionally
+    unavailable because it would run the child inside this control VM.
+  '';
+  loomLauncher = pkgs.replaceVars ./loom.sh {
+    shell = pkgs.runtimeShell;
+    claude = lib.getExe claudeCode;
+    prompt = loomPrompt;
+  };
+  remoteClaude = pkgs.replaceVars ./loom-remote-claude.sh {
+    shell = pkgs.runtimeShell;
+    ix = lib.getExe ixCli;
+  };
 
   package = pkgs.stdenv.mkDerivation {
     pname = "loom";
@@ -72,10 +94,17 @@
 
     installPhase = ''
       runHook preInstall
-      makeWrapper "$out/lib/loom/bin/loom" "$out/bin/loom" \
+      makeWrapper "$out/lib/loom/bin/loom" "$out/bin/loom-console" \
         --set RELEASE_DISTRIBUTION none \
         --set-default RELEASE_TMP /tmp \
         --add-flags start_iex
+      install -Dm755 ${loomLauncher} "$out/bin/loom"
+      install -Dm755 ${remoteClaude} "$out/bin/loom-remote-claude"
+      install -Dm755 ${./loom-claude.sh} "$out/bin/loom-claude"
+      substituteInPlace "$out/bin/loom-claude" \
+        --replace-fail '@claude@' ${lib.getExe claudeCode}
+      wrapProgram "$out/bin/loom" \
+        --prefix PATH : ${lib.makeBinPath [pkgs.coreutils pkgs.gawk pkgs.iproute2]}
       runHook postInstall
     '';
 
@@ -91,7 +120,8 @@ in
     passthru =
       (old.passthru or {})
       // {
-        inherit ixCli;
+        inherit claudeCode ixCli;
+        mcp = repoPackages.mcp-ex;
         tests.elixir = elixirCheck;
       };
   })

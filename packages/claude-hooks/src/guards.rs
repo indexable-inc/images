@@ -89,9 +89,85 @@ fn is_recursive_flag(tok: &str) -> bool {
         && tok[1..].contains(['r', 'R'])
 }
 
-/// True when `stage` (a statement's first pipe stage) runs `grep` recursively so
-/// it walks a tree (a `... | grep -r` reading a pipe does not traverse).
-fn grep_walks_tree(stage: &str) -> bool {
+/// Grep options whose value is the next token, so it is never a path operand.
+/// `-e`/`-f`/`--regexp`/`--file` also mean the first bare operand is a file
+/// rather than the pattern, which `grep_walks_tree` reads separately.
+const GREP_VALUE_OPTS: &[&str] = &[
+    "-e",
+    "--regexp",
+    "-f",
+    "--file",
+    "-m",
+    "--max-count",
+    "-A",
+    "--after-context",
+    "-B",
+    "--before-context",
+    "-C",
+    "--context",
+    "-d",
+    "--directories",
+    "-D",
+    "--devices",
+    "--binary-files",
+    "--color",
+    "--colour",
+    "--label",
+    "--include",
+    "--exclude",
+    "--exclude-dir",
+    "--exclude-from",
+    "--group-separator",
+];
+
+/// The path operands of a `grep` call: everything that is neither a flag, a
+/// flag's value, nor the pattern. Options are matched against
+/// `GREP_VALUE_OPTS`, and the leading bare word is the pattern unless
+/// `-e`/`-f` already supplied one.
+fn grep_path_operands(toks: &[&str]) -> Vec<String> {
+    let pattern_is_an_option = toks.iter().take_while(|t| **t != "--").any(|t| {
+        matches!(*t, "-e" | "--regexp" | "-f" | "--file")
+            || t.starts_with("--regexp=")
+            || t.starts_with("--file=")
+    });
+    let mut out = Vec::new();
+    let mut pattern_seen = pattern_is_an_option;
+    let mut only_operands_now = false;
+    let mut it = toks.iter();
+    while let Some(tok) = it.next() {
+        if !only_operands_now {
+            if *tok == "--" {
+                only_operands_now = true;
+                continue;
+            }
+            if tok.starts_with('-') && tok.len() > 1 {
+                if GREP_VALUE_OPTS.contains(tok) {
+                    it.next();
+                }
+                continue;
+            }
+        }
+        if !pattern_seen {
+            pattern_seen = true;
+            continue;
+        }
+        out.push((*tok).to_owned());
+    }
+    out
+}
+
+/// True when `stage` (a statement's first pipe stage) runs `grep` recursively
+/// over a tree (a `... | grep -r` reading a pipe does not traverse).
+///
+/// A recursive flag alone is not the dangerous shape: `grep -rniE pat a.md b.md`
+/// reads two named files and traverses nothing, and denying it taught agents
+/// that the guard fires on correct commands (ENG-11808). What walks a tree is a
+/// directory operand, or no operand at all, which recurses the working
+/// directory. Operands are resolved against `cwd` so the check reads the real
+/// filesystem rather than guessing from the spelling; an operand that does not
+/// resolve to a regular file counts as a tree, since an unreadable guess should
+/// fall on the safe side.
+fn grep_walks_tree(stage: &str, cwd: Option<&str>) -> bool {
     let toks: Vec<&str> = stage.split_whitespace().collect();
     let mut i = 0;
     while i < toks.len() && (is_env_assignment(toks[i]) || GREP_PREFIXES.contains(&toks[i])) {
@@ -100,15 +176,20 @@ fn grep_walks_tree(stage: &str) -> bool {
     if toks.get(i) != Some(&"grep") {
         return false;
     }
-    for t in &toks[i + 1..] {
-        if *t == "--" {
-            break; // everything after -- is operands, not flags
-        }
-        if is_recursive_flag(t) {
-            return true;
-        }
+    let args = &toks[i + 1..];
+    let recursive = args
+        .iter()
+        .take_while(|t| **t != "--")
+        .any(|t| is_recursive_flag(t));
+    if !recursive {
+        return false;
     }
-    false
+    let operands = grep_path_operands(args);
+    if operands.is_empty() {
+        return true; // no path operand: grep -r recurses the working directory
+    }
+    let base = std::path::Path::new(cwd.unwrap_or("."));
+    !operands.iter().all(|operand| base.join(operand).is_file())
 }
 
 /// Diff-producing git subcommands whose output is rendered by `diff.external`.
@@ -230,6 +311,84 @@ fn ext_diff_offender(cmd: &str) -> Option<String> {
     None
 }
 
+/// Drop every heredoc body from `cmd`, leaving the commands that surround it.
+///
+/// A heredoc payload is data, not shell: `cat > notes.md <<EOF` followed by a
+/// line naming the discard-stderr idiom writes documentation about the habit
+/// and does not practise it. Scanning the body denied exactly the commands that
+/// explain the rule (ENG-11808). The delimiter is read verbatim after `<<` or
+/// `<<-` with any surrounding quotes removed, and the body runs to the first
+/// line equal to it, leading whitespace allowed, which covers `<<-` and costs
+/// nothing else.
+///
+/// Accepted miss: a literal `<<WORD` inside a quoted string opens a heredoc
+/// that never terminates, so everything after it is dropped and a later
+/// redirect goes unseen. Quotes cannot be stripped first without eating the
+/// body this exists to remove, and a missed deny is the safer half of the
+/// trade against denying a correct command.
+fn strip_heredocs(cmd: &str) -> String {
+    // The leading run of `<` is captured rather than matched, so a herestring
+    // (`<<<`, whose operand is one word and not a body) is told apart from a
+    // heredoc. Reading `<<<` as an opener swallowed the rest of the command.
+    let Ok(opener) =
+        regex::Regex::new(r#"(<+)-?\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_]*))"#)
+    else {
+        return cmd.to_owned();
+    };
+    let mut out = String::with_capacity(cmd.len());
+    let mut pending: Vec<String> = Vec::new();
+    for line in cmd.split_inclusive('\n') {
+        if let Some(delimiter) = pending.first() {
+            // Body lines and the terminator are both dropped: neither is a command.
+            if line.trim() == delimiter {
+                pending.remove(0);
+            }
+            continue;
+        }
+        // Every delimiter opened on this line, in order: `cmd <<A <<B` reads A's
+        // body first, then B's.
+        for caps in opener.captures_iter(line) {
+            if caps.get(1).is_none_or(|run| run.len() != 2) {
+                continue;
+            }
+            if let Some(word) = (2..=4).find_map(|i| caps.get(i)) {
+                pending.push(word.as_str().to_owned());
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// True where `cmd` discards stderr, or all output, to `/dev/null` with nothing
+/// catching the failure it hides.
+///
+/// `ls x 2>/dev/null || echo absent` is a deliberate existence check: the `||`
+/// branch is the error handling, so the discard is the point rather than a
+/// swallowed diagnostic. The guard therefore fires only where the redirect is
+/// the statement's only sink, meaning no `||` fallback follows it (ENG-11808).
+/// `&&` and `;` do not count, since one runs on success and the other runs
+/// unconditionally, and neither reads the failure.
+fn discards_stderr_unhandled(cmd: &str) -> bool {
+    let patterns = [
+        r"2\s*>>?\s*/dev/null",
+        r"&\s*>>?\s*/dev/null",
+        r">\s*/dev/null\s+2\s*>\s*&\s*1",
+    ];
+    let Ok(split) = regex::Regex::new(r"&&|;|\n") else {
+        return false;
+    };
+    split.split(cmd).any(|statement| {
+        let fallback_at = statement.find("||");
+        patterns.iter().any(|re| {
+            regex::Regex::new(re)
+                .ok()
+                .and_then(|r| r.find(statement))
+                .is_some_and(|m| fallback_at.is_none_or(|at| m.start() > at))
+        })
+    })
+}
+
 /// `PreToolUse(Bash)`: block recurring bad command shapes (output-to-/dev/null,
 /// recursive `grep -r`, `--no-verify`, a patch rendered by `diff.external`).
 /// Quote/escape-aware so a literal mention inside a commit message or `echo` is
@@ -241,47 +400,48 @@ pub fn bash_habits_guard() {
     }
     let raw = command_of(&payload);
 
-    // Match operators, not literal text inside a quoted string. Neutralize
-    // escaped chars, then drop quoted substrings (a real `2>/dev/null` /
-    // `grep -r` is never quoted). Accepted miss: a redirection genuinely wrapped
-    // in quotes or a heredoc body.
+    // Match operators, not literal text. Drop heredoc bodies first (they are
+    // data, not commands), neutralize escaped chars, then drop quoted
+    // substrings (a real `2>/dev/null` / `grep -r` is never quoted). Accepted
+    // miss: a redirection genuinely wrapped in quotes.
     let strip = |re: &str, s: String| {
         regex::Regex::new(re).map_or_else(|_| s.clone(), |r| r.replace_all(&s, " ").into_owned())
     };
-    let cmd = strip(r#""[^"]*""#, strip(r"'[^']*'", strip(r"\\.", raw.clone())));
+    let cmd = strip(
+        r#""[^"]*""#,
+        strip(r"'[^']*'", strip(r"\\.", strip_heredocs(&raw))),
+    );
+    let cwd = payload.get("cwd").and_then(Value::as_str);
 
-    // 1. stderr-to-null / all-to-null / the `>/dev/null 2>&1` idiom.
-    let to_null = [
-        r"2\s*>>?\s*/dev/null",
-        r"&\s*>>?\s*/dev/null",
-        r">\s*/dev/null\s+2\s*>\s*&\s*1",
-    ]
-    .iter()
-    .any(|re| regex::Regex::new(re).is_ok_and(|r| r.is_match(&cmd)));
-    if to_null {
+    // 1. stderr-to-null / all-to-null / the `>/dev/null 2>&1` idiom, where no
+    //    `||` fallback catches the failure the redirect hides.
+    if discards_stderr_unhandled(&cmd) {
         deny(
             "Don't discard stderr/output to /dev/null - you won't see why a command \
              failed, and 223 such calls in your history silently ate the error. \
              Filter specific noise instead: `cmd 2>&1 | grep -vE '<pattern>'`, or send \
-             stderr to a file you read (`cmd 2>/tmp/err`). Plain `>/dev/null` \
-             (stdout only, stderr kept) is fine. (bash-habits-guard hook)"
+             stderr to a file you read (`cmd 2>/tmp/err`). A deliberate existence check \
+             is fine with an explicit fallback (`ls x 2>/dev/null || echo absent`), and \
+             so is plain `>/dev/null` (stdout only, stderr kept). \
+             (bash-habits-guard hook)"
                 .to_owned(),
         );
         return;
     }
 
     // 2. Recursive grep that walks a tree: grep as the command of a statement's
-    //    first pipe stage.
+    //    first pipe stage, with a directory operand or no operand at all.
     let walks = regex::Regex::new(r"&&|\|\||;|\n").is_ok_and(|re| {
         re.split(&cmd)
-            .any(|statement| grep_walks_tree(statement.split('|').next().unwrap_or("")))
+            .any(|statement| grep_walks_tree(statement.split('|').next().unwrap_or(""), cwd))
     });
     if walks {
         deny(
             "Never recursive-`grep` a tree: it walks .git, result symlinks into \
              /nix/store, and node_modules, and can hit the 600s timeout. Use `rg` \
              (gitignore-aware drop-in: `rg <pat> [dir]`) or semantic search; scope \
-             any plain grep to a specific subdirectory. (bash-habits-guard hook)"
+             any plain grep to a specific subdirectory. Named regular files are \
+             allowed, recursive flag or not. (bash-habits-guard hook)"
                 .to_owned(),
         );
         return;
@@ -305,9 +465,9 @@ pub fn bash_habits_guard() {
     //
     //    Ordered last because it shells out to `git config`; the three checks
     //    above are pure and must not pay for it.
-    if let Some(sub) = ext_diff_offender(&raw) {
-        let cwd = payload.get("cwd").and_then(Value::as_str);
-        if let Some(driver) = configured_diff_driver(cwd) {
+    if let Some(sub) = ext_diff_offender(&raw)
+        && let Some(driver) = configured_diff_driver(cwd)
+    {
             deny(format!(
                 "`git {sub}` here renders through `diff.external = {driver}`, not git. You get \
                  columnar side-by-side text with no `+`/`-` prefixes, no `@@` headers and no \
@@ -316,9 +476,88 @@ pub fn bash_habits_guard() {
                  if you are hashing or applying the result). Exit-status and shape flags \
                  (`--quiet`, `--name-only`, `--stat`, `--numstat`) are unaffected and allowed \
                  as-is. (bash-habits-guard hook)"
-            ));
+        ));
+    }
+}
+
+/// Flags whose value is prose an agent wrote for a person to read: a commit
+/// subject and body, a PR or issue title and body, release notes. These are
+/// the "strings built for tools" the no-dash rule names, and unlike a file's
+/// contents they are always authored here rather than quoted from elsewhere.
+const AUTHORED_PROSE_FLAGS: &[&str] = &[
+    "-m",
+    "--message",
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-n",
+    "--notes",
+    "--subject",
+];
+
+/// The em and en dashes the house style bans. U+2014 and U+2013 only: a hyphen
+/// is fine and a minus sign is not prose.
+const BANNED_DASHES: [char; 2] = ['\u{2014}', '\u{2013}'];
+
+/// The flag whose value carries a banned dash, if any, in a `git` or `gh` call.
+///
+/// Scoped to those two commands and to `AUTHORED_PROSE_FLAGS` on purpose. A
+/// blanket scan of every Bash command would deny `rg` for the character and
+/// every paste of an upstream message, which is the false-positive class this
+/// same change is removing elsewhere (ENG-11808).
+fn authored_prose_dash(cmd: &str) -> Option<String> {
+    for stmt in expanded_statements(cmd) {
+        let Some(run) = invocation(&stmt) else {
+            continue;
+        };
+        let head = std::path::Path::new(run.head)
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or(run.head);
+        if head != "git" && head != "gh" {
+            continue;
+        }
+        let mut it = run.args.iter();
+        while let Some(arg) = it.next() {
+            // `--body=text` carries its value; `--body text` takes the next token.
+            if let Some((flag, inline)) = arg.split_once('=') {
+                if AUTHORED_PROSE_FLAGS.contains(&flag) && inline.contains(BANNED_DASHES) {
+                    return Some(flag.to_owned());
+                }
+                continue;
+            }
+            if !AUTHORED_PROSE_FLAGS.contains(&arg.as_str()) {
+                continue;
+            }
+            if it.next().is_some_and(|text| text.contains(BANNED_DASHES)) {
+                return Some(arg.clone());
+            }
         }
     }
+    None
+}
+
+/// `PreToolUse(Bash)`: refuse an em or en dash in prose a `git` or `gh` call is
+/// about to persist. The no-dash rule is the most frequently applied line in
+/// the house prompt and the one an agent has to hold in mind on every clause;
+/// where the text lands in an argument it can be checked instead of
+/// remembered.
+pub fn prose_dash_guard() {
+    let Some(payload) = payload() else { return };
+    if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+        return;
+    }
+    let Some(flag) = authored_prose_dash(&command_of(&payload)) else {
+        return;
+    };
+    deny(format!(
+        "`{flag}` here carries an em or en dash, which the house style never emits, \
+         including in strings built for tools. Restructure the sentence: a colon, a \
+         comma, a full stop, or two sentences all read better than a dash, and varying \
+         the substitute keeps the replacement from becoming its own tic. \
+         (prose-dash-guard hook)"
+    ));
 }
 
 /// `PreToolUse(Search)`: deny the built-in Search tool, redirect to mgrep. The
@@ -1750,10 +1989,11 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        GitGuardEnv, WriteGuardEnv, discards_worktree, edits_in_place, expanded_statements,
-        ext_diff_offender, git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag,
-        mutates_checkout, operands, parse_git_call, reads_other_revision, redirect_targets,
-        statements, write_guard_decision,
+        GitGuardEnv, WriteGuardEnv, authored_prose_dash, discards_stderr_unhandled,
+        discards_worktree, edits_in_place, expanded_statements, ext_diff_offender,
+        git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag, mutates_checkout,
+        operands, parse_git_call, reads_other_revision, redirect_targets, statements,
+        strip_heredocs, write_guard_decision,
     };
 
     fn toks(v: &[&str]) -> Vec<String> {
@@ -2675,18 +2915,116 @@ mod tests {
         assert!(!is_recursive_flag("--include=*.rs"));
     }
 
+    /// A directory holding two regular files and one subdirectory, so the
+    /// operand check below reads a real filesystem rather than a spelling.
+    fn grep_fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("Justfile"), "lint:\n").expect("write Justfile");
+        std::fs::write(dir.path().join("README.md"), "readme\n").expect("write README.md");
+        std::fs::create_dir(dir.path().join("src")).expect("mkdir src");
+        dir
+    }
+
     #[test]
     fn grep_tree_walk_vs_pipe() {
-        assert!(grep_walks_tree("grep -r foo ."));
-        assert!(grep_walks_tree("sudo grep -rn foo src"));
-        assert!(grep_walks_tree("FOO=bar grep -R x"));
+        let fx = grep_fixture();
+        let cwd = fx.path().to_str().expect("utf8");
+        let walks = |stage: &str| grep_walks_tree(stage, Some(cwd));
+
+        // A directory operand, or none at all, is the shape that walks a tree.
+        assert!(walks("grep -r foo ."));
+        assert!(walks("sudo grep -rn foo src"));
+        assert!(walks("FOO=bar grep -R x"));
+        // An operand that is not a readable regular file could be anything, so
+        // it counts as a tree.
+        assert!(walks("grep -rn foo missing.txt"));
+        // Named regular files traverse nothing, recursive flag or not
+        // (ENG-11808: both of these were denied).
+        assert!(!walks("grep -A6 pattern Justfile"));
+        assert!(!walks("grep -rniE projection README.md Justfile"));
+        // `-e` supplies the pattern, so every bare operand is a file.
+        assert!(!walks("grep -r -e foo README.md"));
         // not recursive
-        assert!(!grep_walks_tree("grep -n foo file"));
+        assert!(!walks("grep -n foo Justfile"));
         // grep reading a pipe (the caller passes only the first stage, but a bare
         // non-recursive grep is fine)
-        assert!(!grep_walks_tree("grep foo"));
+        assert!(!walks("grep foo"));
         // -- ends flags
-        assert!(!grep_walks_tree("grep -- -r"));
+        assert!(!walks("grep -- -r"));
+    }
+
+    /// ENG-11808: the payload of a heredoc is data. Writing a note that names
+    /// the discard idiom is not running it, and the guard denied the note.
+    #[test]
+    fn heredoc_bodies_are_not_commands() {
+        let doc = "cat > notes.md <<EOF\nNever use 2>/dev/null; keep stderr.\nEOF\n";
+        assert_eq!(strip_heredocs(doc), "cat > notes.md <<EOF\n");
+        assert!(!discards_stderr_unhandled(&strip_heredocs(doc)));
+        // A quoted delimiter and `<<-` are the same body.
+        let quoted = "python3 <<'PY'\nprint(\"x 2>/dev/null\")\nPY\ntrue\n";
+        assert_eq!(strip_heredocs(quoted), "python3 <<'PY'\ntrue\n");
+        // Two heredocs on one line are consumed in order.
+        let two = "join <<A <<B\nfirst 2>/dev/null\nA\nsecond\nB\ndone\n";
+        assert_eq!(strip_heredocs(two), "join <<A <<B\ndone\n");
+        // A redirect outside the body is still seen.
+        let outside = "cat > n.md <<EOF\ntext\nEOF\nmake 2>/dev/null\n";
+        assert!(discards_stderr_unhandled(&strip_heredocs(outside)));
+        // A herestring has no body. Reading `<<<` as an opener swallowed every
+        // line after it, so a real discard went unseen.
+        let herestring = "python3 <<< \"print(1)\"\nmake 2>/dev/null\n";
+        assert_eq!(strip_heredocs(herestring), herestring);
+        assert!(discards_stderr_unhandled(&strip_heredocs(herestring)));
+    }
+
+    /// ENG-11808: `2>/dev/null` guarded by `||` is a deliberate existence
+    /// check, not a swallowed diagnostic.
+    #[test]
+    fn a_fallback_makes_a_discard_deliberate() {
+        assert!(!discards_stderr_unhandled(
+            "ls x 2>/dev/null || echo absent"
+        ));
+        assert!(!discards_stderr_unhandled("cmd >/dev/null 2>&1 || true"));
+        // No fallback: the failure has nowhere to surface.
+        assert!(discards_stderr_unhandled("cargo build 2>/dev/null"));
+        assert!(discards_stderr_unhandled("make >/dev/null 2>&1"));
+        // `&&` runs on success and `;` runs regardless; neither reads the error.
+        assert!(discards_stderr_unhandled("cmd 2>/dev/null && echo ok"));
+        assert!(discards_stderr_unhandled("cmd 2>/dev/null ; echo next"));
+        // The fallback branch's own discard is unguarded.
+        assert!(discards_stderr_unhandled("probe || cmd 2>/dev/null"));
+        // A statement with a fallback does not excuse a later one without.
+        assert!(discards_stderr_unhandled(
+            "ls x 2>/dev/null || echo absent; make 2>/dev/null"
+        ));
+    }
+
+    /// The no-dash rule, checked where the text lands in an argument instead of
+    /// being held in mind on every clause.
+    #[test]
+    fn authored_prose_carries_no_dash() {
+        let em = "\u{2014}";
+        let en = "\u{2013}";
+        // Persisted prose: denied, and the message names the flag.
+        assert_eq!(
+            authored_prose_dash(&format!("git commit -m \"fix the guard {em} it fired\"")),
+            Some("-m".to_owned())
+        );
+        assert_eq!(
+            authored_prose_dash(&format!("gh pr create --title 'a {en} b' --body x")),
+            Some("--title".to_owned())
+        );
+        assert_eq!(
+            authored_prose_dash(&format!("gh issue create --body='note {em} here'")),
+            Some("--body".to_owned())
+        );
+        // A hyphen is not a dash, and neither is a flag that is merely adjacent.
+        assert!(authored_prose_dash("git commit -m 'well-formed subject'").is_none());
+        assert!(authored_prose_dash("gh pr create --title ok --body fine").is_none());
+        // Anything that is not authored prose is left alone: reading the
+        // character back, or any command other than git/gh, must still work.
+        assert!(authored_prose_dash(&format!("rg '{em}' README.md")).is_none());
+        assert!(authored_prose_dash(&format!("echo '{em}'")).is_none());
+        assert!(authored_prose_dash(&format!("git log --grep '{em}'")).is_none());
     }
 
     // --- write-guard (index#4310) ---
