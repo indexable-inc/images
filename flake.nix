@@ -177,7 +177,7 @@
     # pushed tip get its own verdict), mint the pin ref, repin here, then build
     # `.#jj`.
     jj-src = {
-      url = "github:indexable-inc/jj/af48c0d50b540e7ff0b909e635098ffaefc2f007";
+      url = "github:indexable-inc/jj/0d9e515c5a041f6528d319173a5e8f9edf4a5484";
       flake = false;
     };
 
