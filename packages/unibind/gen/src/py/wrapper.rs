@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 
 use unibind_backend_py::stream as streams;
 use unibind_core::ir;
+use unibind_core::render::stream_exports;
 
 use crate::py::stub;
 use crate::py::types;
@@ -50,7 +51,7 @@ fn public_names(interface: &ir::Interface) -> Vec<String> {
     for object in &interface.objects {
         names.push(types::py_name(&object.names, &object.name).to_owned());
     }
-    for export in streams::collect(interface) {
+    for export in stream_exports(interface) {
         names.push(streams::class_name(export.owner, &export.function.name));
     }
     for error in &interface.errors {

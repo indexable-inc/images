@@ -146,6 +146,33 @@ class Counter {
     }
   }
 
+  /** Every value the counter takes. */
+  watch(...args) {
+    try {
+      return wrapStream(this.#handle.watch(...args));
+    } catch (error) {
+      throw decodeError(error);
+    }
+  }
+
+  /** Labels under `prefix` (async, throwing, renamed). */
+  async tailRows(...args) {
+    try {
+      return wrapStream(await this.#handle.tailRows(...args));
+    } catch (error) {
+      throw decodeError(error);
+    }
+  }
+
+  /** Fork a counter. */
+  fork(...args) {
+    try {
+      return new Counter(nativeHandle, this.#handle.fork(...args));
+    } catch (error) {
+      throw decodeError(error);
+    }
+  }
+
   /** Release the counter. */
   async close(...args) {
     try {
@@ -240,3 +267,4 @@ module.exports.SampleError = SampleError;
 module.exports.StoreGoneError = StoreGoneError;
 module.exports.Invalid = Invalid;
 module.exports.Counter = Counter;
+

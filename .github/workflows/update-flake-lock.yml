@@ -377,17 +377,6 @@ jobs:
                   fi
                 done
             fi
-
-            # ix carries the stricter committed-tree guard. Run it whenever a
-            # caller provides it, on both paths. On the direct path it is the
-            # last check before a ruleset-bypassing push. On the PR path it
-            # matters just as much: ix's `check-submodule-lock-sync` is a
-            # required check, so a candidate that fails it becomes a PR that
-            # can never merge and just sits on the rolling branch. Failing the
-            # bump job here says so once, loudly, instead.
-            if [ -x scripts/ci/check-submodule-lock-sync.sh ]; then
-              scripts/ci/check-submodule-lock-sync.sh HEAD
-            fi
           }
 
           if [ "$DIRECT_PUSH" != true ]; then

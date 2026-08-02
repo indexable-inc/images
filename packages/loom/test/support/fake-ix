@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Recording fake for the ix CLI. Appends every invocation's argv (one
+# tab-joined line) to $LOOM_FAKE_IX_LOG, then plays the scripted
+# behavior for the verb:
+#
+#   snapshot <vm>          -> prints $LOOM_FAKE_SNAPSHOT_ID (plus spinner
+#                             noise, to prove id recovery is by shape)
+#   new|stop|start|rm ...  -> exit 0, no output
+#   shell <vm> --noninteractive -- ...
+#                          -> cats $LOOM_FAKE_STREAM_FILE, exits with
+#                             $LOOM_FAKE_STREAM_EXIT (default 0)
+#
+# Failure injection: if the verb appears in $LOOM_FAKE_FAIL (comma
+# separated), exit 1 with a message instead.
+set -euo pipefail
+
+log="${LOOM_FAKE_IX_LOG:?LOOM_FAKE_IX_LOG unset}"
+printf '%s\n' "$(IFS=$'\t'; echo "$*")" >> "$log"
+
+verb="${1:-}"
+
+case ",${LOOM_FAKE_FAIL:-}," in
+  *",${verb},"*)
+    echo "fake-ix: injected failure for ${verb}" >&2
+    exit 1
+    ;;
+esac
+
+case "$verb" in
+  snapshot)
+    # Spinner noise first: the caller must recover the id by shape.
+    echo "snapshot VM ${2:-?} ... captured"
+    echo "${LOOM_FAKE_SNAPSHOT_ID:?LOOM_FAKE_SNAPSHOT_ID unset}"
+    ;;
+  new|stop|start|rm)
+    ;;
+  shell)
+    cat "${LOOM_FAKE_STREAM_FILE:?LOOM_FAKE_STREAM_FILE unset}"
+    exit "${LOOM_FAKE_STREAM_EXIT:-0}"
+    ;;
+  *)
+    echo "fake-ix: unscripted verb: ${verb}" >&2
+    exit 64
+    ;;
+esac

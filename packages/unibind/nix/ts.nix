@@ -1,7 +1,7 @@
 # The `ts` target of `unibind.lib.build`: the napi addon cdylib from the
 # shared workspace graph, `unibind-gen ts` host files generated from its
 # embedded IR, and the tui-node-shaped npm package directory (native addon
-# + index.js + index.d.ts + stamped package.json).
+# + index.js + index.d.ts + schemas.ts + stamped package.json).
 {
   lib,
   pkgs,
@@ -68,7 +68,7 @@
         pkgs.removeReferencesTo
       ];
       passthru = {inherit library;};
-      meta.description = "unibind-generated npm package for ${crate} (native addon + index.js + index.d.ts)";
+      meta.description = "unibind-generated npm package for ${crate} (native addon + index.js + index.d.ts + schemas.ts)";
     }
     ''
       set -euo pipefail

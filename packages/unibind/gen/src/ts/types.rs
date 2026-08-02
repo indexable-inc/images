@@ -5,14 +5,40 @@ use unibind_core::ir;
 
 use crate::host::EmitError;
 
-/// How close to a signature a type sits. `Buffer` only replaces bytes at
-/// the top level of arguments and returns (including directly under
-/// `Option` and as a stream element); nested bytes cross as plain number
-/// arrays, matching the glue's `Vec<u8>` fields and elements.
+/// Which position a value occupies, which is what decides whether bytes
+/// cross as a `Buffer` or as a plain array of numbers. The twin of
+/// `unibind_backend_ts::ty::Level`, and it has to answer identically: the
+/// glue compiled into the addon is what actually crosses, and these
+/// declarations only describe it.
+///
+/// The dividing line is not depth. A whole argument or return value is
+/// declared `Buffer`, and so is a record field: the glue's mirror struct
+/// declares that field `Buffer` too (napi accepts one as an
+/// `#[napi(object)]` field in both directions). A `Vec` element or a map
+/// value is not: the container crosses whole and unconverted, so its
+/// interior stays the user's own `Vec<u8>`, which napi carries as
+/// `Array<number>`.
 #[derive(Clone, Copy)]
 pub enum Level {
+    /// A whole argument, return value, or stream item.
     Top,
-    Nested,
+    /// A field of a record.
+    Field,
+    /// Inside a container: a `Vec` element or a map value.
+    Element,
+}
+
+impl Level {
+    /// Whether bytes at this position cross as a `Buffer`. Both TypeScript
+    /// renderers (`index.d.ts` and `schemas.ts`) ask here rather than
+    /// matching the variants, so a declared type and its schema cannot
+    /// disagree about one position.
+    pub const fn bytes_as_buffer(self) -> bool {
+        match self {
+            Self::Top | Self::Field => true,
+            Self::Element => false,
+        }
+    }
 }
 
 /// napi's automatic `snake_case` -> `camelCase` conversion, applied to every
@@ -46,13 +72,33 @@ pub fn type_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
     names.ts.as_deref().unwrap_or(name)
 }
 
+/// The integer widths that cross as a JavaScript `BigInt`: a `number` is an
+/// IEEE double, exact only to 2^53, so the widths past that cross as
+/// `bigint` in every position, including record fields and container
+/// elements, matching the glue. Every TypeScript renderer asks here, so the
+/// declared type in `index.d.ts` and the Zod schema in `schemas.ts` cannot
+/// disagree about a width.
+pub const fn crosses_as_bigint(kind: ir::IntKind) -> bool {
+    matches!(
+        kind,
+        ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize
+    )
+}
+
+/// The shared refusal for a map the ts backend cannot key.
+pub fn integer_keyed_map() -> EmitError {
+    EmitError {
+        message: "integer-keyed maps are not part of the ts backend yet (issue #1993)".to_owned(),
+    }
+}
+
 /// The TypeScript type of a value crossing at `level`.
 ///
 /// # Errors
 ///
-/// Fails for the surface the compiled glue also rejects (BigInt-only
-/// integers, integer-keyed maps, nested streams), so it only trips on IR
-/// that never compiled through the ts macro backend.
+/// Fails for the surface the compiled glue also rejects (integer-keyed
+/// maps, nested streams), so it only trips on IR that never compiled
+/// through the ts macro backend.
 pub fn ts_type(
     interface: &ir::Interface,
     ty: &ir::Type,
@@ -60,39 +106,33 @@ pub fn ts_type(
 ) -> Result<String, EmitError> {
     Ok(match ty {
         ir::Type::Bool => "boolean".to_owned(),
-        ir::Type::Int(kind) => match kind {
-            ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => {
-                return Err(EmitError {
-                    message: format!(
-                        "`{}` only crosses as a BigInt; the ts backend rejects it \
-                         until BigInt lands (issue #1993)",
-                        kind.rust_name()
-                    ),
-                });
+        ir::Type::Int(kind) => {
+            if crosses_as_bigint(*kind) {
+                "bigint".to_owned()
+            } else {
+                "number".to_owned()
             }
-            _ => "number".to_owned(),
-        },
+        }
         ir::Type::Float(_) => "number".to_owned(),
         ir::Type::String { .. } | ir::Type::Path { .. } => "string".to_owned(),
-        ir::Type::Bytes { .. } => match level {
-            Level::Top => "Buffer".to_owned(),
-            Level::Nested => "Array<number>".to_owned(),
-        },
+        ir::Type::Bytes { .. } => {
+            if level.bytes_as_buffer() {
+                "Buffer".to_owned()
+            } else {
+                "Array<number>".to_owned()
+            }
+        }
         ir::Type::Option(inner) => format!("{} | null", ts_type(interface, inner, level)?),
         ir::Type::Vec(inner) => {
-            format!("Array<{}>", ts_type(interface, inner, Level::Nested)?)
+            format!("Array<{}>", ts_type(interface, inner, Level::Element)?)
         }
         ir::Type::Map { key, value } => {
             if !matches!(**key, ir::Type::String { .. }) {
-                return Err(EmitError {
-                    message: "integer-keyed maps are not part of the ts backend yet \
-                              (issue #1993)"
-                        .to_owned(),
-                });
+                return Err(integer_keyed_map());
             }
             format!(
                 "Record<string, {}>",
-                ts_type(interface, value, Level::Nested)?
+                ts_type(interface, value, Level::Element)?
             )
         }
         ir::Type::Named(name) => named_type_name(interface, name).to_owned(),
@@ -117,23 +157,58 @@ fn named_type_name<'a>(interface: &'a ir::Interface, name: &'a str) -> &'a str {
         .map_or(name, |object| type_name(&object.names, &object.name))
 }
 
-/// Whether any signature spells `Buffer`, which pulls the `node:buffer`
-/// type import into `index.d.ts`.
-pub fn uses_buffer(interface: &ir::Interface) -> bool {
+/// Every callable the host files render a signature for: the free
+/// functions and each object's methods.
+fn callables(interface: &ir::Interface) -> impl Iterator<Item = &ir::Function> {
     let methods = interface
         .objects
         .iter()
         .flat_map(|object| object.methods.iter());
-    interface.functions.iter().chain(methods).any(|function| {
-        function.args.iter().any(|arg| top_level_bytes(&arg.ty))
-            || function.ret.as_ref().is_some_and(top_level_bytes)
-    })
+    interface.functions.iter().chain(methods)
 }
 
-fn top_level_bytes(ty: &ir::Type) -> bool {
+/// Whether anything the TypeScript files declare spells `Buffer`, which
+/// pulls the `node:buffer` import into `index.d.ts` and `schemas.ts`.
+///
+/// Record fields count: bytes cross as a `Buffer` there too (see
+/// [`Level`]), and a record is declared whether or not any signature
+/// mentions it, so a byte field is on its own enough to need the import.
+pub fn uses_buffer(interface: &ir::Interface) -> bool {
+    let in_signature = callables(interface).any(|function| {
+        function.args.iter().any(|arg| buffer_bytes(&arg.ty))
+            || function.ret.as_ref().is_some_and(buffer_bytes)
+    });
+    in_signature || records_use_buffer(interface)
+}
+
+/// Whether any record field spells `Buffer`. `schemas.ts` holds records and
+/// nothing else, so this -- not [`uses_buffer`] -- is what decides its
+/// import: an interface taking a `Buffer` argument but holding no byte
+/// field would otherwise get an unused import.
+pub fn records_use_buffer(interface: &ir::Interface) -> bool {
+    interface
+        .records
+        .iter()
+        .flat_map(|record| record.fields.iter())
+        .any(|field| buffer_bytes(&field.ty))
+}
+
+/// Whether any export returns a stream, which pulls the `UnibindStream`
+/// declaration into `index.d.ts` and the `wrapStream` helper into
+/// `index.js`. Methods count here: the ts backend renders stream methods,
+/// where `ir::Interface::has_streams` answers the free-function-only
+/// question the backends that reject them ask.
+pub fn has_streams(interface: &ir::Interface) -> bool {
+    callables(interface).any(|function| matches!(function.ret, Some(ir::Type::Stream(_))))
+}
+
+/// Whether `ty`, at the position it was found in, is spelled `Buffer`:
+/// bytes reached through `Option` and `Stream` (which do not change the
+/// level), but not bytes inside a `Vec` or a map (which do).
+fn buffer_bytes(ty: &ir::Type) -> bool {
     match ty {
         ir::Type::Bytes { .. } => true,
-        ir::Type::Option(inner) | ir::Type::Stream(inner) => top_level_bytes(inner),
+        ir::Type::Option(inner) | ir::Type::Stream(inner) => buffer_bytes(inner),
         _ => false,
     }
 }

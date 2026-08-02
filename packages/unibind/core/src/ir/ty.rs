@@ -45,26 +45,42 @@ pub enum Type {
 }
 
 impl Type {
-    /// Whether any leaf of the type tree satisfies `leaf`.
+    /// Visit every leaf of the type tree, in order.
     ///
     /// The containers (`Option`/`Vec`/`Stream`/`Map`) are transparent, so a
-    /// backend asking "does this type mention bytes / a path anywhere" gets one
-    /// answer for the whole tree. Every such question walks the same shape, and
-    /// a walk that forgets a container silently answers `false`, so the walk
-    /// lives here once rather than per backend.
-    #[must_use]
-    pub fn any_leaf(&self, leaf: &impl Fn(&Self) -> bool) -> bool {
+    /// backend asking something of a type -- does it mention bytes anywhere,
+    /// which records does it name -- sees the whole tree. This is the one
+    /// walk, because a per-backend copy that forgets a container silently
+    /// finds nothing under it.
+    pub fn for_each_leaf<'a>(&'a self, visit: &mut impl FnMut(&'a Self)) {
         match self {
-            Self::Option(inner) | Self::Vec(inner) | Self::Stream(inner) => inner.any_leaf(leaf),
-            Self::Map { key, value } => key.any_leaf(leaf) || value.any_leaf(leaf),
+            Self::Option(inner) | Self::Vec(inner) | Self::Stream(inner) => {
+                inner.for_each_leaf(visit);
+            }
+            Self::Map { key, value } => {
+                key.for_each_leaf(visit);
+                value.for_each_leaf(visit);
+            }
             Self::Bool
             | Self::Int(_)
             | Self::Float(_)
             | Self::String { .. }
             | Self::Path { .. }
             | Self::Bytes { .. }
-            | Self::Named(_) => leaf(self),
+            | Self::Named(_) => visit(self),
         }
+    }
+
+    /// Whether any leaf of the type tree satisfies `leaf`.
+    ///
+    /// [`Self::for_each_leaf`] asked one question. It runs the whole walk
+    /// rather than stopping at the first hit; a boundary type is a handful of
+    /// nested containers, so there is nothing to save.
+    #[must_use]
+    pub fn any_leaf(&self, leaf: &impl Fn(&Self) -> bool) -> bool {
+        let mut found = false;
+        self.for_each_leaf(&mut |candidate| found = found || leaf(candidate));
+        found
     }
 }
 

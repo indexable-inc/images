@@ -2688,41 +2688,95 @@
   # once wrote the customisation blob as a symlink into /nix/store, so the
   # archive depended on out-of-tar store state and this check failed whenever
   # the referenced path was not visible at read time (index#2058).
-  # Both shapes of `self` the guest `index` registry pin must serve
+  # All three shapes of `self` the guest `index` registry pin must serve
   # (lib/image/registry-pin.nix). The boundary broke twice on 2026-07-22:
   # unconditional `inherit (self) narHash` failed eval on the narHash-less
   # path-locked seam shape (index#3981), and the fetchTree fallback tried
   # next (#3984) was rejected by pure eval on lazy-tree subpaths. #3988
-  # landed the conditional-omit shape; these assertions hold it. Mock selves
-  # because the real `self` only ever has one shape per evaluation.
+  # landed the conditional-omit shape. ix#9290 then de-submoduled index into
+  # an ordinary ix subdirectory, which added the two SUBPATH shapes: a pin on
+  # `<ix-source>/index` is not a store path at all, so nix re-dumps the tree
+  # (the whole cost the pin exists to avoid) and `base-image-nix-db` can find
+  # no ValidPaths row for it however the image is built. Mock selves because
+  # the real `self` only ever has one shape per evaluation.
   imageRegistryPinAssertions = let
     registryPin = import (paths.root + "/lib/image/registry-pin.nix") {inherit lib;};
     # The construction never validates `narHash`, so a labeled mock keeps the
     # fixture honest; a plausible SRI literal would read as a real pin.
     mockNarHash = "sha256-mock+image-registry-pin";
-    mockPath = "/nix/store/mock-index-source";
+    # Store-path shaped down to the 32-character digest, because that is what
+    # the construction matches on, but spelled so nobody mistakes it for a real
+    # path.
+    mockPath = "${builtins.storeDir}/mockimageregistrypinmockdigest00-source";
+    # A subpath of one, which is exactly what a relative-path input
+    # (`index.url = "path:./index"`) and a `?dir=index` git ref both hand over.
+    mockSubPath = mockPath + "/index";
+    # Any real directory: these assertions are about the SHAPE the copy comes
+    # out as, not its contents, and a small one keeps the eval-time copy cheap.
+    mockSourceRoot = paths.root + "/lib/image";
+    # Forcing this is the bug the first assertion below exists to catch: a
+    # `self` that already names a pinnable store path must be pinned as it
+    # stands, never copied again.
+    unusedSourceRoot = throw "registryPin copied sourceRoot for a self whose outPath is already a top-level -source store path";
+    subPathPin = self:
+      registryPin {
+        inherit self;
+        sourceRoot = mockSourceRoot;
+      };
+    # ix's `index.url = "path:./index"`: a subpath, and no narHash anywhere.
+    seamPin = subPathPin {outPath = mockSubPath;};
+    # `nix build ./index#...` inside an ix checkout, which resolves to
+    # `git+file://...?dir=index`: the same subpath, plus a narHash that belongs
+    # to the enclosing repository rather than to the pinned subtree.
+    dirPin = subPathPin {
+      outPath = mockSubPath;
+      narHash = mockNarHash;
+    };
   in [
     {
       assertion =
         registryPin {
-          outPath = mockPath;
-          narHash = mockNarHash;
+          self = {
+            outPath = mockPath;
+            narHash = mockNarHash;
+          };
+          sourceRoot = unusedSourceRoot;
         }
         == {
           type = "path";
           path = mockPath;
           narHash = mockNarHash;
         };
-      message = "a narHash-bearing self must keep narHash in the registry pin: an unlocked path pin re-hashes and re-copies the source tree on every in-guest eval (#1748)";
+      message = "a narHash-bearing self already on a top-level -source store path must be pinned as it stands, narHash kept: an unlocked path pin re-hashes and re-copies the source tree on every in-guest eval (#1748)";
     }
     {
       assertion =
-        registryPin {outPath = mockPath;}
+        registryPin {
+          self = {outPath = mockPath;};
+          sourceRoot = unusedSourceRoot;
+        }
         == {
           type = "path";
           path = mockPath;
         };
       message = "a narHash-less self (path-locked seam input, index#3981) must yield a pin that omits narHash; the whole-attrset equality also proves the construction evaluates on that shape";
+    }
+    {
+      # nix's PathInputScheme (libfetchers/path.cc) reaches its no-copy path
+      # only for a store path named exactly `source`, so this spells out the
+      # digest rather than accepting any `-source` suffix: `<digest>-index-source`
+      # would satisfy the loose form and still be re-dumped on every eval.
+      assertion = builtins.match "${builtins.storeDir}/[a-z0-9]{32}-source" seamPin.path != null;
+      message = "a self whose outPath is a subpath (ix#9290's `path:./index`) must be pinned on a copy that is itself a top-level store path named exactly `source`, or nix re-dumps the tree on every in-guest eval and no ValidPaths row can ever match it";
+    }
+    {
+      assertion = !(seamPin ? narHash);
+      message = "a subpath self must not carry a narHash into the pin";
+    }
+    {
+      # The one shape carrying BOTH a subpath outPath and a narHash.
+      assertion = !(dirPin ? narHash);
+      message = "a ?dir= self's narHash describes the enclosing repository, not the pinned subtree, so it must be dropped rather than locking the pin to content it does not name";
     }
   ];
 
@@ -2789,6 +2843,18 @@
       # Every registry-pinned source must be a VALID path in the shipped DB, or
       # the guest re-ingests it on first eval.
       for src in $requiredPaths; do
+        # ValidPaths only ever holds top-level store paths, so a subpath scores
+        # zero rows for a reason that has nothing to do with what the image
+        # ships, and reporting it as a missing row sends the reader hunting
+        # through the DB instead of at the pin. ix#9290 made exactly this
+        # mistake reachable by turning index into an ix subdirectory, so
+        # `self.outPath` became `<ix-source>/index`. Say which failure it is.
+        case "$src" in
+          /nix/store/*/*)
+            echo "error: baked source $src is a subpath of a store path, not a store path of its own; nix's PathInputScheme re-dumps the tree rather than using it, and no ValidPaths row can ever match (ix#9290)" >&2
+            exit 1
+            ;;
+        esac
         count=$(sqlite3 "$dbfile" \
           "SELECT count(*) FROM ValidPaths WHERE path = '$src';")
         if [ "$count" != "1" ]; then

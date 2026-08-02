@@ -1,0 +1,47 @@
+---
+id: apply-resolve-narrates-itself
+postedAt: 2026-07-30T19:45:00-07:00
+title: "A cancelled apply used to brick the regional evaluator, and the resolve line never said so"
+tags: [ix-apply, vm-guest, cli, progress]
+links:
+  - label: ix#9294 (terminate and reap a cancelled exec stream's process group)
+    href: https://github.com/indexable-inc/ix/pull/9294
+  - label: ix#9286 (one live region for progress, and render what resolve streams)
+    href: https://github.com/indexable-inc/ix/pull/9286
+  - label: ix#9299 (stream nix fetch bytes from the evaluator, open)
+    href: https://github.com/indexable-inc/ix/pull/9299
+---
+
+Pressing Ctrl-C during `ix apply` could leave the region's evaluator unusable until someone removed a file by hand. One did, on 2026-07-30 at 18:31 UTC, and every apply from that account failed for the next four hours with a Nix trace that blamed the operator's flake.
+
+The evaluator holds a warm Nix store on purpose, so whatever a cancelled run leaves behind outlives it. What it left behind was `shallow.lock` in the git cache, and a zombie `nix` process still unreaped 4h41m later. Nothing held the lock; the process that wrote it had died mid-fetch.
+
+Cancelling drops the host side of the stream and signals the guest nothing. `GuestExecStream` has no `Drop`, so the socket just closes; in the guest, `handle_streaming` propagated the failed write out through `?`; and `Child::drop` neither kills nor reaps. The child ran on unsupervised until its own pipes broke, and git, killed mid-`fetch`, never removed its lock.
+
+`StreamingChild` now terminates and reaps on every exit path out of that function, signalling the process group rather than the child, because nix spawns git and signalling only nix leaves the fetch holding the lock. `SIGTERM` first with a grace period, then `SIGKILL`: the grace is load-bearing rather than polite, since git unlinks its locks from a handler and cannot from `SIGKILL`.
+
+The first version of that fix was wrong in a way worth repeating. Rust drops locals in reverse declaration order, so a guard declared before the pipe readers runs after them: the tree lost stdout and stderr first, took `SIGPIPE`, and died without running any handler. It reproduced the original defect through a different door while appearing to work, and only the regression test said so. The guard owns the pipes now, so the ordering is a property of the type. Ownership alone was still not enough, because the guard returned as soon as the direct child was reaped and the caller closes the pipes the moment it returns, so a grandchild mid-cleanup could still be cut off. It waits for the group to drain. 20 of 20 under `nproc x 2` saturation, against 2 failures in 12 for the intermediate version.
+
+## The resolve line was silent for the whole ninety seconds
+
+The same apply spent 90 seconds showing `resolve` and nothing else, then printed a 40-line trace whose actionable line was fifth from the top. That line had been on the wire since roughly second five.
+
+The evaluator already streamed both its phase and Nix's live stderr. `ResolvePhase`'s doc comment says it exists "so the client can render progress instead of one opaque pause", and `EvalFailed` keeps a second copy of the stderr tail specifically because a caller "whose renderer discarded the live stream" would otherwise see only an exit code. The renderer discarded the live stream. Both are now rendered, along with the source upload's byte counter, which was also being thrown away.
+
+## The progress writer could smear across the terminal
+
+Resizing the window during an apply left one ghost row per width change. The writer moved to column 0 and cleared downward, which is an in-place redraw only while the cursor is still on the row the line was drawn on; a reflow moves that row, so the clear lands elsewhere and the old text becomes scrollback.
+
+`ix apply` now draws through the same transport `ui/tree` uses, which reaches rows above the cursor by arithmetic and needs no cursor-position query. Two candidates were measured and rejected. Ratatui's inline viewport does not ghost, but it emits `ESC[2J` on a horizontal shrink and its cursor query goes to stdout while the backend writes stderr, so `ix apply > log` produced no progress output at all. A test built on `vt100` or `termwiz` would have been useless here: both resize by truncating rather than rewrapping, and the broken writer passes under them.
+
+Two smaller defects went with it. Line widths were counted in characters rather than columns, so one CJK character or emoji in a VM name would produce the same smear with no resize involved. And below 15 columns the label and spinner were emitted at full width into a narrower terminal.
+
+## What a stalled transfer looks like
+
+A transfer that stops moving is not silent. A dead `github:` download emits thousands of progress events, tenths of a second apart, all reporting the same byte count. The rate now shows `0 B/s` rather than disappearing, because an absent rate renders identically to the first tick of a healthy transfer, and the line says `no data for 41s` once that has persisted, which is the one fact it cannot otherwise express.
+
+The threshold is five seconds, calibrated against a single cold nixpkgs fetch where the rate sat at zero for about four and a half. A slower afternoon will show `no data for 6s` mid-transfer with nothing wrong.
+
+## Still open
+
+Nix's own fetch bytes do not reach the CLI yet, so a cold `github:` input is narrated in words rather than bytes. That is ix#9299, which parses Nix's structured activity stream on the node agent. Until it lands, the no-total byte display is code with a test and no producer.

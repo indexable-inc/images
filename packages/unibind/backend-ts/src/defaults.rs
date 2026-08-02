@@ -5,11 +5,94 @@ use quote::quote;
 use unibind_core::ir;
 use unibind_core::render::RenderError;
 
-use crate::ty;
+use crate::convert;
+use crate::function::Binding;
+use crate::ty::{self, TyCtx};
+
+/// How an omittable argument reaches the call. A type that crosses
+/// unchanged substitutes its default in place; one whose boundary shape
+/// differs is adapted first, in a prologue statement that can refuse the
+/// value, and only then falls back to the default.
+///
+/// # Errors
+///
+/// Fails for a default paired with a type that cannot carry one.
+pub fn defaulted(
+    arg: &ir::Arg,
+    default: &ir::Literal,
+    ident: &Ident,
+    function: &ir::Function,
+    ctx: &TyCtx<'_>,
+) -> Result<Binding, RenderError> {
+    let Some(converted) = convert::inward(&arg.ty, ctx, &quote!(#ident)) else {
+        return Ok(Binding {
+            prologue: None,
+            expr: substituted(arg, default, ident, function)?,
+        });
+    };
+    // The adapted set is the 64-bit integers plus the records and
+    // containers holding them, and only the integers can carry a default.
+    let (ir::Type::Int(_), ir::Literal::Int(value)) = (&arg.ty, default) else {
+        return Err(unsupported_default(arg, function));
+    };
+    let value = proc_macro2::Literal::i64_unsuffixed(*value);
+    // The `Some` arm rebinds the same name, so `converted` (written against
+    // `ident`) reads the unwrapped value.
+    Ok(Binding {
+        prologue: Some(quote! {
+            let #ident = match #ident {
+                ::std::option::Option::Some(#ident) => #converted?,
+                ::std::option::Option::None => #value,
+            };
+        }),
+        expr: quote!(#ident),
+    })
+}
+
+/// The [`defaulted`] counterpart for an `Option` argument: JavaScript's
+/// omission is already the argument's own shape, so the adaptation runs
+/// first and the default fills the resulting `None` afterwards.
+///
+/// # Errors
+///
+/// Fails for a default the argument's element type cannot carry.
+pub fn optional_defaulted(
+    arg: &ir::Arg,
+    default: &ir::Literal,
+    ident: &Ident,
+    function: &ir::Function,
+    ctx: &TyCtx<'_>,
+) -> Result<Binding, RenderError> {
+    let ir::Type::Option(inner) = &arg.ty else {
+        return Err(unsupported_default(arg, function));
+    };
+    let Some(converted) = convert::inward(&arg.ty, ctx, &quote!(#ident)) else {
+        return Ok(Binding {
+            prologue: None,
+            expr: option_substituted(arg, default, ident, function)?,
+        });
+    };
+    if matches!(default, ir::Literal::None) {
+        return Ok(Binding {
+            prologue: Some(quote!(let #ident = #converted?;)),
+            expr: quote!(#ident),
+        });
+    }
+    let (ir::Type::Int(_), ir::Literal::Int(value)) = (&**inner, default) else {
+        return Err(unsupported_default(arg, function));
+    };
+    let value = proc_macro2::Literal::i64_unsuffixed(*value);
+    Ok(Binding {
+        prologue: Some(quote! {
+            let #ident = #converted?.or(::std::option::Option::Some(#value));
+        }),
+        expr: quote!(#ident),
+    })
+}
 
 /// The call-site expression for an argument JavaScript may omit: `None`
 /// falls back to the declared default.
-pub fn substituted(
+fn substituted(
     arg: &ir::Arg,
     default: &ir::Literal,
     ident: &Ident,
@@ -57,7 +140,7 @@ fn unsupported_default(arg: &ir::Arg, function: &ir::Function) -> RenderError {
 /// The substitution for an omitted `Option` argument carrying an explicit
 /// default: `None` from JavaScript becomes `Some(default)`, except for the
 /// `None` default, which the argument shape already expresses.
-pub fn option_substituted(
+fn option_substituted(
     arg: &ir::Arg,
     default: &ir::Literal,
     ident: &Ident,
