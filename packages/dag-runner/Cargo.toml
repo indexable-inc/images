@@ -10,15 +10,17 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
-futures.workspace = true
 indicatif.workspace = true
 # Used for `libc::killpg`; each node owns a process group so timeout and
 # cancellation terminate descendants as well as the direct child.
 libc.workspace = true
 progress-style.workspace = true
+# HTTP readiness probes. Already a dependency of nix-web-monitor, which is
+# also `cross = true`, so the rustls/ring cross path is a proven one here.
+reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 
 [dev-dependencies]
 libc.workspace = true
