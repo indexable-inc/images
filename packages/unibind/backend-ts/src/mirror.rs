@@ -6,7 +6,8 @@
 //! than the user wrote:
 //!
 //! - A `u64` field has no napi conversion at all and an `i64` field would
-//!   silently cross as a lossy `number`, so both are declared `BigInt`, with
+//!   cross through an explicit, checked adaptation, so both are declared
+//!   in glue-owned shapes (`f64` for wide integers, `Buffer` for bytes), with
 //!   the narrowing (and its refusal) on the way back in.
 //! - A `Vec<u8>` field would cross as `Array<number>`: one JavaScript number
 //!   object per byte, and no `Buffer` for the caller to hand to anything
@@ -119,7 +120,7 @@ pub fn render_mirror(record: &ir::Record, ctx: &TyCtx<'_>) -> Result<TokenStream
                 Self { #(#from)* }
             }
 
-            /// The record as the user's code takes it; a `bigint` outside a
+            /// The record as the user's code takes it; a `number` outside a
             /// field's declared width is refused here rather than truncated.
             fn __unibind_into(self) -> ::napi::Result<#user::#name> {
                 ::std::result::Result::Ok(#user::#name { #(#into)* })

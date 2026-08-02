@@ -23,6 +23,10 @@ pub fn render(interface: &ir::Interface) -> String {
     if needs_os_import(interface) {
         blocks.push("import os".to_owned());
     }
+    // Records declare `__iter__` as `collections.abc.Iterator[str]`.
+    if !interface.records.is_empty() {
+        blocks.push("import collections.abc".to_owned());
+    }
     for error in &interface.errors {
         error_classes(error, &mut blocks);
     }
@@ -188,6 +192,32 @@ fn record_class(interface: &ir::Interface, record: &ir::Record) -> String {
             members.push(format!("{header}\n{}", docstring(&field.docs, 2)));
         }
     }
+
+    // Every record carries the notebook affordances the backend renders: a
+    // field-by-field `__repr__` (declared by `object`, so not stubbed), a
+    // shallow `to_dict`, and the read-only mapping protocol -- so
+    // `dict(record)`, `{**record}`, and `pandas.DataFrame(records)` all
+    // work. Stubbed so type checkers see them.
+    let to_dict_docs = vec![
+        "Shallow dict of this record's fields, keyed by their Python".to_owned(),
+        "names. Nested records stay objects; call `to_dict` on them to".to_owned(),
+        "go deeper.".to_owned(),
+    ];
+    members.push(format!(
+        "    def to_dict(self) -> dict[str, object]:\n{}",
+        docstring(&to_dict_docs, 2)
+    ));
+    members.push(
+        "    def keys(self) -> list[str]: ...\n\
+         \n    def values(self) -> list[object]: ...\n\
+         \n    def items(self) -> list[tuple[str, object]]: ...\n\
+         \n    def get(self, key: str, default: object | None = None) -> object | None: ...\n\
+         \n    def __getitem__(self, key: str) -> object: ...\n\
+         \n    def __contains__(self, key: str) -> bool: ...\n\
+         \n    def __len__(self) -> int: ...\n\
+         \n    def __iter__(self) -> collections.abc.Iterator[str]: ..."
+            .to_owned(),
+    );
 
     class_with_members(&format!("class {name}:"), &record.docs, &members)
 }

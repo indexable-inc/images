@@ -328,20 +328,21 @@ fn ts_host_files_snapshot() {
     );
 }
 
-/// Every width past an IEEE double's exact range is `bigint` on both
-/// surfaces, and only those: the narrower ones stay `number`, which is what
-/// keeps the common case ergonomic. One table drives both assertions because
-/// one list (`ts::types::crosses_as_bigint`) drives both renderers -- a
-/// change to one of them that missed the other would leave a schema checking
-/// a `number` where the declared type promises a `bigint`, and that is the
-/// failure this catches.
+/// Every integer width -- wide and narrow -- is `number` in the types and
+/// `z.number().int()` in the schemas: the Stripe/OpenAI policy, so records
+/// stay plain JSON. One table drives both assertions because one renderer
+/// list drives both surfaces -- a change to one that missed the other would
+/// leave a schema and a declared type disagreeing about a width, and that
+/// is the failure this catches. The checked-range half of the policy (a
+/// fractional or unsafe-range `number` is refused, never truncated) lives
+/// in the glue and is proven by the ts conformance suite.
 #[test]
-fn wide_integers_are_bigint_in_the_types_and_the_schemas() {
+fn integers_are_numbers_in_the_types_and_the_schemas() {
     let widths = [
-        ("total", ir::IntKind::U64, "bigint", "z.bigint()"),
-        ("offset", ir::IntKind::Isize, "bigint", "z.bigint()"),
-        ("size", ir::IntKind::Usize, "bigint", "z.bigint()"),
-        ("count", ir::IntKind::I64, "bigint", "z.bigint()"),
+        ("total", ir::IntKind::U64, "number", "z.number().int()"),
+        ("offset", ir::IntKind::Isize, "number", "z.number().int()"),
+        ("size", ir::IntKind::Usize, "number", "z.number().int()"),
+        ("count", ir::IntKind::I64, "number", "z.number().int()"),
         ("narrow", ir::IntKind::U32, "number", "z.number().int()"),
     ];
     let mut wide = interface();
@@ -669,8 +670,8 @@ fn object_methods_wrap_their_stream_and_object_returns() {
         assert!(dts.contains(declared), "`{declared}` is missing:\n{dts}");
     }
     for wrapped in [
-        "return wrapStream(this.#handle.watch(...args));",
-        "return new Keys(nativeHandle, this.#handle.keys(...args));",
+        "return wrapStream(this.#handle.watch(...args.map(normalizeArg)));",
+        "return new Keys(nativeHandle, this.#handle.keys(...args.map(normalizeArg)));",
     ] {
         assert!(js.contains(wrapped), "`{wrapped}` is missing:\n{js}");
     }
@@ -681,7 +682,10 @@ fn object_methods_wrap_their_stream_and_object_returns() {
 #[test]
 fn records_compose_under_option_and_as_map_values() {
     let HostFiles { dts, .. } = emit(&namespaced_interface());
-    for declared in ["  meta?: Meta | null;", "  metaByKey: Record<string, Meta>;"] {
+    for declared in [
+        "  readonly meta?: Meta | null;",
+        "  readonly metaByKey: Record<string, Meta>;",
+    ] {
         assert!(dts.contains(declared), "`{declared}` is missing:\n{dts}");
     }
 }

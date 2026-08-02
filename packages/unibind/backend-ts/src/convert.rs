@@ -1,14 +1,13 @@
 //! Adapt between the types the napi wrappers declare and the types the
 //! user's own code spells.
 //!
-//! Only 64-bit integers differ between the two. JavaScript's `number` is an
-//! IEEE double, so it holds integers exactly only up to 2^53; anything
-//! wider crosses as a `bigint`, which napi carries as
-//! `napi::bindgen_prelude::BigInt`. Every position mentioning one -- the
-//! value itself, a `Vec`/`Option`/map of them, or a record holding one --
-//! needs an explicit adaptation, and inbound the adaptation can reject
-//! (a `bigint` outside the declared Rust width is refused, never
-//! truncated).
+//! Only 64-bit integers differ between the two. They cross as a JavaScript
+//! `number` -- the policy every mainstream SDK ships, so records stay plain
+//! JSON -- declared `f64` in the glue. Every position mentioning one (the
+//! value itself, a `Vec`/`Option`/map of them, or a record holding one)
+//! needs an explicit adaptation, and inbound the adaptation can reject:
+//! a `number` that is fractional, non-finite, or outside the double-exact
+//! +/-(2^53 - 1) range is refused, never truncated.
 //!
 //! Both directions answer `None` for the types that cross unchanged, which
 //! keeps the generated glue byte-identical everywhere 64-bit integers do
@@ -20,18 +19,23 @@ use unibind_core::ir;
 
 use crate::ty::{Level, TyCtx};
 
-/// The integer widths JavaScript can only carry as `bigint`, in the order
-/// their narrowing helpers render.
-const BIGINT_KINDS: [ir::IntKind; 4] = [
+/// The integer widths a double cannot hold in full, in the order their
+/// narrowing helpers render.
+const WIDE_INT_KINDS: [ir::IntKind; 4] = [
     ir::IntKind::I64,
     ir::IntKind::U64,
     ir::IntKind::Isize,
     ir::IntKind::Usize,
 ];
 
-/// Whether `kind` is wider than an IEEE double holds exactly, and so
-/// crosses as `bigint` rather than `number`.
-pub const fn is_bigint(kind: ir::IntKind) -> bool {
+/// Whether `kind` is wider than an IEEE double holds exactly. Such a width
+/// still crosses as a JavaScript `number` -- the Stripe/OpenAI policy, so
+/// records stay plain JSON -- but through a checked `f64` adaptation: an
+/// inbound value that is fractional or outside the safe-integer range
+/// (+/-2^53 - 1) is refused, never truncated. Outbound values convert with
+/// `as f64`; the platform's own wide values (epoch milliseconds, byte
+/// counts, microcredits) sit far inside the exact range.
+pub const fn is_wide_int(kind: ir::IntKind) -> bool {
     matches!(
         kind,
         ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize
@@ -39,8 +43,8 @@ pub const fn is_bigint(kind: ir::IntKind) -> bool {
 }
 
 /// The generated mirror struct for record `name`: the `#[napi(object)]`
-/// twin the glue owns, so a 64-bit field can be declared `BigInt` without
-/// the user's struct ever mentioning napi.
+/// twin the glue owns, so a 64-bit field can be declared `f64` (with its
+/// checked conversion) without the user's struct ever mentioning napi.
 pub fn mirror_ident(name: &str) -> Ident {
     format_ident!("__UnibindRecord{}", name)
 }
@@ -55,7 +59,7 @@ pub fn mirror_ident(name: &str) -> Ident {
 /// declared as the user's own `Vec<u8>` and so adapt nothing.
 pub fn adapts(ty: &ir::Type, mirrored: &[String], level: Level) -> bool {
     match ty {
-        ir::Type::Int(kind) => is_bigint(*kind),
+        ir::Type::Int(kind) => is_wide_int(*kind),
         ir::Type::Bytes { .. } => level.bytes_as_buffer(),
         ir::Type::Option(inner) => adapts(inner, mirrored, level),
         ir::Type::Vec(inner) | ir::Type::Stream(inner) => adapts(inner, mirrored, Level::Element),
@@ -106,7 +110,7 @@ pub fn bytes_field_inward(ty: &ir::Type, expr: &TokenStream) -> Option<TokenStre
 /// function's control flow). `None` means the value crosses unchanged.
 pub fn inward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<TokenStream> {
     Some(match ty {
-        ir::Type::Int(kind) if is_bigint(*kind) => {
+        ir::Type::Int(kind) if is_wide_int(*kind) => {
             let narrow = narrow_ident(*kind);
             quote!(#narrow(#expr))
         }
@@ -146,15 +150,14 @@ pub fn inward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<Toke
 /// Every widening is exact, so this direction never fails.
 pub fn outward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<TokenStream> {
     Some(match ty {
-        ir::Type::Int(kind) if is_bigint(*kind) => {
-            // `BigInt` converts from the fixed widths; the pointer-sized
-            // ones widen first, which is exact on every target Node runs on.
-            let widened = match kind {
-                ir::IntKind::Usize => quote!(#expr as u64),
-                ir::IntKind::Isize => quote!(#expr as i64),
-                _ => expr.clone(),
-            };
-            quote!(::napi::bindgen_prelude::BigInt::from(#widened))
+        ir::Type::Int(kind) if is_wide_int(*kind) => {
+            // Outbound is a plain cast: the platform's own wide values sit
+            // far inside the double-exact range, and a cast keeps this
+            // direction infallible the way the doc above promises. A value
+            // past 2^53 would round to the nearest representable double,
+            // exactly as it would in any JSON API.
+            let _ = kind;
+            quote!(#expr as f64)
         }
         ir::Type::Named(name) => {
             let mirror = ctx.mirror(name)?;
@@ -201,16 +204,17 @@ pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
     // uncalled (see `crate::mirror`). That is the user's business, not dead
     // glue to report at them.
     quote! {
-        /// A `bigint` JavaScript sent that the declared Rust width cannot
-        /// hold. Deliberately not a `__unibind__:` reason: this is a caller
-        /// mistake, not a boundary failure the user's error enum declared,
-        /// so it surfaces as a plain napi error rather than one of the
-        /// generated classes.
+        /// A `number` JavaScript sent that the declared Rust width cannot
+        /// hold exactly: fractional, non-finite, negative where unsigned,
+        /// or outside the double-exact +/-(2^53 - 1) range. Deliberately not
+        /// a `__unibind__:` reason: this is a caller mistake, not a boundary
+        /// failure the user's error enum declared, so it surfaces as a plain
+        /// napi error rather than one of the generated classes.
         #[allow(dead_code)]
-        fn __unibind_bigint_out_of_range(width: &str) -> ::napi::Error {
+        fn __unibind_int_out_of_range(width: &str, value: f64) -> ::napi::Error {
             ::napi::Error::new(
                 ::napi::Status::InvalidArg,
-                ::std::format!("bigint does not fit in a Rust `{}`", width),
+                ::std::format!("{} is not a safe integer for a Rust `{}`", value, width),
             )
         }
 
@@ -241,7 +245,7 @@ fn inbound_kinds(interface: &ir::Interface, mirrored: &[String]) -> Vec<ir::IntK
             collect(&field.ty, &mut found);
         }
     }
-    BIGINT_KINDS
+    WIDE_INT_KINDS
         .into_iter()
         .filter(|kind| found.iter().any(|seen| seen.rust_name() == kind.rust_name()))
         .collect()
@@ -255,7 +259,7 @@ fn collect_args(function: &ir::Function, found: &mut Vec<ir::IntKind>) {
 
 fn collect(ty: &ir::Type, found: &mut Vec<ir::IntKind>) {
     match ty {
-        ir::Type::Int(kind) if is_bigint(*kind) => found.push(*kind),
+        ir::Type::Int(kind) if is_wide_int(*kind) => found.push(*kind),
         ir::Type::Option(inner) | ir::Type::Vec(inner) | ir::Type::Stream(inner) => {
             collect(inner, found);
         }
@@ -265,50 +269,57 @@ fn collect(ty: &ir::Type, found: &mut Vec<ir::IntKind>) {
 }
 
 fn narrow_ident(kind: ir::IntKind) -> Ident {
-    format_ident!("__unibind_bigint_to_{}", kind.rust_name())
+    format_ident!("__unibind_number_to_{}", kind.rust_name())
 }
 
-/// One narrowing helper. `BigInt::get_i64`/`get_u64` report whether the
-/// value survived the first word intact; the pointer-sized widths then
-/// re-narrow, which is a no-op on 64-bit targets and a real bound on
-/// 32-bit ones.
+/// One narrowing helper: a JavaScript `number` into the declared Rust
+/// width. Fractional, non-finite, and unsafe-range values are refused,
+/// never truncated -- the check is `Number.isSafeInteger` spelled in Rust.
+/// Inside the safe range every integer is exact in a double, so the final
+/// cast loses nothing; the pointer-sized widths then re-narrow, which is a
+/// no-op on 64-bit targets and a real bound on 32-bit ones.
 fn narrow_fn(kind: ir::IntKind) -> TokenStream {
     let name = narrow_ident(kind);
     let rust_name = kind.rust_name();
     let target = Ident::new(rust_name, proc_macro2::Span::call_site());
     let doc = format!(
-        " Narrow a JavaScript `bigint` to `{rust_name}`, refusing a value \
-         outside the width instead of truncating it."
+        " Narrow a JavaScript `number` to `{rust_name}`, refusing a value \
+         that is not a safe integer in the width instead of truncating it."
     );
-    // `get_u64` reports "exact" only for a single-word, non-negative value,
-    // so an unsigned width needs no separate sign check.
-    let read = match kind {
-        ir::IntKind::U64 | ir::IntKind::Usize => quote! {
-            let (_, __unibind_value, __unibind_exact) = value.get_u64();
-        },
-        _ => quote! {
-            let (__unibind_value, __unibind_exact) = value.get_i64();
-        },
+    let signed_ok = matches!(kind, ir::IntKind::I64 | ir::IntKind::Isize);
+    let sign_check = if signed_ok {
+        TokenStream::new()
+    } else {
+        quote! {
+            if value < 0.0 {
+                return ::std::result::Result::Err(__unibind_int_out_of_range(#rust_name, value));
+            }
+        }
     };
     let narrowed = match kind {
-        ir::IntKind::I64 | ir::IntKind::U64 => quote!(::std::result::Result::Ok(__unibind_value)),
+        ir::IntKind::I64 => quote!(::std::result::Result::Ok(value as i64)),
+        ir::IntKind::U64 => quote!(::std::result::Result::Ok(value as u64)),
         ir::IntKind::Usize => quote! {
-            <usize as ::std::convert::TryFrom<u64>>::try_from(__unibind_value)
-                .map_err(|_| __unibind_bigint_out_of_range(#rust_name))
+            <usize as ::std::convert::TryFrom<u64>>::try_from(value as u64)
+                .map_err(|_| __unibind_int_out_of_range(#rust_name, value))
         },
         _ => quote! {
-            <isize as ::std::convert::TryFrom<i64>>::try_from(__unibind_value)
-                .map_err(|_| __unibind_bigint_out_of_range(#rust_name))
+            <isize as ::std::convert::TryFrom<i64>>::try_from(value as i64)
+                .map_err(|_| __unibind_int_out_of_range(#rust_name, value))
         },
     };
     quote! {
         #[doc = #doc]
         #[allow(dead_code)]
-        fn #name(value: ::napi::bindgen_prelude::BigInt) -> ::napi::Result<#target> {
-            #read
-            if !__unibind_exact {
-                return ::std::result::Result::Err(__unibind_bigint_out_of_range(#rust_name));
+        fn #name(value: f64) -> ::napi::Result<#target> {
+            const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+            if !value.is_finite()
+                || value.fract() != 0.0
+                || value.abs() > MAX_SAFE_INTEGER
+            {
+                return ::std::result::Result::Err(__unibind_int_out_of_range(#rust_name, value));
             }
+            #sign_check
             #narrowed
         }
     }

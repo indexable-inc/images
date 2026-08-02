@@ -45,7 +45,7 @@ pub fn render(export: &StreamExport<'_>, ctx: &TyCtx<'_>) -> Result<TokenStream,
     let js_class = js_class(export, ctx);
     // Storage spells the user's own element type, which is what the
     // producer yields; only the value handed to JavaScript picks up the
-    // boundary shapes (`Buffer`, `BigInt`, a record's mirror).
+    // boundary shapes (`Buffer`, checked `f64` integers, a record's mirror).
     let user = ctx.user;
     let element_decl = rust_type_in(export.item, &quote!(#user), Ownership::Owned);
     let element_top = ty::decl(export.item, ctx, Level::Top)?;

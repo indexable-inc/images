@@ -27,6 +27,7 @@
     protectedCheckoutGuard = hookRunnerSubcommand "worktree-guard";
     nixCargoGuard = hookRunnerSubcommand "cargo-guard";
     shellHabitGuard = hookRunnerSubcommand "bash-habits-guard";
+    proseDashGuard = hookRunnerSubcommand "prose-dash-guard";
     destructiveGitGuard = hookRunnerSubcommand "git-guard";
     protectedCheckoutBashGuard = hookRunnerSubcommand "write-guard";
     indexedSearchGuard = hookRunnerSubcommand "search-guard";
@@ -99,6 +100,16 @@
       {
         matcher = "Bash";
         command = hookCommands.shellHabitGuard;
+      }
+      # The no-dash rule is the most frequently applied line in the house
+      # prompt, and holding it in mind on every clause is attention spent on
+      # every response. Where the prose lands in a `git`/`gh` argument the
+      # character can be checked instead of remembered. Chat text has no such
+      # seam: no hook can rewrite a reply, and a Stop gate would argue about a
+      # dash the user has already read.
+      {
+        matcher = "Bash";
+        command = hookCommands.proseDashGuard;
       }
       # git has no pre-reset/pre-checkout/pre-clean/pre-stash hook, so the only
       # seam that sees `git reset --hard` before it runs is PreToolUse

@@ -21,6 +21,12 @@ ix shell loom
 loom
 ```
 
+`loom` is a normal interactive Claude Code session. There is no Elixir console
+in the user flow. When the lead delegates through `Agents.spawn`, the bundled
+index MCP snapshots the control VM, restores one child VM for that agent, runs
+headless Claude in the child, returns its result to the lead, syncs the guest,
+and stops it. Parallel agents get parallel VMs; the lead stays interactive.
+
 The target is an ordinary template per the ix template contract: a plain
 `nixosConfiguration` in the index flake, no ix imports. Inside, you work
 normally (claude through `ix-mcp serve`). Spawning a subagent from an
@@ -57,24 +63,12 @@ in the browser, plus the agent tree, through the stock local-producer
 path - the driving processes are local to the control VM, so no bridge
 exists.
 
-## Using it as a human
+## Subagents
 
-The interface is an `iex` session inside the control VM; agent events
-land in your shell process mailbox.
-
-```console
-ix shell loom
-loom                     # starts the packaged interactive Elixir session
-```
-
-```elixir
-{:ok, id} = Loom.spawn("In /root/work/myrepo: fix the flaky test in foo_test. Commit on branch agent/fix-foo and push.")
-flush()                  # {:loom, id, {:spawned, "loom-..."}} ... {:final, text}
-Loom.status(id)          # phase, session_id, result, log tail
-Loom.send_text(id, "also update the changelog")   # wakes an idle agent
-Loom.list()
-Loom.delete(id)          # reaps the fork VM
-```
+Talk to Claude normally: “spawn two agents to inspect the API and tests.” The
+lead has the local `Agent` tool disabled and is instructed to use the Loom
+backend exposed by the index MCP, so delegation cannot silently run another
+Claude process inside the control VM.
 
 Real workloads with a private repo: set the control VM up ONCE - clone
 the repo (with `gh auth login` or a deploy key), install the

@@ -87,6 +87,7 @@ fn main() -> ExitCode {
         Some("wakeup-gate") => wakeup::wakeup_gate(),
         Some("cargo-guard") => guards::cargo_guard(),
         Some("bash-habits-guard") => guards::bash_habits_guard(),
+        Some("prose-dash-guard") => guards::prose_dash_guard(),
         Some("git-guard") => guards::git_guard(),
         Some("write-guard") => guards::write_guard(),
         Some("search-guard") => guards::search_guard(),

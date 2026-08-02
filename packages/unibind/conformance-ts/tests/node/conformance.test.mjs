@@ -8,9 +8,11 @@
 // keeps the flag applied to the test code itself); `await using` needs
 // Node >= 24, where explicit resource management is stable.
 //
-// Every 64-bit integer on this surface crosses as a `bigint`, so the
-// literals below carry the `n` suffix wherever the Rust side declares
-// `i64`, `u64`, or `usize`.
+// Every integer on this surface crosses as a JavaScript `number` (the
+// Stripe/OpenAI policy: records stay plain JSON). The glue refuses inbound
+// numbers that are fractional or outside the double-exact range instead of
+// truncating them; outbound values past 2^53 round to the nearest
+// representable double, exactly as they would in any JSON API.
 
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
@@ -74,42 +76,45 @@ test("records echo with camelCased and renamed fields", () => {
   assert.equal(occurrences[0].role, undefined);
 });
 
-// Every value below 2^53 that JavaScript can also hold as a `number` is
-// deliberately avoided in these four tests: the whole point of the bigint
-// mapping is the range where a `number` silently rounds.
-const TWO_53 = 2n ** 53n;
+// The double-exact boundary drives every case below: inside +/-(2^53 - 1)
+// integers cross exactly; outside it inbound values are refused and
+// outbound values round.
+const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 
-test("64-bit integers round-trip exactly past 2^53", () => {
-  for (const value of [TWO_53 + 1n, 2n ** 62n, -(2n ** 62n), 0n, -1n]) {
+test("64-bit integers cross as exact numbers inside the safe range", () => {
+  for (const value of [MAX_SAFE, -MAX_SAFE, 2 ** 52, -(2 ** 52), 0, -1]) {
     assert.equal(api.echoI64(value), value);
   }
-  for (const value of [TWO_53 + 1n, 2n ** 64n - 1n, 0n]) {
+  for (const value of [MAX_SAFE, 2 ** 52, 0]) {
     assert.equal(api.echoU64(value), value);
   }
-  assert.equal(api.echoUsize(TWO_53 + 1n), TWO_53 + 1n);
-  assert.equal(typeof api.echoI64(1n), "bigint");
+  assert.equal(api.echoUsize(MAX_SAFE), MAX_SAFE);
+  assert.equal(typeof api.echoI64(1), "number");
 
-  // The widths' own endpoints, read from Rust rather than restated here.
-  assert.deepEqual(api.i64Bounds(), [-(2n ** 63n), 2n ** 63n - 1n]);
-  assert.equal(api.u64Max(), 2n ** 64n - 1n);
+  // The widths' own endpoints, read from Rust: they exceed the safe range,
+  // so they arrive rounded to the nearest double -- the same value the
+  // equivalent JSON payload would parse to.
+  assert.deepEqual(api.i64Bounds(), [Number(-(2n ** 63n)), Number(2n ** 63n - 1n)]);
+  assert.equal(api.u64Max(), Number(2n ** 64n - 1n));
 
-  // The arithmetic a `number` boundary gets wrong: 2^53 + 1 is not
-  // representable as a double, so a lossy boundary answers 2^53 here.
-  assert.equal(api.addI64(TWO_53), TWO_53 + 1n, "the default operand also crosses as a bigint");
-  assert.equal(api.addI64(TWO_53, 3n), TWO_53 + 3n);
+  // Defaults cross as numbers too.
+  assert.equal(api.addI64(2 ** 52), 2 ** 52 + 1, "the default operand crosses as a number");
+  assert.equal(api.addI64(2 ** 52, 3), 2 ** 52 + 3);
 });
 
-test("a bigint outside its declared width is refused, never truncated", () => {
+test("a number the declared width cannot hold exactly is refused, never truncated", () => {
   for (const [call, what] of [
-    [() => api.echoU64(-1n), "negative into u64"],
-    [() => api.echoU64(2n ** 64n), "one past u64::MAX"],
-    [() => api.echoI64(2n ** 63n), "one past i64::MAX"],
-    [() => api.echoI64(-(2n ** 63n) - 1n), "one below i64::MIN"],
+    [() => api.echoU64(-1), "negative into u64"],
+    [() => api.echoI64(1.5), "fractional into i64"],
+    [() => api.echoI64(MAX_SAFE + 2), "past the double-exact range"],
+    [() => api.echoI64(-(MAX_SAFE + 2)), "below the double-exact range"],
+    [() => api.echoI64(Number.POSITIVE_INFINITY), "infinity"],
+    [() => api.echoI64(Number.NaN), "NaN"],
   ]) {
     assert.throws(
       call,
       (error) => {
-        assert.match(error.message, /does not fit/, what);
+        assert.match(error.message, /not a safe integer/, what);
         assert.ok(
           !(error instanceof api.ConformanceError),
           "a caller mistake is not one of the declared boundary failures",
@@ -119,39 +124,39 @@ test("a bigint outside its declared width is refused, never truncated", () => {
       what,
     );
   }
-  // The endpoints themselves are in range and must still cross.
-  assert.equal(api.echoI64(-(2n ** 63n)), -(2n ** 63n));
-  assert.equal(api.echoI64(2n ** 63n - 1n), 2n ** 63n - 1n);
+  // The safe-range endpoints themselves must still cross.
+  assert.equal(api.echoI64(MAX_SAFE), MAX_SAFE);
+  assert.equal(api.echoI64(-MAX_SAFE), -MAX_SAFE);
 });
 
-test("a number where a bigint is declared is refused rather than coerced", () => {
+test("a bigint where a number is declared is refused rather than coerced", () => {
   // TypeScript rejects this at compile time; the addon refuses it at run
-  // time too, so a plain-JavaScript caller cannot silently pass a double.
-  assert.throws(() => api.echoI64(1));
-  assert.throws(() => api.echoU64(1));
+  // time too, so a plain-JavaScript caller cannot silently pass a bigint.
+  assert.throws(() => api.echoI64(1n));
+  assert.throws(() => api.echoU64(1n));
 });
 
 test("wide integers cross inside containers, records, and streams", async () => {
   const ledger = {
-    balance: -(2n ** 62n),
-    sequence: 2n ** 64n - 1n,
-    entries: TWO_53 + 1n,
-    deltas: [1n, -1n, 2n ** 61n],
-    ceiling: 2n ** 60n,
-    totals: { alpha: 2n ** 63n, beta: 0n },
+    balance: -(2 ** 52),
+    sequence: MAX_SAFE,
+    entries: 2 ** 52 + 1,
+    deltas: [1, -1, 2 ** 51],
+    ceiling: 2 ** 50,
+    totals: { alpha: 2 ** 52, beta: 0 },
   };
   assert.deepEqual(api.echoLedger(ledger), ledger);
 
-  assert.equal(api.sumU64([TWO_53 + 1n, 1n]), TWO_53 + 2n);
-  assert.equal(api.echoOptionalI64(TWO_53 + 5n), TWO_53 + 5n);
-  assert.equal(api.echoOptionalI64(), TWO_53 + 1n, "the declared default fills an omitted value");
+  assert.equal(api.sumU64([2 ** 52, 1]), 2 ** 52 + 1);
+  assert.equal(api.echoOptionalI64(2 ** 52 + 5), 2 ** 52 + 5);
+  assert.equal(api.echoOptionalI64(), MAX_SAFE, "the declared default fills an omitted value");
 
-  const start = 2n ** 62n;
+  const start = 2 ** 52;
   const items = [];
-  for await (const item of api.wideStream(start, 3n)) {
+  for await (const item of api.wideStream(start, 3)) {
     items.push(item);
   }
-  assert.deepEqual(items, [start, start + 1n, start + 2n]);
+  assert.deepEqual(items, [start, start + 1, start + 2]);
 });
 
 test("records compose: a record under Option, and records as map values", () => {
@@ -181,24 +186,22 @@ test("records compose: a record under Option, and records as map values", () => 
   assert.equal(headless.head, undefined, "an omitted Option<Record> came back set");
   assert.deepEqual(headless.byPath, {}, "an empty record map stays empty");
 
-  // The other half of `head?: Occurrence | null`: an explicit `null` is
-  // NOT accepted inbound. napi reads an Option-typed object field with
-  // `Object::get`, which reports absence only for `undefined` and passes a
-  // literal `null` down to the field type's own conversion, which refuses
-  // it. This holds for every Option field regardless of its type, so the
-  // `| null` half of the declaration is inbound-inaccurate; it is pinned
-  // here so the behaviour is a known wart rather than a surprise.
-  assert.throws(
-    () => api.echoFacts({
-      occurrence: [],
-      docsBySymbol: {},
-      sourceBlob: Buffer.alloc(0),
-      blobChunks: [],
-      head: null,
-      byPath: {},
-    }),
-    "an explicit null for an Option record field is refused, not read as None",
-  );
+  // The other half of `head?: Occurrence | null`: an explicit `null` IS
+  // accepted inbound, exactly as the declaration promises. The native layer
+  // reads absence only from `undefined` (napi reads Option-typed object
+  // fields with `Object::get`), so the generated wrapper normalizes `null`
+  // away before any argument reaches the addon; without that pass this
+  // exact call was refused with "Failed to get property names of given
+  // object".
+  const nulled = api.echoFacts({
+    occurrence: [],
+    docsBySymbol: {},
+    sourceBlob: Buffer.alloc(0),
+    blobChunks: [],
+    head: null,
+    byPath: {},
+  });
+  assert.equal(nulled.head, undefined, "an explicit null Option field reads as unset");
 });
 
 // The record field that carries streamed command output. `Array<number>`

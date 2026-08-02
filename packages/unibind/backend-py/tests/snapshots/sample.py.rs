@@ -49,6 +49,256 @@ mod __unibind_py_sample {
                 home: home,
             }
         }
+        #[allow(unused_variables)]
+        fn __repr__(
+            &self,
+            py: ::pyo3::Python<'_>,
+        ) -> ::pyo3::PyResult<::std::string::String> {
+            let mut parts: ::std::vec::Vec<::std::string::String> = ::std::vec::Vec::new();
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "id", ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py,) ?,
+                        py,),) ?,)
+                    ),
+                );
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "label",
+                        ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py,) ?,
+                        py,),) ?,)
+                    ),
+                );
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "tags",
+                        ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(), py,) ?,
+                        py,),) ?,)
+                    ),
+                );
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "weights",
+                        ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.weights.clone(), py,)
+                        ?, py,),) ?,)
+                    ),
+                );
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "blob",
+                        ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py,) ?,
+                        py,),) ?,)
+                    ),
+                );
+            parts
+                .push(
+                    ::std::format!(
+                        "{}={}", "home",
+                        ::pyo3::types::PyStringMethods::to_string_lossy(&
+                        ::pyo3::types::PyAnyMethods::repr(::pyo3::Py::bind(&
+                        ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py,) ?,
+                        py,),) ?,)
+                    ),
+                );
+            ::pyo3::PyResult::Ok(::std::format!("{}({})", "Row", parts.join(", ")))
+        }
+        /// Shallow dict of this record's fields, keyed by their Python
+        /// names. Nested records stay objects; call `to_dict` on them to
+        /// go deeper.
+        #[allow(unused_variables)]
+        fn to_dict<'py>(
+            &self,
+            py: ::pyo3::Python<'py>,
+        ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::types::PyDict>> {
+            let dict = ::pyo3::types::PyDict::new(py);
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "id",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py)?,
+            )?;
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "label",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py)?,
+            )?;
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "tags",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(), py)?,
+            )?;
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "weights",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.weights.clone(), py)?,
+            )?;
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "blob",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py)?,
+            )?;
+            ::pyo3::types::PyDictMethods::set_item(
+                &dict,
+                "home",
+                ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py)?,
+            )?;
+            ::pyo3::PyResult::Ok(dict)
+        }
+        /// The field names, in declaration order.
+        fn keys(&self) -> ::std::vec::Vec<&'static str> {
+            ::std::vec!["id", "label", "tags", "weights", "blob", "home"]
+        }
+        /// The field values, in declaration order.
+        #[allow(unused_variables)]
+        fn values(
+            &self,
+            py: ::pyo3::Python<'_>,
+        ) -> ::pyo3::PyResult<::std::vec::Vec<::pyo3::Py<::pyo3::PyAny>>> {
+            ::pyo3::PyResult::Ok(
+                ::std::vec![
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py) ?,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py) ?,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(), py) ?,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.weights.clone(), py) ?,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py) ?,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py) ?
+                ],
+            )
+        }
+        /// `(name, value)` pairs, in declaration order.
+        #[allow(unused_variables)]
+        fn items(
+            &self,
+            py: ::pyo3::Python<'_>,
+        ) -> ::pyo3::PyResult<
+            ::std::vec::Vec<(&'static str, ::pyo3::Py<::pyo3::PyAny>)>,
+        > {
+            ::pyo3::PyResult::Ok(
+                ::std::vec![
+                    ("id", ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py) ?,),
+                    ("label", ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py)
+                    ?,), ("tags", ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(),
+                    py) ?,), ("weights", ::pyo3::IntoPyObjectExt::into_py_any(self
+                    .weights.clone(), py) ?,), ("blob",
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py) ?,),
+                    ("home", ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py)
+                    ?,)
+                ],
+            )
+        }
+        /// The field named `key`, or `default` (`None` unset) when the
+        /// record has no such field.
+        #[allow(unused_variables)]
+        #[pyo3(signature = (key, default = None))]
+        fn get(
+            &self,
+            py: ::pyo3::Python<'_>,
+            key: &str,
+            default: ::std::option::Option<::pyo3::Py<::pyo3::PyAny>>,
+        ) -> ::pyo3::PyResult<::std::option::Option<::pyo3::Py<::pyo3::PyAny>>> {
+            match key {
+                "id" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py)?,
+                        ),
+                    )
+                }
+                "label" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py)?,
+                        ),
+                    )
+                }
+                "tags" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(), py)?,
+                        ),
+                    )
+                }
+                "weights" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(
+                                self.weights.clone(),
+                                py,
+                            )?,
+                        ),
+                    )
+                }
+                "blob" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py)?,
+                        ),
+                    )
+                }
+                "home" => {
+                    ::pyo3::PyResult::Ok(
+                        ::std::option::Option::Some(
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py)?,
+                        ),
+                    )
+                }
+                _ => ::pyo3::PyResult::Ok(default),
+            }
+        }
+        #[allow(unused_variables)]
+        fn __getitem__(
+            &self,
+            py: ::pyo3::Python<'_>,
+            key: &str,
+        ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+            match key {
+                "id" => ::pyo3::IntoPyObjectExt::into_py_any(self.id.clone(), py),
+                "label" => ::pyo3::IntoPyObjectExt::into_py_any(self.name.clone(), py),
+                "tags" => ::pyo3::IntoPyObjectExt::into_py_any(self.tags.clone(), py),
+                "weights" => {
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.weights.clone(), py)
+                }
+                "blob" => ::pyo3::IntoPyObjectExt::into_py_any(self.blob.clone(), py),
+                "home" => ::pyo3::IntoPyObjectExt::into_py_any(self.home.clone(), py),
+                _ => {
+                    ::pyo3::PyResult::Err(
+                        ::pyo3::exceptions::PyKeyError::new_err(key.to_owned()),
+                    )
+                }
+            }
+        }
+        fn __contains__(&self, key: &str) -> bool {
+            ["id", "label", "tags", "weights", "blob", "home"].contains(&key)
+        }
+        fn __len__(&self) -> usize {
+            ["id", "label", "tags", "weights", "blob", "home"].len()
+        }
+        /// Iterates the field names, like a dict.
+        fn __iter__<'py>(
+            &self,
+            py: ::pyo3::Python<'py>,
+        ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::types::PyIterator>> {
+            let keys = ::pyo3::Bound::into_any(
+                ::pyo3::types::PyList::new(
+                    py,
+                    ["id", "label", "tags", "weights", "blob", "home"],
+                )?,
+            );
+            ::pyo3::types::PyAnyMethods::try_iter(&keys)
+        }
     }
     ///Fetch rows.
     ///
@@ -398,3 +648,4 @@ mod __unibind_py_sample {
         ::pyo3::PyResult::Ok(())
     }
 }
+

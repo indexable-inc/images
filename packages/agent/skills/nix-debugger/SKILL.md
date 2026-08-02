@@ -82,7 +82,7 @@ up. Filed as ix#9086.
 ## Evaluate before you build
 
 An attribute costs minutes; its closure costs hours. `nix eval --raw
-.#x.drvPath` proves the expression is sound without building anything.
+.#<attr>.drvPath` proves the expression is sound without building anything.
 
 Across a fleet, one eval finds every host's eval errors at once:
 

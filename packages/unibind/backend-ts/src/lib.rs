@@ -17,7 +17,7 @@
 //! materializes the enriched `.d.ts` from the embedded IR.
 //!
 //! Integers wider than an IEEE double holds exactly (`i64`, `u64`, `isize`,
-//! `usize`) cross as JavaScript `bigint` in every position; `convert` owns
+//! `usize`) cross as JavaScript `number` in every position; `convert` owns
 //! that adaptation and `mirror` the record twins it needs.
 
 mod convert;

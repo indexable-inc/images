@@ -99,11 +99,19 @@
   {
     promptSource = {
       text = ''
-        These rules live at `packages/agent-prompt/rules.nix` in the index
-        repo. Edit them there; rendered copies are overwritten.
+        These rules live at `index/packages/agent-prompt/rules.nix` in the ix
+        repo. Edit them there; rendered copies are overwritten. The public
+        `indexable-inc/index` repository is a read-only projection of
+        `ix:index/`, so editing its copy of this file looks like it worked
+        and is erased by the next publish.
       '';
       reason = ''
-        Agents edited rendered copies that the next build overwrote.
+        Agents edited rendered copies that the next build overwrote. Restated
+        2026-08-01: the path said "the index repo", which was true when index
+        was its own repository and became a trap once index turned into a
+        projection of `ix:index/` (ENG-11800). Three agents in one session
+        followed this sentence exactly and edited the mirror, and one of them
+        was the session that briefed the fix.
       '';
     };
   }
@@ -226,17 +234,35 @@
     verificationProportionality = {
       topics = ["verification"];
       text = ''
-        Scale verification to the stakes. A one-off explanation checks its
-        load-bearing facts and stops: no browser session, no subagent
-        fan-out, no fleet reads to settle a side point. The full apparatus
-        is for deliverables, meaning code, reports, and anything acted on
-        or kept. Where a side point costs more to verify than it is worth,
-        answer the likeliest reading and name the assumption.
+        Scale verification to the stakes, on one test: what a wrong answer
+        costs to undo. The cheap side is a closed list, meaning a path, a
+        name, a flag's spelling, whether a file exists, each of which the
+        next command would correct at no cost; those take one direct check
+        or none. Everything else takes the strongest source whatever it
+        costs, and a fact you cannot place on that list is already
+        everything else. Nothing reaching a merge, a deploy, a destructive
+        command, a number in a report, or a claim that work is done is ever
+        on it. A one-off explanation checks its load-bearing facts and
+        stops: no browser session, no subagent fan-out, no fleet reads to
+        settle a side point. Where a side point costs more to verify than
+        it is worth, answer the likeliest reading and name the assumption.
       '';
       reason = ''
         A session answering a quick explanation reached for agent-browser,
         including the fresh-browser fallback, to settle which GitHub
         Projects boards exist; user asked for proportionality (index#4466).
+
+        The cost-to-undo test was added 2026-08-01 at the user's request.
+        "Scale to the stakes" named no scale, so a session either spent the
+        full apparatus on everything or picked a level by feel, and
+        confirming a file exists cost what confirming a merge landed cost.
+        Written as a closed list with everything else as the default,
+        rather than as "low stakes get less", because a threshold phrased
+        as a judgement is an exemption anyone can claim: the agent has to
+        name which listed kind of fact it has, and cannot reach the cheap
+        side by asserting the stakes are low. The verification rules
+        themselves are unchanged; they caught four errors the day this was
+        written, including a merge into a generated repository.
       '';
     };
   }
@@ -253,7 +279,20 @@
         can be skipped, make the skip an outcome something counts, never
         silence. Where it reads another tool, read that tool's state and not
         its rendering. Report the share of subjects the check reached and the
-        share that then passed; either number alone is how this goes wrong.
+        share that then passed; either number alone is how this goes wrong. A
+        green also carries a scope, so name it: say which required contexts
+        the command you ran actually covers, and treat every context you did
+        not name as unverified. Take that list from the branch's ruleset and
+        never from a run's job list, which is a rendering: on ix `lint` and
+        `build` only mirror the `nix` result, so one failure shows up as
+        three. A passing bundle is not the checks outside it, one formatter
+        reporting no changes is that formatter only, and an ambient tool is
+        not the pinned one, which formats differently at another major
+        version. Print what a measurement read inside the measurement, not
+        beside it: the revision, path or binary under test on the same line
+        as its result. A before-and-after that does not name the two things
+        it compared cannot tell a real difference from having measured one
+        thing twice, and that failure is silent and looks like an answer.
       '';
       reason = ''
         2026-07-29: one sweep found eleven checks across two repos, all
@@ -282,6 +321,71 @@
         task notification read "completed (exit code 0)"; only reading the
         file caught it. A runner-liveness check returned 404 identically for
         a healthy runner and a dead one. Both were greens that meant nothing.
+
+        The scope clause was added 2026-08-01, and it is a third failure
+        rather than a restatement of the two above. Those cover a check that
+        never ran, and a rendering read in place of state. This one is a
+        check that ran, passed, and was true, used to support a claim wider
+        than what it covers.
+
+        Three instances in one night, each a real green: `just lint` passed
+        while the failure was an eval seam the lint bundle does not contain;
+        `nix flake metadata` exercised a fetcher change end to end while
+        formatting is not in it; a formatter reported zero changes while the
+        failing check was a different formatter's derivation. A fourth was
+        this rule's own session: `just lint` was green on every branch, and
+        the per-crate clippy gate then found three real defects, because
+        `clippy` appears nowhere in `nix/checks/lint.nix`.
+
+        Written as naming the covered contexts rather than "run the real
+        gate", because the failure is running a real gate that happens to
+        exclude the thing that breaks, and because a named list is checkable
+        in review where "I ran the gate" is not.
+
+        The pinned-tool clause is the second level of the same trap, caught
+        by an agent before it cost a second round trip: the nix fork pins
+        `pkgs.llvmPackages_21.clang-tools` for its pre-commit hook
+        (`maintainers/flake-module.nix`), so an ambient `clang-format` of
+        another major version formats differently, and would have passed
+        locally and failed again in CI for the same reason twice. The cost of
+        doing it right is small and known: one command, a couple of minutes,
+        against a round trip through CI.
+
+        Naming the ruleset as the source was added a day later, found by
+        rules-remedy: the clause above says to enumerate the required
+        contexts, and the obvious place to read them is wrong. ix's ruleset
+        declares exactly `lint`, `nix` and `build`. Of those, `lint` is a job
+        with `needs: nix` whose only step mirrors `needs.nix.outputs
+        .lint_result`, and `build` is a fan-in over every phase. So one `nix`
+        failure paints three contexts red, which was read off a run as three
+        separate failures on ix#9432, and would just as easily be read the
+        other way as three contexts covered when one is.
+
+        That ruleset carries `enforcement: disabled`, so those three are
+        declared and not enforced. They are still the list to enumerate
+        against: they are what the repository says its gate is, and what it
+        would enforce the moment the setting flips.
+
+        Printing the subject inside the measurement was added 2026-08-02,
+        after three instruments lied in one session, each differently, each
+        fixable the same way.
+
+        A before-and-after of a formatting fix ran `git reset --hard
+        origin/main` while standing on the branch under test, which moved the
+        branch ref, so both halves linted `main` and the fix read as broken.
+        The two lines carried the same commit hash, which is the only reason
+        it was caught, and the hash was there because the author had chosen
+        to print it. A cost measurement of a lock was taken uncontended and
+        understated the real figure by 25x. A comparison of clippy finding
+        counts across runs of a derivation that deduplicates against the
+        store weighed a fresh run against a cached one, and its conclusion
+        held by luck.
+
+        Stated as printing the subject rather than as "check your
+        measurement", because this shape has no error and no red: every one
+        of those produced a clean, plausible number. What separates them from
+        a real result is whether the output says what it read, which costs
+        one `echo`.
       '';
     };
   }
@@ -483,7 +587,12 @@
       text = ''
         Real work starts from an issue, referenced in branch and PR. File
         friction as it happens, with the exact error, always in ix --
-        including friction you hit in `index/`. The public
+        including friction you hit in `index/`. A Linear ticket is one
+        command, `linear-file --title <t> --label auto-filed` with the
+        description on stdin, which prints the identifier and URL as JSON;
+        never hand-build the GraphQL call, because a description carrying a
+        quote or a newline corrupts the payload and a blind retry after a
+        formatting error files a duplicate. The public
         `indexable-inc/index` repository is a read-only projection of
         `ix:index/`; its issues are the inbox for outside reports, and
         nothing filed there reaches the people who can fix it.
@@ -923,9 +1032,19 @@
         claim landed only when the merge commit contains your push. Turn on
         auto-merge as soon as the PR is open and local checks pass (package
         tests, format, lint): `gh pr merge --auto --merge` hands the wait to
-        GitHub, so never sit watching a run. A red on main that your merge
-        caused is fixed forward immediately. Then delete worktree and branch
-        and announce in one line:
+        GitHub, so never sit watching a run. Arming defers a merge only
+        where something is there to hold it, so check that first, in the
+        repo you are about to arm: `gh api
+        repos/<owner>/<repo>/rules/branches/<base>` lists a
+        `required_status_checks` rule, and `autoMergeAllowed` is true. Read
+        `rules/branches/<base>` and never `rulesets`, because a ruleset
+        whose enforcement is disabled still lists every rule it declares;
+        that is ix right now, so ix has no gate. Where either check fails
+        there is nothing to wait for and `--auto` merges on the spot,
+        silently, exit 0. Then do not arm: say the repo has no gate and
+        leave the merge to a human. A red on main that your merge caused is
+        fixed forward immediately. Then delete worktree and branch and
+        announce in one line:
         `🚀 Pushed to main: [<summary>](<commit url>)` or
         `🌸 PR merged: [<title or number>](<url>) in <duration>`.
       '';
@@ -944,6 +1063,46 @@
         reaching for. Kept the claim-landed clause: `--auto` widens the
         window it was written for, since the merge now fires whenever CI
         finishes rather than when the agent asks.
+
+        The precondition was added 2026-08-01. "Required checks still decide
+        what lands, so arming only changes who waits" is true where required
+        checks exist, and the rule never said to confirm they do. On ix they
+        do not: `branches/main/protection` is 404 and `rules/branches/main`
+        is `[]`, so arming is merging, immediately and silently.
+
+        Two things came from the gap in one night. An agent armed a PR eight
+        seconds after opening it; it merged outright before any check
+        context registered, and the change broke main for everyone.
+        Separately, an agent built five PRs that turned out to revert 500
+        files of someone else's work, and they were closed safely for
+        exactly one reason: none had been armed. Had auto-merge been on, the
+        first green main would have merged a 500-file revert unattended.
+
+        The rule names `rules/branches/<base>` rather than `rulesets`
+        because ix has a ruleset named `main` that declares both
+        `pull_request` and `required_status_checks` and carries
+        `"enforcement": "disabled"`. Reading the declared rules says
+        protected; only the evaluated endpoint says otherwise, by returning
+        an empty list. A check whose passing state is an absence needs the
+        endpoint that honours enforcement.
+
+        `autoMergeAllowed` is in the same check because a repo with
+        auto-merge switched off is a third road to the same place: there
+        `gh pr merge --auto` also merges at once instead of arming. The two
+        conditions are uncorrelated, and the example that shows it is
+        upstream jj: the most gated repository measured here, carrying a
+        merge queue and required status checks, with `autoMergeAllowed`
+        false. An agent that confirmed only branch protection gets it wrong
+        exactly where the repository looks safest.
+
+        This is the control and not a note about one. Asked on 2026-08-01
+        whether to enable ix's ruleset instead, the user chose to leave it
+        disabled and keep the convention, so nothing mechanical stops an
+        unattended merge into an ungated repository. Every repository
+        measured that day was do-not-arm: ix, index, the nix fork, the jj
+        fork, the clippy fork and upstream jj. Weaken this rule and the
+        500-file revert that was closed safely, for the sole reason that
+        nobody had armed it, merges instead.
       '';
     };
   }
@@ -956,6 +1115,10 @@
         dependents, and a closed PR whose base is gone can be neither
         retargeted nor reopened. Recovery needs the deleted base sha
         re-pushed, so fetch `refs/pull/<n>/head` before touching a stack.
+        Rebasing onto a base that has landed assumes it landed as a merge:
+        confirm the base commit is an ancestor of the target first, because
+        against a squash the same command re-adds the base's whole diff on
+        top of itself.
       '';
       reason = ''
         Merging indexable-inc/nix#8 with `--delete-branch` silently closed #9,
@@ -964,6 +1127,15 @@
         `refs/pull/8/head` made it recoverable. The natural order, land the
         base then retarget what sat on top, is the order that breaks
         (ENG-11407).
+
+        The ancestor check was added 2026-08-02. "Rebase once your base
+        lands" is standard advice that silently assumes merge semantics. A
+        squashed base is a different commit carrying the same content, so
+        `git rebase origin/main` replays work whose changes are already
+        there, and the result is a pull request with the right title and a
+        diff that re-adds an entire crate. `git merge-base --is-ancestor
+        <base-tip> origin/main` answers it in one command, and was what made
+        a rebase onto a landed #9442 safe to do rather than hope about.
       '';
     };
   }
@@ -1040,12 +1212,19 @@
         When verified facts suffice, act; offering to act is a failure. Pick
         a defensible default over a menu. Confirm only the destructive, the
         hard to reverse, the outward-facing, and what only the user knows. At
-        a blocker: name it, take the next viable path, and re-verify stale
-        diagnoses before parking work.
+        a blocker: report it with the approach you chose, take the next
+        viable path, and re-verify stale diagnoses before parking work. An
+        obstacle is often a property of the approach rather than of the
+        problem.
       '';
       reason = ''
         Follow-ups sat "waiting on the user" needing no permission; work sat
-        blocked on stale diagnoses. Absorbs blockedPath (index#3594).
+        blocked on stale diagnoses. Absorbs blockedPath (index#3594). The
+        approach clause landed 2026-07-31: a report of blocked work listed
+        three obstacles, all of them properties of the retry loop the agent
+        had picked rather than of the race it was handling. Serialising with
+        a lock removed all three at once, and nothing in the report could
+        have shown that from outside.
       '';
     };
   }

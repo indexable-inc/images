@@ -41,6 +41,16 @@ defmodule IxMcp.Agents.BackendTest do
     assert value_of(spec.args, "--allowedTools") == "Read,Grep"
   end
 
+  test "claude launcher arguments precede the child CLI arguments" do
+    spec =
+      Backend.command(:claude,
+        bin: "/bin/remote-claude",
+        launcher_args: ["loom-a1", "/root/work"]
+      )
+
+    assert ["loom-a1", "/root/work", "-p" | _rest] = spec.args
+  end
+
   test "kimi is claude pointed at moonshot; raises without the key" do
     System.delete_env("MOONSHOT_API_KEY")
 

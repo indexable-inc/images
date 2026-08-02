@@ -7,7 +7,7 @@ import type { Buffer } from "node:buffer";
 /** A row. */
 export interface SampleRow {
   /** Identifier. */
-  readonly id: bigint;
+  readonly id: number;
   readonly rowLabel: string;
   readonly tags: Array<string>;
   readonly weights: Record<string, number>;
@@ -41,13 +41,13 @@ export interface UnibindStream<T> extends AsyncIterable<T> {
 /** A counter resource. */
 export declare class Counter {
   /** Open a counter. */
-  constructor(start?: bigint);
+  constructor(start?: number);
   /** Current value. */
-  value(): bigint;
+  value(): number;
   /** Add and return the new value. */
-  addSlowly(amount: bigint, signal?: AbortSignal): Promise<bigint>;
+  addSlowly(amount: number, signal?: AbortSignal): Promise<number>;
   /** Every value the counter takes. */
-  watch(): UnibindStream<bigint>;
+  watch(): UnibindStream<number>;
   /** Labels under `prefix` (async, throwing, renamed). */
   tailRows(prefix: string, limit?: number, signal?: AbortSignal): Promise<UnibindStream<string>>;
   /** Fork a counter. */
@@ -68,7 +68,7 @@ export declare function rows(store: string, limit?: number, root?: string | null
 export declare function touchPath(path: string, data: Buffer, ratio?: number): boolean;
 
 /** Add, slowly. */
-export declare function slowAdd(a: bigint, b: bigint, signal?: AbortSignal): Promise<bigint>;
+export declare function slowAdd(a: number, b: number, signal?: AbortSignal): Promise<number>;
 
 /** Fetch one row. */
 export declare function fetch(store: string, signal?: AbortSignal): Promise<SampleRow>;
@@ -80,4 +80,5 @@ export declare function tail(store: string): UnibindStream<SampleRow>;
 export declare function tailLater(store: string, signal?: AbortSignal): Promise<UnibindStream<SampleRow>>;
 
 /** Open a counter from a free function. */
-export declare function openCounter(start?: bigint): Counter;
+export declare function openCounter(start?: number): Counter;
+

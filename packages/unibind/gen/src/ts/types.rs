@@ -72,18 +72,15 @@ pub fn type_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
     names.ts.as_deref().unwrap_or(name)
 }
 
-/// The integer widths that cross as a JavaScript `BigInt`: a `number` is an
-/// IEEE double, exact only to 2^53, so the widths past that cross as
-/// `bigint` in every position, including record fields and container
-/// elements, matching the glue. Every TypeScript renderer asks here, so the
-/// declared type in `index.d.ts` and the Zod schema in `schemas.ts` cannot
-/// disagree about a width.
-pub const fn crosses_as_bigint(kind: ir::IntKind) -> bool {
-    matches!(
-        kind,
-        ir::IntKind::I64 | ir::IntKind::U64 | ir::IntKind::Isize | ir::IntKind::Usize
-    )
-}
+// Every integer width crosses as a JavaScript `number`, the policy the
+// mainstream SDKs (Stripe, OpenAI) ship: a double is exact to +/-2^53,
+// which covers every value this platform actually sends -- epoch
+// milliseconds, byte counts, microcredits -- and in exchange records are
+// plain JSON (`JSON.stringify` works, `JSON.parse` output satisfies the
+// generated Zod schemas, timestamps feed `Date`). The glue refuses an
+// inbound number that is fractional or outside the safe-integer range
+// instead of truncating it, so the boundary stays checked; see
+// `backend-ts/src/convert.rs`.
 
 /// The shared refusal for a map the ts backend cannot key.
 pub fn integer_keyed_map() -> EmitError {
@@ -106,13 +103,7 @@ pub fn ts_type(
 ) -> Result<String, EmitError> {
     Ok(match ty {
         ir::Type::Bool => "boolean".to_owned(),
-        ir::Type::Int(kind) => {
-            if crosses_as_bigint(*kind) {
-                "bigint".to_owned()
-            } else {
-                "number".to_owned()
-            }
-        }
+        ir::Type::Int(_) => "number".to_owned(),
         ir::Type::Float(_) => "number".to_owned(),
         ir::Type::String { .. } | ir::Type::Path { .. } => "string".to_owned(),
         ir::Type::Bytes { .. } => {

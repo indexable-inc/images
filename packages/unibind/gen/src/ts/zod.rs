@@ -106,9 +106,8 @@ fn field_schema(scope: &Scope<'_>, ty: &ir::Type) -> Result<String, EmitError> {
 fn zod_type(scope: &Scope<'_>, ty: &ir::Type, level: Level) -> Result<String, EmitError> {
     Ok(match ty {
         ir::Type::Bool => "z.boolean()".to_owned(),
-        // The widths the `.d.ts` declares `bigint`, from the same list, so a
-        // schema cannot check a `number` where the type promises a `bigint`.
-        ir::Type::Int(kind) if types::crosses_as_bigint(*kind) => "z.bigint()".to_owned(),
+        // Every integer width is a `number` in the `.d.ts`, so every integer
+        // schema is `z.number().int()`; JSON round trips stay checkable.
         ir::Type::Int(_) => "z.number().int()".to_owned(),
         ir::Type::Float(_) => "z.number()".to_owned(),
         ir::Type::String { .. } | ir::Type::Path { .. } => "z.string()".to_owned(),

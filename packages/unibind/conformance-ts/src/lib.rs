@@ -7,8 +7,8 @@
 //! functions with cancellation, pull streams from both free functions and
 //! object methods (sync and async producers, including a stream of raw
 //! bytes), a constructible resource object, a method handing back another
-//! object (sync, and async-and-fallible), and the 64-bit integers
-//! that only a JavaScript `bigint` can carry exactly. It mirrors the shapes
+//! object (sync, and async-and-fallible), and the 64-bit integers,
+//! which cross as checked JavaScript `number`s. It mirrors the shapes
 //! of the shared Python conformance surface
 //! (`packages/unibind/conformance`). The committed Node suite
 //! (`tests/node/conformance.test.mjs`) drives the built addon end to end;
@@ -208,8 +208,8 @@ mod conformance {
         u64::MAX
     }
 
-    /// Add, wrapping. A caller working past 2^53 proves both operands
-    /// arrived exact, which a `number` boundary could not deliver.
+    /// Add, wrapping. Operands arrive as checked numbers: exact inside
+    /// the double-safe range, refused outside it.
     pub fn add_i64(a: i64, #[unibind(default = 1)] b: i64) -> i64 {
         a.wrapping_add(b)
     }
@@ -219,10 +219,11 @@ mod conformance {
         values.into_iter().fold(0, u64::wrapping_add)
     }
 
-    /// Echo an optional wide integer, defaulting to one past 2^53 when
-    /// JavaScript omits it: the `Option`-with-a-default argument position.
+    /// Echo an optional wide integer, defaulting to the top of the
+    /// double-safe range when JavaScript omits it: the
+    /// `Option`-with-a-default argument position.
     pub fn echo_optional_i64(
-        #[unibind(default = 9_007_199_254_740_993)] value: Option<i64>,
+        #[unibind(default = 9_007_199_254_740_991)] value: Option<i64>,
     ) -> Option<i64> {
         value
     }
@@ -501,8 +502,7 @@ mod conformance {
         /// Stream `n` ledger rows starting at `start`: a method whose
         /// stream element is a record carrying 64-bit fields, so the
         /// owner-scoped stream class and the record's generated mirror
-        /// have to compose. Each row's `balance` is `start + index`, past
-        /// 2^53 when the caller asks for it.
+        /// have to compose. Each row's `balance` is `start + index`.
         pub fn ledgers(&self, start: i64, n: i64) -> unibind_runtime::UniStream<Ledger> {
             let name = self.name.clone();
             unibind_runtime::UniStream::new(futures::stream::iter((0..n.max(0)).map(

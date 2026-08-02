@@ -134,11 +134,12 @@ fn unsupported_surface_is_named() {
     }
 }
 
-/// Every 64-bit width renders, in both directions, as napi's `BigInt`:
-/// nothing on this surface is rejected any more, and nothing on it is
-/// declared as a plain Rust integer the boundary would truncate.
+/// Every 64-bit width renders, in both directions, as a checked `f64` --
+/// a JavaScript `number` -- never as napi's `BigInt` and never as a plain
+/// Rust integer the boundary would truncate silently: the inbound
+/// narrowing helper is what makes the `f64` declaration safe.
 #[test]
-fn wide_integers_render_as_bigint() {
+fn wide_integers_render_as_checked_numbers() {
     for source in [
         "mod m { pub fn go(count: u64) {} }",
         "mod m { pub fn go() -> usize { 0 } }",
@@ -149,7 +150,8 @@ fn wide_integers_render_as_bigint() {
         let interface = lower_module_source(source);
         let rendered = unibind_backend_ts::render(&interface).expect("renders");
         let glue = rendered.glue.to_string();
-        assert!(glue.contains("BigInt"), "{glue}");
+        assert!(!glue.contains("BigInt"), "{glue}");
+        assert!(glue.contains("f64"), "{glue}");
         for width in ["u64", "usize", "isize"] {
             assert!(
                 !glue.contains(&format!(": {width}")),

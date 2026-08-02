@@ -305,17 +305,17 @@
     "nix-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1785635556,
-        "narHash": "sha256-eLNO3NNViwZK4ybZVY0bmjmFxjdT2w2LJdFs49A1jHM=",
+        "lastModified": 1785534682,
+        "narHash": "sha256-k1pNEeTmiYl+6gcK98O+fjJbdRk2Ho+92yqDK+SqmHQ=",
         "owner": "indexable-inc",
         "repo": "nix",
-        "rev": "1c1dba1da9dde353904db44302140bdd8ad58475",
+        "rev": "2d7585afe7b146f2bb07d834285ce8caefc7ba33",
         "type": "github"
       },
       "original": {
         "owner": "indexable-inc",
         "repo": "nix",
-        "rev": "1c1dba1da9dde353904db44302140bdd8ad58475",
+        "rev": "2d7585afe7b146f2bb07d834285ce8caefc7ba33",
         "type": "github"
       }
     },

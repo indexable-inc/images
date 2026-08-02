@@ -5,7 +5,7 @@ title: VM templates, the systemd unit model
 status: Draft
 authors: Claude Opus 4.6 (AI agent), commissioned by andrewgazelka
 created: '2026-07-29'
-updated: '2026-07-30'
+updated: '2026-08-01'
 trackingIssue: 'ix#9242'
 scores:
   ambition: { value: 6, why: 'one new verb, but it introduces converged state the repo does not declare' }
@@ -559,9 +559,10 @@ that era in the same change.
   than textual overlays.
 - **[RFC 0008](/plans/0008-module-typed-builders)**: one declaration, every
   other artifact derived. Same discipline, different boundary.
-- **`packages/mkapp`**: the repo's only existing template system, and the source
-  of the `passthru.tests.scaffold` idea — a gate that refuses to emit an
-  incomplete scaffold.
+- **`packages/mkapp`**: the source of the `passthru.tests.scaffold` idea — a gate
+  that refuses to emit an incomplete scaffold. Removed in
+  indexable-inc/index#4381; it was the repo's only template system until then, so
+  read the code in that pull request rather than looking for it in the tree.
 
 ## Unresolved questions
 

@@ -49,7 +49,40 @@ fn prelude(out: &mut String, addon: &str) {
     )
     .expect("write to string");
     writeln!(out, "const native = require(\"./native/{addon}.node\");\n").expect("write to string");
+    out.push_str(NORMALIZE_HELPER);
 }
+
+// `undefined` and `null` both mean "unset", exactly as the declarations
+// promise (`field?: T | null`). napi reads an Option-typed object field
+// with `Object::get`, which reports absence only for `undefined` and hands
+// a literal `null` to the field type's own conversion, which refuses it
+// ("Failed to get property names of given object" for a map field, seen
+// live). Normalizing here, at the one place every argument passes, keeps
+// the published contract true without touching napi. Only plain object
+// literals recurse: class instances (Buffer, AbortSignal, wrapper handles)
+// cross untouched.
+const NORMALIZE_HELPER: &str = "\
+// `undefined` and `null` both mean \"unset\", as the declarations promise.
+// The native layer reads absence only from `undefined`, so `null` is
+// normalized away here for every argument at once.
+function normalizeArg(value) {
+  if (value === null) return undefined;
+  if (Array.isArray(value)) return value.map(normalizeArg);
+  if (
+    typeof value === \"object\" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const out = {};
+    for (const [key, entry] of Object.entries(value)) {
+      const normalized = normalizeArg(entry);
+      if (normalized !== undefined) out[key] = normalized;
+    }
+    return out;
+  }
+  return value;
+}
+
+";
 
 /// The base class carries `code` (the variant subclass name); each variant
 /// subclass pins both `name` and `code`.
@@ -198,7 +231,7 @@ fn object_class(out: &mut String, interface: &ir::Interface, object: &ir::Object
         out.push_str("  constructor(...args) {\n");
         out.push_str("    if (args[0] === nativeHandle) {\n      this.#handle = args[1];\n      return;\n    }\n");
         out.push_str("    try {\n");
-        writeln!(out, "      this.#handle = new native.{class}(...args);")
+        writeln!(out, "      this.#handle = new native.{class}(...args.map(normalizeArg));")
             .expect("write to string");
         out.push_str("    } catch (error) {\n      throw decodeError(error);\n    }\n  }\n");
     } else {
@@ -249,9 +282,9 @@ fn method_delegation(
     doc_block(out, "  ", &method.docs);
     let is_async = matches!(method.asyncness, ir::Asyncness::Async);
     let call = if is_async {
-        format!("await this.#handle.{name}(...args)")
+        format!("await this.#handle.{name}(...args.map(normalizeArg))")
     } else {
-        format!("this.#handle.{name}(...args)")
+        format!("this.#handle.{name}(...args.map(normalizeArg))")
     };
     let value = returned_value(interface, method, call);
     if is_async {
@@ -294,9 +327,9 @@ fn function_wrapper(out: &mut String, interface: &ir::Interface, function: &ir::
     doc_block(out, "", &function.docs);
     let is_async = matches!(function.asyncness, ir::Asyncness::Async);
     let call = if is_async {
-        format!("await native.{name}(...args)")
+        format!("await native.{name}(...args.map(normalizeArg))")
     } else {
-        format!("native.{name}(...args)")
+        format!("native.{name}(...args.map(normalizeArg))")
     };
     let value = returned_value(interface, function, call);
     if is_async {

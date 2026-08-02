@@ -5,27 +5,26 @@
   ...
 }: let
   ixCli = loomPackage.passthru.ixCli;
-  loomClaudeSource = pkgs.replaceVars ./loom-claude.sh {
-    claude = lib.getExe pkgs.claude-code;
-  };
-  loomClaude = pkgs.runCommand "loom-claude" {strictDeps = true;} ''
-    install -Dm755 ${loomClaudeSource} "$out/bin/loom-claude"
-  '';
 in {
   nixpkgs.config.allowUnfreePredicate = package: lib.getName package == "claude-code";
 
   networking.hostName = "loom";
 
   environment = {
+    etc."claude-code/managed-settings.json".source =
+      loomPackage.passthru.claudeCode.passthru.settingsPolicyFile;
     systemPackages = [
       loomPackage
       ixCli
-      loomClaude
+      loomPackage.passthru.claudeCode
+      loomPackage.passthru.mcp
     ];
     variables = {
+      IS_SANDBOX = "1";
       LOOM_PARENT_VM = "loom";
       LOOM_IX_BIN = lib.getExe ixCli;
-      LOOM_CLAUDE_BIN = lib.getExe' loomClaude "loom-claude";
+      LOOM_CLAUDE_BIN = lib.getExe' loomPackage "loom-claude";
+      LOOM_REMOTE_CLAUDE_BIN = lib.getExe' loomPackage "loom-remote-claude";
       LOOM_PREFLIGHT = "test -s /var/lib/loom/anthropic_api_key";
       LOOM_CLAUDE_ARGS = "--dangerously-skip-permissions";
     };
