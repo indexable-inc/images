@@ -537,11 +537,33 @@ impl ProcessGroupId {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
+        if Self::means_already_gone(&error) {
             Ok(())
         } else {
             Err(error)
         }
+    }
+
+    /// Whether the kernel is saying "there is nothing left in that group".
+    ///
+    /// ESRCH is the portable spelling. Darwin also answers EPERM when the only
+    /// member left is a zombie the caller has not reaped yet -- which is
+    /// precisely the state `terminate_process_group` engineers on purpose, by
+    /// holding the leader unreaped until after the KILL so its group ID cannot
+    /// be recycled during the grace. Reading that as a real failure made every
+    /// cancelled or timed-out node on macOS report a teardown error that never
+    /// happened, and skipped the `disarm` that follows, so `Drop` then printed
+    /// a second one. Reproduced standalone: fork a child into its own group,
+    /// SIGTERM it, leave it unreaped, and `killpg` gives EPERM; reap it and the
+    /// same call gives ESRCH.
+    ///
+    /// Kept to Darwin so a genuine permission failure on Linux -- a child that
+    /// changed credentials out from under us -- still surfaces.
+    fn means_already_gone(error: &io::Error) -> bool {
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return true;
+        }
+        cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EPERM)
     }
 }
 
@@ -1134,6 +1156,23 @@ mod tests {
             err.contains("b -> a"),
             "error should show the dropped edge, got: {err}"
         );
+    }
+
+    #[test]
+    fn already_gone_covers_the_zombie_group_darwin_reports_as_eperm() {
+        assert!(ProcessGroupId::means_already_gone(&io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        let eperm = io::Error::from_raw_os_error(libc::EPERM);
+        assert_eq!(
+            ProcessGroupId::means_already_gone(&eperm),
+            cfg!(target_os = "macos"),
+            "EPERM means an unreaped zombie group on Darwin and a real permission \
+             failure everywhere else"
+        );
+        assert!(!ProcessGroupId::means_already_gone(
+            &io::Error::from_raw_os_error(libc::EINVAL)
+        ));
     }
 
     #[test]
