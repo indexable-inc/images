@@ -7,12 +7,13 @@ import type { Buffer } from "node:buffer";
 /** A row. */
 export interface SampleRow {
   /** Identifier. */
-  id: number;
-  rowLabel: string;
-  tags: Array<string>;
-  weights: Record<string, number>;
-  blob: Array<number>;
-  home?: string | null;
+  readonly id: bigint;
+  readonly rowLabel: string;
+  readonly tags: Array<string>;
+  readonly weights: Record<string, number>;
+  readonly blob: Buffer;
+  readonly chunks: Array<Array<number>>;
+  readonly home?: string | null;
 }
 
 /** Boundary failures. */
@@ -40,11 +41,17 @@ export interface UnibindStream<T> extends AsyncIterable<T> {
 /** A counter resource. */
 export declare class Counter {
   /** Open a counter. */
-  constructor(start?: number);
+  constructor(start?: bigint);
   /** Current value. */
-  value(): number;
+  value(): bigint;
   /** Add and return the new value. */
-  addSlowly(amount: number, signal?: AbortSignal): Promise<number>;
+  addSlowly(amount: bigint, signal?: AbortSignal): Promise<bigint>;
+  /** Every value the counter takes. */
+  watch(): UnibindStream<bigint>;
+  /** Labels under `prefix` (async, throwing, renamed). */
+  tailRows(prefix: string, limit?: number, signal?: AbortSignal): Promise<UnibindStream<string>>;
+  /** Fork a counter. */
+  fork(): Counter;
   /** Release the counter. */
   close(): Promise<void>;
   /** `await using` support: closes the resource. */
@@ -61,7 +68,7 @@ export declare function rows(store: string, limit?: number, root?: string | null
 export declare function touchPath(path: string, data: Buffer, ratio?: number): boolean;
 
 /** Add, slowly. */
-export declare function slowAdd(a: number, b: number, signal?: AbortSignal): Promise<number>;
+export declare function slowAdd(a: bigint, b: bigint, signal?: AbortSignal): Promise<bigint>;
 
 /** Fetch one row. */
 export declare function fetch(store: string, signal?: AbortSignal): Promise<SampleRow>;
@@ -73,4 +80,4 @@ export declare function tail(store: string): UnibindStream<SampleRow>;
 export declare function tailLater(store: string, signal?: AbortSignal): Promise<UnibindStream<SampleRow>>;
 
 /** Open a counter from a free function. */
-export declare function openCounter(start?: number): Counter;
+export declare function openCounter(start?: bigint): Counter;

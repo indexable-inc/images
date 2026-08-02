@@ -141,14 +141,20 @@
           # already present and never re-fetches or re-ingests it, the same
           # property nixpkgs got in ix#6043/#1748/#1749/#1815.
           #
-          # `self.outPath` is the ORIGINAL `-source` path and carries string
-          # context, so it roots into the image closure once (no duplicate
-          # copy — the #1748 trap). Only this flake scope sees `self`, so it
-          # is plumbed down from `flake.nix`. The pin's `narHash` is
-          # conditional — present locks the pin, absent tolerates the
-          # path-locked submodule seam (index#3981) — see ./registry-pin.nix;
-          # the `image-registry-pin` check holds both shapes.
-          nix.registry.index.to = registryPin self;
+          # Whichever path the pin ends up naming carries string context, so it
+          # roots into the image closure once (no duplicate copy, the #1748
+          # trap). Only this flake scope sees `self`, so it is plumbed down
+          # from `flake.nix`. Which path that is, and whether the pin keeps
+          # `narHash`, depends on the shape `self` arrives in: its own
+          # `-source` store path when index is consumed as its own flake, a
+          # copy of `sourceRoot` when index is a subdirectory of ix and
+          # `self.outPath` is therefore a subpath nix cannot short-circuit on
+          # (ix#9290). ./registry-pin.nix has the full account; the
+          # `image-registry-pin` check holds all three shapes.
+          nix.registry.index.to = registryPin {
+            inherit self;
+            sourceRoot = paths.root;
+          };
         }
         ++ [
           ./platform.nix

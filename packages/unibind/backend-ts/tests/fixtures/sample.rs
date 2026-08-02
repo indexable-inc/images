@@ -120,6 +120,31 @@ mod sample_ts {
             Ok(self.total.fetch_add(amount, Ordering::Relaxed) + amount)
         }
 
+        /// Every value the counter takes, as a pull stream.
+        pub fn watch(&self) -> unibind_runtime::UniStream<i64> {
+            unibind_runtime::UniStream::new(futures::stream::iter(Vec::new()))
+        }
+
+        /// Labels under `prefix` (an async, throwing, renamed stream
+        /// method, whose handle class is scoped by its owner).
+        #[unibind(ts(name = "tailRows"))]
+        pub async fn tail(
+            &self,
+            prefix: String,
+            #[unibind(default = 10)] limit: u32,
+        ) -> Result<unibind_runtime::UniStream<String>, SampleError> {
+            let labels = (0..limit).map(move |index| format!("{prefix}{index}"));
+            Ok(unibind_runtime::UniStream::new(futures::stream::iter(labels)))
+        }
+
+        /// Fork a counter: a method handing back another object handle.
+        pub fn fork(&self) -> Counter {
+            Counter {
+                total: AtomicI64::new(self.value()),
+                open: AtomicBool::new(true),
+            }
+        }
+
         /// Release the counter.
         pub async fn close(&self) {
             self.open.store(false, Ordering::SeqCst);

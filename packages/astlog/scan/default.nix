@@ -7,6 +7,15 @@
 # files in the caller's working directory with `fd` and shells out to
 # `astlog scan`; the binary's exit code is the gate.
 #
+# The working directory and NOT `git rev-parse --show-toplevel`, which this
+# used to `cd` to. Since index/ became a subdirectory of ix (ix#9282) the
+# enclosing git toplevel is ix's root, so running this from inside index/
+# scanned all of ix with index's ruleset and reported findings in files the
+# caller never asked about. Both real callers already run from the root of the
+# tree they mean to scan -- ix's lint derivation git-inits a source copy and
+# cds into it, index's lintStage runs from its own root -- so honouring the
+# documented contract is also what they were relying on.
+#
 # Index's own `lib/per-system.nix` keeps using `lintStage` for the
 # four-stage local lint run (alejandra | statix | deadnix | astlog | astlog-rust);
 # this package is the externally consumable surface.
@@ -15,7 +24,6 @@
   writeNushellApplication,
   astlog,
   fd,
-  git,
 }: let
   rules = ix.paths.root + "/astlog-rules/nix.astlog";
 in
@@ -24,7 +32,6 @@ in
     runtimeInputs = [
       astlog
       fd
-      git
     ];
     meta = {
       description = "Scan a Nix tree with the index-owned astlog Nix lint rules";
@@ -33,8 +40,6 @@ in
     text = ''
       # nu
       def main [] {
-        let repo_root = (^git rev-parse --show-toplevel | str trim)
-        cd $repo_root
         let nix_files = (^fd --hidden --extension nix --type file | lines)
         if ($nix_files | is-empty) { return }
         ^astlog scan ${rules} ...$nix_files

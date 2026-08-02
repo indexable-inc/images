@@ -1,6 +1,37 @@
 # Contributing
 
-Bug reports and enhancement requests go to [GitHub Issues](https://github.com/indexable-inc/index/issues). Security reports follow [SECURITY.md](SECURITY.md) instead. Code changes land directly on `main` after local verification; a pull request is the optional path when a change wants human or AI review (see [Workflow](AGENTS.md#workflow)).
+**This repository is a read-only projection.** `indexable-inc/index` is
+published from a subtree of a private monorepo. Its `main` branch is replaced
+wholesale by a bot on each sync, so nobody can push here and a pull request
+cannot be merged — one opened against this repository is closed automatically,
+with a pointer back to this file.
+
+Read this section if you are looking at github.com/indexable-inc/index. If you
+are reading the same file inside the monorepo at `index/`, everything below
+"Local setup" still applies to you unchanged; the difference is only that your
+changes are ordinary commits there, and reach this repository on the next sync.
+
+## How to get a change made
+
+Open an issue: <https://github.com/indexable-inc/index/issues>. Issues are read
+and are the supported path. Security reports go through
+[SECURITY.md](SECURITY.md) instead, not the issue tracker.
+
+Two things are worth saying plainly rather than leaving you to infer them.
+
+**A fix will not link back to your report.** The sync squashes each update into
+a single commit titled `update <date>`, with no author, no message and no
+revision from the monorepo — that is deliberate, because the commit metadata is
+where internal detail leaks. So the change you asked for may well land, and
+nothing in this repository's history will connect it to you. Say in the issue if
+you would like to be credited and we will do it by hand.
+
+**A pull request will be closed, not ignored.** Leaving it open would be worse:
+the next sync overwrites `main` regardless, so the branch it targets stops
+existing and the pull request is silently obliterated. Closing it immediately
+with an explanation is the honest version of what happens either way. Nothing
+about that is a judgement of the change — please do reopen the content as an
+issue, patch and all.
 
 ## Local setup
 
@@ -208,4 +239,10 @@ One logical change per commit; see the [Workflow](AGENTS.md#workflow) section fo
 
 ## Pull requests
 
-PRs are the optional review path, not the default way to land a change; verified changes push directly to `main`. When you do open one, it targets `main`. Required status checks (currently `flake-check` and `ai review approved`) on a PR are signal, not a queue you are required to babysit once local gates pass. Repositories migrating an older review gate can set `AI_REVIEW_REQUIRED_CHECK_NAME` until branch protection uses the model-neutral check name. The PR description should answer the same "why" question the commit body answers, plus anything reviewer-only: rollout plan, known follow-ups, and reviewer-specific context.
+Inside the monorepo, a pull request is the optional review path and targets
+`main`; verified changes may also push directly. The description should answer
+the same "why" question the commit body answers, plus anything reviewer-only:
+rollout plan, known follow-ups, and reviewer-specific context.
+
+None of that applies to `indexable-inc/index`, where pull requests are closed
+on sight. See "How to get a change made" at the top of this file.

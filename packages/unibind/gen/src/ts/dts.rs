@@ -51,7 +51,7 @@ pub fn render(interface: &ir::Interface) -> Result<String, EmitError> {
     for error in &interface.errors {
         error_decl(&mut out, error);
     }
-    if interface.has_streams() {
+    if types::has_streams(interface) {
         out.push_str(STREAM_DECL);
     }
     for object in &interface.objects {
@@ -81,16 +81,18 @@ fn record_decl(
         doc_block(out, "  ", &field.docs);
         let name = value_name(&field.name, &field.names);
         let entry = match &field.ty {
-            // napi reads a missing property as `None` and writes `None`
-            // back as `null`, so `Option` fields are optional in both
-            // directions.
+            // napi reads a missing property (or an explicit null) as
+            // `None`, and returns `None` as undefined -- not as an explicit
+            // null, which the conformance suite pins. So the declaration
+            // needs both halves: `?` for what comes back, and `| null` for
+            // what a caller may pass in.
             ir::Type::Option(inner) => {
                 format!(
-                    "{name}?: {} | null",
-                    ts_type(interface, inner, Level::Nested)?
+                    "readonly {name}?: {} | null",
+                    ts_type(interface, inner, Level::Field)?
                 )
             }
-            ty => format!("{name}: {}", ts_type(interface, ty, Level::Nested)?),
+            ty => format!("readonly {name}: {}", ts_type(interface, ty, Level::Field)?),
         };
         writeln!(out, "  {entry};").expect("write to string");
     }

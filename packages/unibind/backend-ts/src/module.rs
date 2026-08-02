@@ -3,18 +3,18 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use unibind_core::ir;
-use unibind_core::render::{RenderError, RenderedInterface, name_ident};
+use unibind_core::render::{self, RenderError, RenderedInterface, name_ident};
 
 use crate::ty::TyCtx;
-use crate::{error, function, object, record, stream};
+use crate::{convert, error, function, mirror, object, record, stream};
 
 /// Render `napi-rs` glue for one interface.
 ///
 /// # Errors
 ///
 /// Fails for surface the ts backend does not implement yet (data enums,
-/// BigInt-only integers, integer-keyed maps, stream-returning methods) and
-/// for renames that cannot become identifiers.
+/// integer-keyed maps, streams of objects) and for renames that cannot
+/// become identifiers.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
     if let Some(data_enum) = interface.enums.first() {
         return Err(RenderError::new(format!(
@@ -23,16 +23,37 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         )));
     }
 
-    let user = name_ident(&interface.name)?;
+    // Every reference to the user's module goes through one alias bound
+    // here, at the glue module's own scope. napi-derive relocates the items
+    // it expands into generated helper modules, and a `super::` written
+    // inside one of those resolves one level short of the crate root -- the
+    // failure an adopter cannot work around, since nothing can inject items
+    // into a generated module. A single-segment path through this alias
+    // resolves at any depth, because the helper modules `use super::*`.
+    let module = name_ident(&interface.name)?;
+    let user = format_ident!("__unibind_user");
+    let user_alias = quote! {
+        #[allow(unused_imports)]
+        use super::#module as #user;
+    };
+    let mirrored = mirror::mirrored_records(&interface.records);
     let ctx = TyCtx {
         user: &user,
         objects: &interface.objects,
+        mirrored: &mirrored,
     };
     let glue_ident = format_ident!("__unibind_ts_{}", interface.name.trim_start_matches('_'));
 
     for rec in &interface.records {
         record::check_record(rec)?;
     }
+    let bigint = convert::helpers(interface, &mirrored);
+    let mirrors = interface
+        .records
+        .iter()
+        .filter(|record| mirrored.contains(&record.name))
+        .map(|record| mirror::render_mirror(record, &ctx))
+        .collect::<Result<Vec<_>, _>>()?;
     let conversions = interface
         .errors
         .iter()
@@ -41,15 +62,18 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     let wrappers = interface
         .functions
         .iter()
-        .map(|func| match &func.ret {
-            Some(ir::Type::Stream(element)) => stream::render_stream_fn(func, element, &ctx),
-            _ => function::render_fn(func, &ctx),
-        })
+        .map(|func| function::render_fn(func, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let objects = interface
         .objects
         .iter()
         .map(|obj| object::render_object(obj, &ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Every stream class renders here rather than next to its export: a
+    // method's class cannot live inside the object's `#[napi] impl`.
+    let streams = render::stream_exports(interface)
+        .iter()
+        .map(|export| stream::render(export, &ctx))
         .collect::<Result<Vec<_>, _>>()?;
     let signal = needs_signal(interface).then(abort_signal);
     let module_docs = function::doc_attrs(&interface.docs);
@@ -59,13 +83,21 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[doc(hidden)]
         #[allow(clippy::all, clippy::pedantic, clippy::nursery, unused_qualifications)]
         mod #glue_ident {
+            #user_alias
             #signal
+            #bigint
+            #(#mirrors)*
             #(#conversions)*
             #(#wrappers)*
             #(#objects)*
+            #(#streams)*
         }
     };
-    let records = interface.records.iter().map(record::record_attrs).collect();
+    let records = interface
+        .records
+        .iter()
+        .map(|record| record::record_attrs(record, &mirrored))
+        .collect();
     Ok(RenderedInterface { glue, records })
 }
 

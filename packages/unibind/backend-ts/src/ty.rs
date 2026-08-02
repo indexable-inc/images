@@ -5,29 +5,67 @@ use quote::quote;
 use unibind_core::ir;
 use unibind_core::render::{RenderError, name_ident, pascal_case};
 
-/// Interface-wide context the type mapping needs: the exported module's
-/// identifier (named types resolve through `super::<user>::`) and the
+use crate::convert;
+
+/// Interface-wide context the type mapping needs: the alias the glue binds
+/// to the exported module (named types resolve through `<user>::`), the
 /// declared objects (which map to generated handle classes, not user
-/// structs).
+/// structs), and the records that cross through a generated mirror struct.
 pub struct TyCtx<'a> {
+    /// The glue-level alias for the user's module, never `super::<module>`
+    /// directly: see the binding in [`crate::module`] for why the hop
+    /// cannot survive napi-derive's helper modules.
     pub user: &'a Ident,
     pub objects: &'a [ir::Object],
+    pub mirrored: &'a [String],
 }
 
 impl TyCtx<'_> {
     pub fn object(&self, name: &str) -> Option<&ir::Object> {
         self.objects.iter().find(|object| object.name == name)
     }
+
+    /// The mirror struct standing in for record `name`, when it has one
+    /// (see [`crate::mirror`]).
+    pub fn mirror(&self, name: &str) -> Option<Ident> {
+        self.mirrored
+            .iter()
+            .any(|mirrored| mirrored == name)
+            .then(|| convert::mirror_ident(name))
+    }
 }
 
-/// How close to the wrapper signature a type sits. `Buffer` only replaces
-/// bytes at the top level (including directly under `Option`); nested bytes
-/// stay `Vec<u8>` so container types line up with the user's own field and
-/// element types.
+/// Which position a value occupies, which is what decides whether bytes
+/// cross as napi's `Buffer` or as the user's own `Vec<u8>`.
+///
+/// The dividing line is not depth: it is whether the glue writes a
+/// conversion of its own for this value. A whole argument or return value
+/// gets one, and so does every field of a record's generated mirror struct
+/// (a `Buffer` is a legal `#[napi(object)]` field -- it implements both
+/// napi conversions). A `Vec` element or a map value gets none: the
+/// container crosses whole and unconverted, so its interior has to already
+/// be the type the user's own code spells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
+    /// A whole argument, return value, or stream item.
     Top,
-    Nested,
+    /// A field of a record (see [`crate::mirror`]).
+    Field,
+    /// Inside a container: a `Vec` element or a map value.
+    Element,
+}
+
+impl Level {
+    /// Whether bytes at this position cross as napi's `Buffer`. Every
+    /// renderer asks here rather than matching the variants, so the
+    /// generated glue, the `.d.ts` and the Zod schema cannot disagree about
+    /// one position.
+    pub const fn bytes_as_buffer(self) -> bool {
+        match self {
+            Self::Top | Self::Field => true,
+            Self::Element => false,
+        }
+    }
 }
 
 /// Reject the type surface napi cannot represent faithfully under the
@@ -35,17 +73,6 @@ pub enum Level {
 /// tokens so failures name the follow-up instead of miscompiling.
 pub fn check(ty: &ir::Type, what: &str) -> Result<(), RenderError> {
     match ty {
-        ir::Type::Int(kind) => match kind {
-            ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => {
-                Err(RenderError::new(format!(
-                    "{what} is `{}`, which napi only carries as a BigInt; \
-                     BigInt mapping is a stage 2 follow-up of issue #1993, so \
-                     use i64 (IEEE-double safe range) or u32 for now",
-                    kind.rust_name(),
-                )))
-            }
-            _ => Ok(()),
-        },
         ir::Type::Map { key, value } => {
             if !matches!(**key, ir::Type::String { .. }) {
                 return Err(RenderError::new(format!(
@@ -60,6 +87,7 @@ pub fn check(ty: &ir::Type, what: &str) -> Result<(), RenderError> {
             check(inner, what)
         }
         ir::Type::Bool
+        | ir::Type::Int(_)
         | ir::Type::Float(_)
         | ir::Type::String { .. }
         | ir::Type::Path { .. }
@@ -79,30 +107,35 @@ pub fn decl(ty: &ir::Type, ctx: &TyCtx<'_>, level: Level) -> Result<TokenStream,
         ir::Type::Float(ir::FloatKind::F64) => quote!(f64),
         ir::Type::String { .. } => quote!(::std::string::String),
         ir::Type::Path { .. } => quote!(::std::path::PathBuf),
-        ir::Type::Bytes { .. } => match level {
-            Level::Top => quote!(::napi::bindgen_prelude::Buffer),
-            Level::Nested => quote!(::std::vec::Vec<u8>),
-        },
+        ir::Type::Bytes { .. } => {
+            if level.bytes_as_buffer() {
+                quote!(::napi::bindgen_prelude::Buffer)
+            } else {
+                quote!(::std::vec::Vec<u8>)
+            }
+        }
         ir::Type::Option(inner) => {
             let inner = decl(inner, ctx, level)?;
             quote!(::std::option::Option<#inner>)
         }
         ir::Type::Vec(inner) => {
-            let inner = decl(inner, ctx, Level::Nested)?;
+            let inner = decl(inner, ctx, Level::Element)?;
             quote!(::std::vec::Vec<#inner>)
         }
         ir::Type::Map { value, .. } => {
-            let value = decl(value, ctx, Level::Nested)?;
+            let value = decl(value, ctx, Level::Element)?;
             quote!(::std::collections::HashMap<::std::string::String, #value>)
         }
         ir::Type::Named(name) => {
             if let Some(object) = ctx.object(name) {
                 let handle = object_handle_ident(object);
                 quote!(#handle)
+            } else if let Some(mirror) = ctx.mirror(name) {
+                quote!(#mirror)
             } else {
                 let user = ctx.user;
                 let name = name_ident(name)?;
-                quote!(super::#user::#name)
+                quote!(#user::#name)
             }
         }
         ir::Type::Stream(_) => {
@@ -135,8 +168,13 @@ pub fn pass(ty: &ir::Type, expr: &TokenStream) -> TokenStream {
 }
 
 /// Adapt the user's return value to the wrapper's declared return type:
-/// wrap bytes into `Buffer`, wrap constructed objects into their handle.
+/// widen 64-bit integers (and the records holding them) into their `BigInt`
+/// shape, wrap bytes into `Buffer`, wrap constructed objects into their
+/// handle.
 pub fn ret(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> TokenStream {
+    if let Some(converted) = convert::outward(ty, ctx, expr) {
+        return converted;
+    }
     match ty {
         ir::Type::Bytes { .. } => quote!(::napi::bindgen_prelude::Buffer::from(#expr)),
         ir::Type::Option(inner) if matches!(**inner, ir::Type::Bytes { .. }) => {
@@ -161,24 +199,32 @@ pub fn object_handle_ident(object: &ir::Object) -> Ident {
     )
 }
 
-/// The Rust identifier of the generated stream class for the function
-/// `name`.
-pub fn stream_class_ident(name: &str) -> Ident {
-    Ident::new(
-        &format!("__UnibindStream{}", pascal_case(name)),
-        Span::call_site(),
-    )
+/// The Rust identifier of the generated stream class for one
+/// stream-returning export: `__UnibindStreamTail` for a free `tail`,
+/// `__UnibindStreamCounterTail` for `Counter::tail`.
+///
+/// Export names are unique per scope (Rust enforces it), so classes cannot
+/// collide within a scope; a free function named exactly like an
+/// object+method concatenation would collide across scopes, and fails
+/// loudly as a duplicate item in the glue module rather than silently
+/// misbinding.
+pub fn stream_class_ident(owner: Option<&str>, export: &str) -> Ident {
+    let export = pascal_case(export);
+    let name = owner.map_or_else(
+        || format!("__UnibindStream{export}"),
+        |object| format!("__UnibindStream{object}{export}"),
+    );
+    Ident::new(&name, Span::call_site())
 }
 
+/// A 64-bit integer is declared as napi's `BigInt` in both directions;
+/// `crate::convert` owns the adaptation to and from the user's own width.
+/// Everything narrower crosses as its own Rust type, which napi carries as
+/// a JavaScript `number`.
 fn int_tokens(kind: ir::IntKind) -> TokenStream {
-    match kind {
-        // Rejected by `check` before any of these spell into a signature.
-        ir::IntKind::U64 | ir::IntKind::Usize | ir::IntKind::Isize => quote!(
-            ::core::compile_error!("unreachable: BigInt-only integers are rejected at render time")
-        ),
-        supported => {
-            let ident = Ident::new(supported.rust_name(), Span::call_site());
-            quote!(#ident)
-        }
+    if convert::is_bigint(kind) {
+        return quote!(::napi::bindgen_prelude::BigInt);
     }
+    let ident = Ident::new(kind.rust_name(), Span::call_site());
+    quote!(#ident)
 }

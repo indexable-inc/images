@@ -82,10 +82,42 @@ pub fn document(types: &ModuleTypes) -> String {
         root.insert("$defs".to_owned(), Value::Object(defs));
     }
 
-    let mut out = serde_json::to_string_pretty(&Value::Object(root))
+    let mut out = serde_json::to_string_pretty(&sorted(Value::Object(root)))
         .expect("an assembled schema is finite JSON");
     out.push('\n');
     out
+}
+
+/// `value` with every object's keys in sorted order.
+///
+/// These documents are pinned byte for byte by `tests/golden/*.schema.golden`,
+/// so their key order has to be a property of this crate and not of whoever
+/// else happens to be in the build. Without this it is the latter:
+/// `serde_json::Map` is a `BTreeMap` normally and an `IndexMap` when
+/// `serde_json`'s `preserve_order` feature is on, and a feature is on for
+/// everyone once anyone asks for it. `packages/index-delta` asks for it today,
+/// so a build that resolves features across the whole workspace flips this
+/// crate's output from sorted to insertion order while nothing in this crate
+/// changes.
+///
+/// Re-inserting in sorted order gives the same bytes under either backing map:
+/// a `BTreeMap` was already sorted, and an `IndexMap` iterates in the order it
+/// was filled.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map.into_iter().collect();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
 }
 
 /// Builds a schema object from its keywords.

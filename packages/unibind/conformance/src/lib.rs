@@ -2,7 +2,9 @@
 //!
 //! Every export here exists so `runner.py` can prove one boundary behavior
 //! from Python: asyncio cancellation drops the Rust future, streams are
-//! pull-based, resources close deterministically (and warn when leaked),
+//! pull-based (including a stream of raw bytes off an object method),
+//! resources close deterministically (and warn when leaked), an async
+//! fallible method mints another object as a live wrapper class,
 //! `&[u8]` crosses zero-copy, and `blocking` releases the GIL. The globals
 //! are the observable side of behaviors that would otherwise be invisible
 //! across the boundary.
@@ -252,6 +254,32 @@ mod _conformance {
             ms
         }
 
+        /// Open a shell on this gate.
+        ///
+        /// Async, fallible, and object-returning at once, from a method on
+        /// another object: the wrapper has to await the future, map the
+        /// error into the exception hierarchy, and route the success value
+        /// through `Shell`'s glue class. Every other object here is minted
+        /// by a constructor or a sync call, so nothing else reaches that
+        /// combination.
+        ///
+        /// # Errors
+        ///
+        /// Rejects an empty command, so the error arm of the same shape is
+        /// exercisable from Python.
+        pub async fn open_shell(&self, command: String) -> Result<Shell, ConformanceError> {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            if command.is_empty() {
+                return Err(ConformanceError::Deliberate {
+                    message: "shell command must not be empty".to_owned(),
+                });
+            }
+            Ok(Shell {
+                command: format!("{}/{command}", self.label),
+                open: AtomicBool::new(true),
+            })
+        }
+
         /// Release the gate. The generated wrapper guarantees at most one
         /// call even when Python awaits `close()` twice, which is what
         /// `closed_gates` verifies.
@@ -270,6 +298,57 @@ mod _conformance {
     /// Gates closed through `close` so far.
     pub fn closed_gates() -> u64 {
         CLOSED_GATES.load(Ordering::SeqCst)
+    }
+
+    static CLOSED_SHELLS: AtomicU64 = AtomicU64::new(0);
+
+    /// A shell handle, minted only by [`Gate::open_shell`]: the object half
+    /// of the async-fallible-object-returning shape, and the owner of the
+    /// byte stream below.
+    #[unibind::object(resource)]
+    pub struct Shell {
+        command: String,
+        open: AtomicBool,
+    }
+
+    impl Shell {
+        /// The command this shell was opened with, qualified by its gate.
+        /// Calling it is how Python proves it holds a live wrapper and not
+        /// an opaque handle.
+        pub fn command(&self) -> String {
+            self.command.clone()
+        }
+
+        /// Whether `close` has not run yet.
+        pub fn is_open(&self) -> bool {
+            self.open.load(Ordering::SeqCst)
+        }
+
+        /// `n` chunks of raw output: a byte stream off an object method.
+        ///
+        /// Every chunk opens with NUL and `0xFF`. Neither survives a UTF-8
+        /// round trip, so a codec that decoded items as text anywhere on
+        /// the path fails the assertion instead of passing quietly.
+        pub fn output(&self, n: u64) -> UniStream<Vec<u8>> {
+            let command = self.command.clone();
+            UniStream::new(futures::stream::iter((0..n).map(move |index| {
+                let mut chunk = vec![0x00_u8, 0xFF];
+                chunk.extend_from_slice(command.as_bytes());
+                chunk.extend_from_slice(index.to_string().as_bytes());
+                chunk
+            })))
+        }
+
+        /// Release the shell.
+        pub async fn close(&self) {
+            self.open.store(false, Ordering::SeqCst);
+            CLOSED_SHELLS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Shells closed through `close` so far.
+    pub fn closed_shells() -> u64 {
+        CLOSED_SHELLS.load(Ordering::SeqCst)
     }
 
     /// Panic synchronously.

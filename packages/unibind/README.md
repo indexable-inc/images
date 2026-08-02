@@ -114,7 +114,8 @@ Phase 1 ships that out-of-process half. `unibind-gen` (the `gen` crate) reads
 the section back and renders host files through a small
 `HostFile`/`HostEmitter` seam -- Python (`<module>.pyi`, `py.typed`, and a
 wrapper `__init__.py` unless the package hands one in) and TypeScript
-(`index.d.ts` plus the CommonJS `index.js` wrapper, `unibind-gen ts`); the
+(`index.d.ts`, the Zod `schemas.ts`, plus the CommonJS `index.js` wrapper,
+`unibind-gen ts`); the
 `.ex` (#1995) emitter implements the same seam. On the nix side,
 `unibind.lib.build { crate; targets; }` (`ix.unibind` / `index.lib.unibind`,
 packages/unibind/nix) glues it in. For `py`: the cdylib comes from the shared
@@ -165,22 +166,36 @@ Crates:
   (async ones take a trailing optional `AbortSignal` whose abort drops the
   Rust future via `tokio::select!`), `#[napi(object)]` records, error enums
   as `napi::Error` reasons under the machine-decodable
-  `__unibind__:err:<Enum>:<Variant>:<message>` prefix, pull-stream handle
-  classes (`next`/`close`), and object classes with napi constructors and an
-  idempotent resource `close()` plus an unclosed-leak warning on drop. The
+  `__unibind__:err:<Enum>:<Variant>:<message>` prefix, one pull-stream
+  handle class (`next`/`close`) per stream-returning export -- free
+  functions and object methods alike, the class named for its owner -- and
+  object classes with napi constructors and an idempotent resource
+  `close()` plus an unclosed-leak warning on drop. The
   consuming crate depends on `napi` (`napi6` + `tokio_rt`), `napi-derive`,
   `tokio` (`sync` + `macros`), and `unibind-runtime`, and builds a cdylib
   with `napi_build::setup()`. `blocking` renders as a plain sync export
-  (there is no GIL to release). BigInt-only integers (u64, usize, isize) and
-  integer-keyed maps reject at render time until BigInt lands.
+  (there is no GIL to release). Integers wider than an IEEE double holds
+  exactly (`i64`, `u64`, `isize`, `usize`) cross as JavaScript `bigint`;
+  integer-keyed maps still reject at render time.
+
+  **The generated glue is napi 3, and both `napi` and `napi-derive` must be
+  on 3.** A workspace still pinned to napi 2 fails inside `napi_derive`
+  with errors that name no version at all -- "Only fn in impl block can be
+  marked as factory, constructor, getter or setter", "arguments cannot be
+  `self`", and an `E0107` arity mismatch -- so the diagnostic points at the
+  generated code rather than at the pin. Pin the derive too, not just the
+  runtime: the derive is what expands the glue, so a mixed napi-3 with
+  napi-derive-2 pairing is a third expansion shape that nothing here is
+  tested against. Cargo treats the two majors as distinct crates, so a
+  workspace mid-migration can carry both.
 
 ## Type mapping (phase 0)
 
 | Rust                  | IR              | Python        | TypeScript |
 | --------------------- | --------------- | ------------- | ---------- |
 | `bool`                | `Bool`          | `bool`        | `boolean`  |
-| `i8..i64`, `u8..u32`  | `Int`           | `int`         | `number`   |
-| `u64`, `usize`, `isize` | `Int`         | `int`         | rejected until BigInt lands (follow-up of #1993) |
+| `i8..i32`, `u8..u32`  | `Int`           | `int`         | `number`   |
+| `i64`, `u64`, `isize`, `usize` | `Int`  | `int`         | `bigint`, everywhere (see below) |
 | `f32`, `f64`          | `Float`         | `float`       | `number`   |
 | `String` / `&str`     | `String`        | `str`         | `string`   |
 | `PathBuf` / `&Path`   | `Path`          | accepts `str \| os.PathLike`, returns `str` | `string` |
@@ -188,7 +203,7 @@ Crates:
 | `Option<T>`           | `Option`        | `T \| None`   | `T \| null` (omission accepted) |
 | `Vec<T>`              | `Vec`           | `list[T]`     | `Array<T>` |
 | `HashMap<K, V>`       | `Map`           | `dict[K, V]`  | `Record<string, V>` (string keys only) |
-| `#[unibind::record]`  | `Named`         | native class  | plain object via `napi(object)` |
+| `#[unibind::record]`  | `Named`         | native class  | plain object via `napi(object)` (a record holding a 64-bit integer crosses through a generated mirror struct) |
 | `#[unibind::object]`  | `Named` (return only) | wrapped handle class | wrapped handle class, `await using` on resources |
 | `UniStream<T>` return | `Stream`        | async iterator | `UnibindStream<T>` (`AsyncIterable<T>` + `next`/`close`) |
 | `async fn`            | `Asyncness::Async` | asyncio coroutine | `Promise<T>`, trailing optional `AbortSignal` |
@@ -196,6 +211,27 @@ Crates:
 
 Borrowed forms (`&str`, `&Path`, `&[u8]`, including under `Option`) are
 argument-only; returns and record fields own their data.
+
+A JavaScript `number` is an IEEE double, so it holds integers exactly only
+up to 2^53. The four widths past that cross as `bigint` in *every* position
+-- argument, return, `Array` element, `Record` value, record field, and
+stream item -- rather than only at the top level, so a value never changes
+representation as it moves between them. Inbound the glue narrows
+losslessly: a `bigint` outside the declared Rust width is refused with a
+plain napi error (not one of the generated error classes, because it is a
+caller mistake rather than a boundary failure the interface declared), and a
+`number` passed where a `bigint` is declared is refused rather than coerced.
+Records are the one place this is not free: napi derives a record's
+conversions from the user's own field types, which cannot carry a `u64` at
+all and would carry an `i64` as a lossy `number`, so a record holding one
+crosses through a `#[napi(object)]` mirror struct the glue owns. The
+JavaScript shape and key names are identical either way; records that
+mention no 64-bit integer keep `#[napi(object)]` on the user's struct.
+
+One consequence to plan for on the JavaScript side: `JSON.stringify` throws
+on a `bigint`. A caller serializing a record with 64-bit fields needs a
+replacer (`String(value)` is the usual choice), which is the honest cost of
+not rounding the value in the first place.
 
 Phase 1 changes nothing in this table: the `.pyi` emitter renders these same
 rules (argument vs return position included) from the untouched IR.
@@ -224,14 +260,20 @@ rules (argument vs return position included) from the untouched IR.
 ## The TypeScript surface
 
 `unibind-gen ts --artifact <cdylib-or-.node> --addon <basename> --out <dir>`
-emits the two host files next to the addon (`./native/<basename>.node`):
+emits the host files next to the addon (`./native/<basename>.node`):
 
 - `index.d.ts`: TSDoc from the IR's doc comments on every export; defaulted
   and `Option` arguments are optional; async exports take a trailing
   `signal?: AbortSignal` and return `Promise<T>`; stream returns are
-  `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`); objects are
-  classes with real constructors (when declared) and, for resources,
-  `close()` plus `[Symbol.asyncDispose]()`.
+  `UnibindStream<T>` (`AsyncIterable<T>` + `next()`/`close()`), from object
+  methods as well as free functions; objects are classes with real
+  constructors (when declared) and, for resources, `close()` plus
+  `[Symbol.asyncDispose]()`. A method returning an object hands back that
+  object's wrapper class, so `client.keys().create(...)` chains.
+- `schemas.ts`: one Zod schema per record, for the callers who need the
+  boundary's shapes checked at runtime and not only at compile time (parsing
+  a config file, an HTTP body, or anything else that reaches a binding as
+  `unknown`). See the section below.
 - `index.js` (CommonJS): decodes the glue's `__unibind__:` rejection reasons
   into real classes -- one `Error` subclass per error enum (each variant a
   subclass, `code` = the variant class name) and `__unibind__:aborted` into
@@ -249,6 +291,59 @@ warning on stderr when a resource was never closed.
 of it against the built addon, including backpressure through the pull
 stream's bounded channel.
 
+### Zod schemas
+
+A `.d.ts` is erased at runtime, so anything reaching a binding as `unknown`
+(a parsed config file, an HTTP body, a message off a queue) still needs a
+check. `schemas.ts` is that check, and it is generated rather than
+hand-written for the reason the types are: it comes out of the same IR
+through the same type mapping, so a schema cannot drift from the type it
+validates.
+
+```ts
+import { SampleRow } from "@scope/pkg/schemas";
+
+const row = SampleRow.parse(JSON.parse(body)); // typed as SampleRow
+```
+
+One `export const <Record>` per record, plus `export type <Record> =
+z.infer<typeof <Record>>` so the schema and its type share a name. Doc
+comments become `.describe(...)`, which (unlike a TSDoc comment) survives
+into the schema at runtime and into a JSON Schema conversion; zod 4 prefers
+`.meta({ description })` for new code, but `.describe()` is the spelling
+both majors accept. The mapping is the `.d.ts` mapping, one row per line
+above:
+
+| IR | `index.d.ts` | `schemas.ts` |
+| -- | ------------ | ------------ |
+| `Bool` | `boolean` | `z.boolean()` |
+| `Int` (`i8..i32`, `u8..u32`) | `number` | `z.number().int()` |
+| `Int` (`i64`, `u64`, `isize`, `usize`) | `bigint` | `z.bigint()` |
+| `Float` | `number` | `z.number()` |
+| `String`, `Path` | `string` | `z.string()` |
+| `Bytes` (always nested in a record) | `Array<number>` | `z.array(z.number().int())` |
+| `Option<T>` field | `name?: T \| null` | `.nullable().optional()` |
+| `Vec<T>` | `Array<T>` | `z.array(T)` |
+| `Map<String, V>` | `Record<string, V>` | `z.record(z.string(), V)` |
+| `Named` (a record) | the record's type | the record's schema |
+
+The two integer rows read from one list (`ts::types::crosses_as_bigint`), so
+a schema cannot end up checking a `number` where the declared type promises
+a `bigint`.
+
+`zod` is a peer dependency of a generated package: the file imports `z` and
+nothing else, in the two-argument `z.record` spelling that means the same
+thing on zod 3 and zod 4. A record-less interface gets no `schemas.ts` at
+all, so a package that declares no record never needs the dependency.
+
+Two shapes refuse rather than emit a file that cannot compile: a record
+graph with a reference cycle (a schema is a `const` that reads the schemas
+it references while it initializes, and `z.infer` on a self-referential
+schema has nothing to infer), and a record field naming an
+`#[unibind::object]` (a handle crosses by reference; its fields never leave
+Rust). Lowering already rejects the second, and it has never produced the
+first.
+
 ## Conformance suite
 
 `packages/unibind/conformance` is the runtime proof for everything above:
@@ -258,9 +353,9 @@ live/dropped guard counts around `task.cancel()`, produced-vs-consumed
 stream counters, exactly one `ResourceWarning` per leaked resource, and
 `ctypes.addressof` equality for zero-copy buffers. It runs in CI as
 `checks.<system>.unibind-conformance-run`. Its TypeScript twin,
-`packages/unibind/conformance-ts`, mirrors those shapes with ts-compatible
-types (the shared crate's `u64`/`usize` surface is BigInt-territory the ts
-backend still rejects) and runs as
+`packages/unibind/conformance-ts`, mirrors those shapes -- including the
+64-bit integers that only a `bigint` carries exactly, round-tripped past
+2^53 and at `i64::MIN`/`i64::MAX`/`u64::MAX` -- and runs as
 `checks.<system>.unibind-conformance-ts-node-conformance`.
 
 `packages/unibind/conformance-jvm` is the same idea for the jvm backend: a

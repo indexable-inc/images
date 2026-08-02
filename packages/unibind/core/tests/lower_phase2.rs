@@ -172,6 +172,54 @@ fn resources_without_close_are_rejected() {
     assert!(message.contains("close method"), "{message}");
 }
 
+/// `#[unibind(resource)]` as its own attribute reads like the marker's
+/// option list, but an object's options are only ever taken from the marker
+/// itself -- and `strip_unibind_attrs` then deletes the stray one. Left
+/// silent it hands back a plain object: no close requirement, no leak
+/// warning, no error. The diagnostic must name the spelling that works.
+#[test]
+fn stray_unibind_attributes_on_an_object_are_rejected() {
+    let message = error_message(
+        "mod m { #[unibind::object] #[unibind(resource)] pub struct H { id: u64 } \
+         impl H { pub async fn close(&self) {} } }",
+    );
+    assert!(message.contains("#[unibind::object(resource)]"), "{message}");
+}
+
+/// Order does not save it: the stray attribute is refused above the marker
+/// too, and the message still names the right spelling.
+#[test]
+fn a_stray_unibind_attribute_above_the_marker_is_rejected() {
+    let message = error_message(
+        "mod m { #[unibind(py(name = \"Handle\"))] #[unibind::object] \
+         pub struct H { id: u64 } }",
+    );
+    assert!(message.contains("#[unibind::object("), "{message}");
+}
+
+/// The bare form stays legal where it is actually read: `constructor` and
+/// `blocking` on methods, `default` on arguments.
+#[test]
+fn bare_unibind_flags_still_work_on_methods_and_arguments() {
+    let interface = lower(
+        "mod m { #[unibind::object] pub struct H { id: u64 } \
+         impl H { \
+           #[unibind(constructor)] pub fn open() -> Self { H { id: 0 } } \
+           #[unibind(blocking)] pub fn work(&self, #[unibind(default = 3)] n: u64) -> u64 { n } \
+         } }",
+    )
+    .expect("lowering succeeds");
+    let [handle] = interface.objects.as_slice() else {
+        panic!("one object");
+    };
+    assert!(handle.constructor.is_some());
+    let [work] = handle.methods.as_slice() else {
+        panic!("one method");
+    };
+    assert!(work.blocking);
+    assert!(matches!(work.args[0].default, Some(ir::Literal::Int(3))));
+}
+
 #[test]
 fn mut_receivers_are_rejected() {
     let message = error_message(

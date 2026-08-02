@@ -76,6 +76,66 @@ pub fn pascal_case(name: &str) -> String {
         .collect()
 }
 
+/// One stream-returning export: the callable, the item its handle yields,
+/// and the object that owns it.
+pub struct StreamExport<'a> {
+    /// `None` for a free function, the owning object's Rust name for a
+    /// method. Backends scope the generated handle class by it.
+    pub owner: Option<&'a str>,
+    /// The stream-returning callable.
+    pub function: &'a ir::Function,
+    /// The yielded item type.
+    pub item: &'a ir::Type,
+}
+
+/// Every stream-returning export in the interface, in render order (free
+/// functions first, then each object's methods).
+///
+/// A backend that renders stream methods needs one handle class per export
+/// and cannot nest a method's class inside the object's own impl, so it
+/// walks the interface exactly this way; the walk and its order live here
+/// once rather than once per backend.
+#[must_use]
+pub fn stream_exports(interface: &ir::Interface) -> Vec<StreamExport<'_>> {
+    let free = interface
+        .functions
+        .iter()
+        .filter_map(|function| stream_export(None, function));
+    let methods = interface.objects.iter().flat_map(|object| {
+        object
+            .methods
+            .iter()
+            .filter_map(|method| stream_export(Some(object.name.as_str()), method))
+    });
+    free.chain(methods).collect()
+}
+
+impl StreamExport<'_> {
+    /// How docs and diagnostics name the export: `tail` for a free
+    /// function, `Store.tail` for `Store::tail`.
+    #[must_use]
+    pub fn qualified_name(&self) -> String {
+        self.owner.map_or_else(
+            || self.function.name.clone(),
+            |object| format!("{object}.{}", self.function.name),
+        )
+    }
+}
+
+fn stream_export<'a>(
+    owner: Option<&'a str>,
+    function: &'a ir::Function,
+) -> Option<StreamExport<'a>> {
+    let ir::Type::Stream(item) = function.ret.as_ref()? else {
+        return None;
+    };
+    Some(StreamExport {
+        owner,
+        function,
+        item,
+    })
+}
+
 /// How to spell borrowed boundary types.
 #[derive(Clone, Copy)]
 pub enum Ownership {
@@ -89,10 +149,22 @@ pub enum Ownership {
 /// The Rust spelling of a boundary type, as the wrapper signatures use it.
 ///
 /// `user` is the exported module's identifier; named types resolve through
-/// `super::<user>::`. Backends that reject part of this surface (bytes,
-/// streams) run their own checks before spelling anything.
+/// `super::<user>::`, which is right for a backend whose glue is a plain
+/// sibling module. A backend whose items get relocated by another macro
+/// needs [`rust_type_in`] instead. Backends that reject part of this surface
+/// (bytes, streams) run their own checks before spelling anything.
 #[must_use]
 pub fn rust_type(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStream {
+    rust_type_in(ty, &quote!(super::#user), ownership)
+}
+
+/// [`rust_type`], with the module path spelled by the caller.
+///
+/// The ts backend passes an alias it binds at its glue module's own scope:
+/// napi-derive relocates the items it expands into generated helper modules,
+/// where a `super::` hop resolves one level short of the crate root.
+#[must_use]
+pub fn rust_type_in(ty: &ir::Type, user: &TokenStream, ownership: Ownership) -> TokenStream {
     match ty {
         ir::Type::Bool => quote!(bool),
         ir::Type::Int(kind) => int_tokens(*kind),
@@ -120,24 +192,24 @@ pub fn rust_type(ty: &ir::Type, user: &Ident, ownership: Ownership) -> TokenStre
             }
         }
         ir::Type::Option(inner) => {
-            let inner = rust_type(inner, user, ownership);
+            let inner = rust_type_in(inner, user, ownership);
             quote!(::std::option::Option<#inner>)
         }
         ir::Type::Vec(inner) => {
-            let inner = rust_type(inner, user, ownership);
+            let inner = rust_type_in(inner, user, ownership);
             quote!(::std::vec::Vec<#inner>)
         }
         ir::Type::Map { key, value } => {
-            let key = rust_type(key, user, ownership);
-            let value = rust_type(value, user, ownership);
+            let key = rust_type_in(key, user, ownership);
+            let value = rust_type_in(value, user, ownership);
             quote!(::std::collections::HashMap<#key, #value>)
         }
         ir::Type::Named(name) => {
             let name = Ident::new(name, Span::call_site());
-            quote!(super::#user::#name)
+            quote!(#user::#name)
         }
         ir::Type::Stream(item) => {
-            let item = rust_type(item, user, ownership);
+            let item = rust_type_in(item, user, ownership);
             quote!(::unibind_runtime::UniStream<#item>)
         }
     }
