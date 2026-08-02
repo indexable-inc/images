@@ -49,6 +49,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Fork sources are submodules under vendor/ and every nix invocation
+      # below evaluates them. Not checkout's `submodules:` option (ix#8123);
+      # see the action's description.
+      - uses: ./.github/actions/init-submodules
+
       # `rustup`: the ix runner ships no Rust at all, and rustup is what reads
       # the repo's rust-toolchain.toml and downloads the nightly cargo it pins
       # on first use (same toolchain story as fuzz-nbt.yml). nightly is what

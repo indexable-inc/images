@@ -59,6 +59,11 @@ jobs:
           # rather than publish a silently truncated changelog.
           fetch-depth: 0
 
+      # Fork sources are submodules under vendor/ and every nix invocation
+      # below evaluates them. Not checkout's `submodules:` option (ix#8123);
+      # see the action's description.
+      - uses: ./.github/actions/init-submodules
+
       # Underscore digit separators: every nix invocation that evaluates this
       # tree must go through the patched client (see the action's description).
       - name: Bootstrap patched Nix client

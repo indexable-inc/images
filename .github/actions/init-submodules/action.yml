@@ -1,0 +1,24 @@
+name: Init submodules
+description: >
+  Check out the fork submodules under vendor/ after actions/checkout. Every
+  job that evaluates this flake needs them: flake.nix declares
+  `inputs.self.submodules = true` and points each fork input at
+  `path:./vendor/<fork>`, so without the submodule trees nix either fails
+  eval with "not tracked by Git" or, on a forge fetch, renders each fork as
+  an EMPTY DIRECTORY and builds the wrong thing silently.
+
+  Not checkout's own `submodules:` option: the ix dispatcher exports a
+  per-job GIT_CONFIG_GLOBAL (crates/ci/dispatcher/src/spawn.rs), which git
+  honors over checkout's temp-$HOME trick, so checkout writes its token
+  placeholder to one file and rewrites another and the job dies in "Setting
+  up auth for fetching submodules" (ix#8123). Every fork repo is public, so
+  an anonymous https fetch is all this needs.
+
+  --depth 1: only the pinned gitlink rev matters and GitHub serves want-sha
+  fetches, which is what keeps this affordable. The fork checkouts total
+  roughly 700MB at depth 1 against several GB of full history.
+runs:
+  using: composite
+  steps:
+    - run: git submodule update --init --recursive --depth 1
+      shell: bash
