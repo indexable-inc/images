@@ -133,11 +133,11 @@
     # Fork of nix-community/home-manager carrying the batched activation
     # linking series (lib/fork-packages.nix). Distinct from the
     # `home-manager` flake input above: this pins the `ix-patched` tip that
-    # workstation configs also consume. Pinned BY REV (autoUpdate = false):
-    # bump = merge upstream into `ix-patched` in indexable-inc/home-manager,
-    # fast-forward the branch, repin here.
+    # workstation configs also consume. autoUpdate = false: bump = merge
+    # upstream into `ix-patched` in indexable-inc/home-manager, fast-forward
+    # the branch, then move the `vendor/home-manager` gitlink.
     home-manager-src = {
-      url = "github:indexable-inc/home-manager/7d29fa5cbf4b468b7d9692cfb500cb89291fb519";
+      url = "path:./vendor/home-manager";
       flake = false;
     };
 
@@ -158,7 +158,7 @@
     # the indexable-inc/rust-clippy `ix-patched` megamerge (upstream base
     # 512551c8 plus the lint patch DAG).
     clippy-src = {
-      url = "github:indexable-inc/rust-clippy/cd551e2408a75638f6b0ac7ea88aa0dd18b8aea3";
+      url = "path:./vendor/clippy";
       flake = false;
     };
 
@@ -172,15 +172,18 @@
     # (ix-patched-v<version>) is no longer minted; the one left behind,
     # ix-patched-v2.55.0, is now an ancestor of the bookmark.
     git-src = {
-      url = "github:indexable-inc/git/eef38393cda1413ded72f0259d1618110cf38456";
+      url = "path:./vendor/git";
       flake = false;
     };
 
     # jj megamerge fork of jj-vcs/jj, carried as the submodule `vendor/jj`
-    # tracking `ix-patched`. The gitlink holds the rev, so none appears here,
-    # and the `refs/pins/<date>-<sha12>` ritual this fork used to need retires
-    # with it: a gitlink the bump workflow advances along the branch is
-    # reachable from that branch by construction.
+    # tracking `ix-patched`. The gitlink holds the rev, so none appears here.
+    #
+    # What that does NOT retire is the `refs/pins/<date>-<sha12>` ref. A
+    # gitlink recorded by an older index commit is orphaned by a rebase in the
+    # fork exactly as a lock rev was, so the pin ref is still the only thing
+    # keeping every historically pinned rev fetchable. What retires is the
+    # manual repin step in this file, not the ref.
     #
     # Bumping is `git submodule update --remote`, driven by
     # .github/workflows/update-flake-lock.yml through `submodule-paths`, which
@@ -196,16 +199,17 @@
       flake = false;
     };
 
-    # jj megamerge fork of openai/codex. Pinned BY REV: importCargoLock
-    # removes the aggregate cargoHash, but git dependencies still carry fixed
-    # output hashes in the package. A branch-loose URL lets a blanket
-    # `nix flake update` float the source past those hashes, which broke every
-    # ix prod deploy for 13h on 2026-07-07. Bump deliberately: jj-rebase
-    # indexable-inc/codex, repin here, then build Codex and refresh any git
-    # dependency hashes named by Nix. The scheduled content and fork updaters
-    # intentionally leave this input alone.
+    # jj megamerge fork of openai/codex. importCargoLock removes the aggregate
+    # cargoHash, but git dependencies still carry fixed output hashes in the
+    # package, so the source must never float past them: that is what broke
+    # every ix prod deploy for 13h on 2026-07-07, back when this was a
+    # branch-loose URL a blanket `nix flake update` could move. A gitlink
+    # cannot be moved by `nix flake update` at all, which retires that failure
+    # mode rather than documenting around it. Bump deliberately: jj-rebase
+    # indexable-inc/codex, move the gitlink, then build Codex and refresh any
+    # git dependency hashes named by Nix.
     codex-src = {
-      url = "github:indexable-inc/codex/1ca1b52d1e4e579d0fd35b17e5fd8e719b84bd33";
+      url = "path:./vendor/codex";
       flake = false;
     };
 
@@ -215,7 +219,7 @@
     # protocol-compatible drop-in for the running daemon. The base moves
     # DELIBERATELY, never under a routine `nix flake update` (fork-packages
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
-    # intend to move the daemon version too, then repin here.
+    # intend to move the daemon version too, then move the gitlink.
     nix-src = {
       # ix-patched 2d7585afe7b1 (43 commits on from f200a3a8d492, same branch,
       # same 2c6d06e9387c base, still version 2.34.7, so the drop-in property
@@ -255,16 +259,18 @@
       # instrumentation series has a lib/fork-packages.nix intent entry, so
       # both default to `hold` and cannot be sent upstream until someone
       # classifies them.
-      url = "github:indexable-inc/nix/2d7585afe7b146f2bb07d834285ce8caefc7ba33";
+      url = "path:./vendor/nix";
       flake = false;
     };
 
     # jj megamerge fork of aristocratos/btop. Tracks upstream main
     # (autoUpdate = true in lib/fork-packages.nix): the scheduled fork-sync
-    # jj-rebases the fork onto the new upstream tail, pushes `ix-patched` plus
-    # a pin ref, and floats this branch-loose input with `nix flake update`.
+    # jj-rebases the fork onto the new upstream tail and pushes `ix-patched`.
+    # The gitlink then follows by `git submodule update --remote`, NOT by
+    # `nix flake update`, which no longer moves this input at all. Anything
+    # driving the float has to move to the submodule path (ENG-11968).
     btop-src = {
-      url = "github:indexable-inc/btop/ix-patched";
+      url = "path:./vendor/btop";
       flake = false;
     };
 
@@ -272,7 +278,7 @@
     # true in lib/fork-packages.nix): the scheduled fork-sync jj-rebases the
     # xattr patch onto the new tail and floats this branch-loose input.
     nushell-src = {
-      url = "github:indexable-inc/nushell/ix-patched";
+      url = "path:./vendor/nushell";
       flake = false;
     };
 
@@ -281,9 +287,9 @@
     # patched source onto nixpkgs' nix-fast-build recipe, so it must track
     # the nixpkgs version, never free-float (autoUpdate = false in
     # lib/fork-packages.nix). On a nixpkgs nix-fast-build bump, jj-rebase
-    # indexable-inc/nix-fast-build onto the matching tag and repin.
+    # indexable-inc/nix-fast-build onto the matching tag and move the gitlink.
     nix-fast-build-src = {
-      url = "github:indexable-inc/nix-fast-build/6b976a8b2f8252942312599e6bfec20cec207f97";
+      url = "path:./vendor/nix-fast-build";
       flake = false;
     };
 
@@ -292,15 +298,17 @@
     # deadnix) and v0.14.0 (statix), one bookmark per series in
     # indexable-inc/rnix-parser (ix-patched-0.12 / ix-patched-0.14).
     # lib/util/rnix-digit-separators overlays the patched sources onto each
-    # tool's cargo vendor dir at build time. autoUpdate = false: each pin
+    # tool's cargo vendor dir at build time. autoUpdate = false: each gitlink
     # moves only when a nixpkgs bump moves the vendored rnix version (then
-    # jj-rebase the matching bookmark and repin).
+    # jj-rebase the matching bookmark and move the gitlink). Both submodules
+    # are the same repo at different bookmarks, which git handles as two
+    # independent gitlinks.
     rnix-0-12-src = {
-      url = "github:indexable-inc/rnix-parser/015fe463b6e9bad73326d725e0d3fa9a61e1fbdb";
+      url = "path:./vendor/rnix-0-12";
       flake = false;
     };
     rnix-0-14-src = {
-      url = "github:indexable-inc/rnix-parser/3f74f857a0d2bb6715ba993f506368b8b413d0d5";
+      url = "path:./vendor/rnix-0-14";
       flake = false;
     };
 
@@ -413,7 +421,7 @@
     # followed by a manual `nix build .#ghostty` on darwin. The rev is the
     # `ix-patched` megamerge (upstream base 49a43bf5 plus the patch DAG).
     ghostty-src = {
-      url = "github:indexable-inc/ghostty/c1b4a88a20757642c8f945f8d96c4905198158cb";
+      url = "path:./vendor/ghostty";
       flake = false;
     };
 
@@ -427,7 +435,7 @@
     # validated by running the guest, not by CI), so it moves only under a
     # deliberate manual bump, never the cron.
     mesa-src = {
-      url = "github:indexable-inc/mesa/0859cf8912b7dde1cb7b06f2ed416a84a479feef";
+      url = "path:./vendor/mesa";
       flake = false;
     };
   };

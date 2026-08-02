@@ -28,10 +28,26 @@
 #
 # Fields:
 #   name        : package id.
-#   input       : flake input pinning the megamerge (flake.lock `locked.rev`;
-#                 branch-loose for autoUpdate forks). Exactly one of `input`
-#                 and `vendored` per entry; declaring both or neither is an
-#                 error, not a default, in every consumer.
+#   input       : flake input pinning the megamerge (flake.lock `locked.rev`).
+#                 Exactly one of `input` and `vendored` per entry; declaring
+#                 both or neither is an error, not a default, in every
+#                 consumer.
+#
+#                 Every fork input is now `path:./vendor/<name>` backed by a
+#                 git submodule, not a `github:owner/repo/<rev>` URL. The
+#                 gitlink is the pin; flake.nix carries no rev at all, and the
+#                 patched client stamps the gitlink rev and its commit time
+#                 into `locked` (nix patch 0030), so `locked.rev` still reads
+#                 exactly as it did before and every consumer of it is
+#                 unchanged. This needs `inputs.self.submodules = true` in
+#                 flake.nix, without which nix renders each fork as an EMPTY
+#                 DIRECTORY rather than failing (NixOS/nix#14982), and it
+#                 needs .github/actions/init-submodules in any job that
+#                 evaluates the flake.
+#
+#                 A branch-loose input is no longer possible: `nix flake
+#                 update` cannot move a gitlink. The two autoUpdate forks
+#                 therefore have no float path until ENG-11968 lands.
 #   vendored    : repo-relative path of an in-tree jj-views DERIVED VIEW of the
 #                 fork repo, for a fork carried here instead of fetched. That
 #                 path filters back out into the fork repo's exact commit

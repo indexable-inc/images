@@ -2,3 +2,51 @@
 	path = vendor/jj
 	url = https://github.com/indexable-inc/jj.git
 	branch = ix-patched
+[submodule "vendor/nix-fast-build"]
+	path = vendor/nix-fast-build
+	url = https://github.com/indexable-inc/nix-fast-build.git
+	branch = ix-patched
+[submodule "vendor/rnix-0-12"]
+	path = vendor/rnix-0-12
+	url = https://github.com/indexable-inc/rnix-parser.git
+	branch = ix-patched-0.12
+[submodule "vendor/rnix-0-14"]
+	path = vendor/rnix-0-14
+	url = https://github.com/indexable-inc/rnix-parser.git
+	branch = ix-patched-0.14
+[submodule "vendor/btop"]
+	path = vendor/btop
+	url = https://github.com/indexable-inc/btop.git
+	branch = ix-patched
+[submodule "vendor/nix"]
+	path = vendor/nix
+	url = https://github.com/indexable-inc/nix.git
+	branch = ix-patched
+[submodule "vendor/home-manager"]
+	path = vendor/home-manager
+	url = https://github.com/indexable-inc/home-manager.git
+	branch = ix-patched
+[submodule "vendor/nushell"]
+	path = vendor/nushell
+	url = https://github.com/indexable-inc/nushell.git
+	branch = ix-patched
+[submodule "vendor/clippy"]
+	path = vendor/clippy
+	url = https://github.com/indexable-inc/rust-clippy.git
+	branch = ix-patched
+[submodule "vendor/git"]
+	path = vendor/git
+	url = https://github.com/indexable-inc/git.git
+	branch = ix-patched
+[submodule "vendor/codex"]
+	path = vendor/codex
+	url = https://github.com/indexable-inc/codex.git
+	branch = ix-patched
+[submodule "vendor/ghostty"]
+	path = vendor/ghostty
+	url = https://github.com/indexable-inc/ghostty.git
+	branch = ix-patched
+[submodule "vendor/mesa"]
+	path = vendor/mesa
+	url = https://github.com/indexable-inc/mesa.git
+	branch = ix-patched
