@@ -258,7 +258,7 @@ struct OutputTail {
 impl OutputTail {
     const DEFAULT_LIMIT: usize = 500;
 
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             lines: VecDeque::new(),
             dropped: 0,
@@ -1179,11 +1179,9 @@ async fn wait_for_death(pid: libc::pid_t) -> i32 {
     .unwrap_or(None)
     // A join failure or a lost race both mean "let the other arm answer",
     // which it does by resolving first; parking keeps this one out of the way.
-    .unwrap_or_else(|| {
-        // Unreachable in practice: `None` only happens when the reaping arm
-        // already won, and `select!` will have taken it.
-        1
-    })
+    // Unreachable in practice: `None` only happens when the reaping arm already
+    // won, and `select!` will have taken it.
+    .unwrap_or(1)
 }
 
 /// Drain what the readers have and hand it back. A still-armed group means
@@ -1420,13 +1418,10 @@ fn service_exit(group: &mut OwnedProcessGroup, exit: CapturedExit, when: &str) -
         stdout,
         mut stderr,
     } = exit;
-    let code = match &status {
-        Ok(status) => {
-            group.disarm();
-            status.code().unwrap_or(1)
-        }
-        Err(_) => 1,
-    };
+    let code = status.as_ref().map_or(1, |status| {
+        group.disarm();
+        status.code().unwrap_or(1)
+    });
     stderr.push(format!(
         "dag-runner: service exited (status {code}) {when}\n"
     ));
