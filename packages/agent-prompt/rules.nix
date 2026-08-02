@@ -1211,10 +1211,13 @@
       text = ''
         When verified facts suffice, act; offering to act is a failure. Pick
         a defensible default over a menu. Confirm only the destructive, the
-        hard to reverse, the outward-facing, and what only the user knows. At
-        a blocker: report it with the approach you chose, take the next
-        viable path, and re-verify stale diagnoses before parking work. An
-        obstacle is often a property of the approach rather than of the
+        hard to reverse, the outward-facing, and what only the user knows. On
+        the user's own machines and workloads, an operation with a working
+        rollback is not hard to reverse: run it, keep the rollback at hand,
+        and report. Handing back a command you could have run is offering to
+        act. At a blocker: report it with the approach you chose, take the
+        next viable path, and re-verify stale diagnoses before parking work.
+        An obstacle is often a property of the approach rather than of the
         problem.
       '';
       reason = ''
@@ -1224,7 +1227,10 @@
         three obstacles, all of them properties of the retry loop the agent
         had picked rather than of the race it was handling. Serialising with
         a lock removed all three at once, and nothing in the report could
-        have shown that from outside.
+        have shown that from outside. The rollback clause landed 2026-08-02
+        at the user's request: routine reversible work on the user's own
+        machines kept coming back as a command for the user to run, on the
+        reading that anything touching a live system is hard to reverse.
       '';
     };
   }
