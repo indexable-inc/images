@@ -202,45 +202,55 @@
     # marks it `autoUpdate = false`): jj-rebase indexable-inc/nix only when we
     # intend to move the daemon version too, then repin here.
     nix-src = {
-      # ix-patched 2d7585afe7b1 (43 commits on from f200a3a8d492, same branch,
+      # ix-patched 1c1dba1da9dd (11 commits on from 2d7585afe7b1, same branch,
       # same 2c6d06e9387c base, still version 2.34.7, so the drop-in property
       # the block above is about does not move). Previous pin survives as
-      # refs/pins/2026-07-31-f200a3a8d492, this one as
-      # refs/pins/2026-07-31-2d7585afe7b1.
+      # refs/pins/2026-07-31-2d7585afe7b1, this one as
+      # refs/pins/2026-08-02-1c1dba1da9dd.
       #
-      # This range is where nine PRs merged inside a few minutes, and the pin
-      # deliberately sits after the three commits that made their union work
-      # rather than anywhere inside it. The union did not compile
-      # (nix-expr-tests, run 30664328290) because the parallel evaluator port
-      # took value.hh from the tree it was written against, which predates two
-      # upstream additions, so a textually clean merge reverted them. Fixing
-      # that exposed three more reversions underneath, none of them compile
-      # errors: `printFailed` rendering «failed» against its own comment, the
-      # evaluator's error positions with no expectation updates, and
-      # `Failed::rethrow()` losing the clone that stops a re-forced failure's
-      # trace mutating the cached exception. All five are ENG-11672. Anything
-      # pinned between the parallel-eval merge and 2d7585afe7b1 builds and runs
-      # but carries the last three as live regressions.
+      # The point of this bump is the jj fetcher. It used to spawn one
+      # `jj file show` per file in the tree; it now reads the snapshot jj has
+      # already taken, and for a pinned revision reads jj's Git backing store
+      # directly instead. Fetching the ix tree went from 196.81s to 4.06s cold
+      # and from 170.09s to 0.28s warm. Six commits carry it, landed from
+      # indexable-inc/nix#22, #23 and #28:
+      #   75e10004b read the snapshot jj already took
+      #   193e34651 pin the jj file list to the commit already resolved
+      #   1cffe1a37 the mutation test needs a collector the sanitizer lane lacks
+      #   a099b1e7b read a pinned jj revision from Git, not one process per file
+      #   2e001c72b give the jj counter a shebang the sandbox has
+      #   1c1dba1da pin that a conflicted revision never reads as Git
       #
-      # What a consumer will notice. Infinite recursion and stack overflow are
-      # now reported at the site that forced the value rather than at the
-      # recursive thunk's own expression, because claiming a thunk overwrites
-      # the words that held its environment and expression; that is
-      # unconditional, not gated on `eval-cores`, and doc/manual/rl-next
-      # records it. The evaluator itself is off by default: `eval-cores`
-      # defaults to 1 and is admitted only with the `parallel-eval`
-      # experimental feature. The lazy-trees stack is untouched by the range
-      # (paths.cc is byte-identical across it), so indexable-inc/index#4297
-      # stands unchanged.
+      # The other five commits in the range are someone else's: two drop the
+      # eval identity harness and its fleet inventory from maintainers/, one
+      # drops comments referring to things a reader of this repo cannot follow,
+      # and 8c049a249 plus fb51b07da let a Git workdir status survive a
+      # lazily-fetchable object, which is the partial-clone fix ENG-11804
+      # tracks.
       #
-      # Gated by nix's own tests only, which is the same caveat the previous
-      # bump recorded: run 30668180224 is green on this rev across both tests
-      # jobs, VM tests, flake checks, installer tests and the sanitizer
-      # configuration. Neither the parallel evaluator nor the read-set
-      # instrumentation series has a lib/fork-packages.nix intent entry, so
-      # both default to `hold` and cannot be sent upstream until someone
-      # classifies them.
-      url = "github:indexable-inc/nix/2d7585afe7b146f2bb07d834285ce8caefc7ba33";
+      # What a consumer will notice. A `jj:` input resolves through the Git
+      # store rather than a process per file, so for anything already working
+      # the wall clock above is the whole change. A conflicted jj revision is
+      # now refused rather than read as though its conflict markers were file
+      # content; 1c1dba1da is the test that pins that, and it is a behaviour
+      # change for anyone who was fetching a conflicted revision and getting a
+      # plausible-looking tree back.
+      #
+      # Gated by nix's own tests only, the same caveat every previous bump
+      # recorded, plus one gap worth stating outright. On all three PRs the
+      # plain `tests on ubuntu` lane was killed by GitHub hosted-runner OOM and
+      # not by any test: the functional suite concluded success and the kill
+      # landed in the later flake-checks and tarball step, so no step anywhere
+      # in that set concluded failure from a real test. The sanitizer lane,
+      # which runs the same 226 tests under sanitizers, concluded success on
+      # all three. Post-push run 30728162133 on this rev had eval, pre-commit
+      # checks and aggregate basic checks green with both test lanes still
+      # running when this pin was written. Locally on aarch64-darwin -- which
+      # CI does not cover at all, since d36b96025 dropped the darwin jobs -- the
+      # full functional suite is green on this exact rev: meson Ok 188, Fail 0,
+      # Skipped 38, with fetchJj and jj-colocated executed rather than skipped
+      # (requireJj fails rather than skips, so that is a real run).
+      url = "github:indexable-inc/nix/1c1dba1da9dde353904db44302140bdd8ad58475";
       flake = false;
     };
 
