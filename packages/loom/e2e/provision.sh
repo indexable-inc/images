@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Provision a plain base-image VM into a loom control VM. Runs INSIDE
-# the VM (root). This is the manual stand-in for the template
-# (nixosConfigurations.loom); every step here is a line the template
-# will own declaratively.
+# the VM (root). This is the imperative e2e reference for the declarative
+# nixosConfigurations.loom template.
 #
 # Required env:
 #   LOOM_SRC_URL - tarball of index/packages/loom

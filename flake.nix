@@ -575,9 +575,22 @@
       inherit lib ix paths home-manager nixpkgs;
       indexPackages = system: collected.packages."${system}";
     };
+    loomConfiguration = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      specialArgs.loomPackage = perSystem.x86_64-linux.packages.loom;
+      modules = [./packages/loom/nixos.nix];
+    };
+    # A plain ix template deliberately leaves root-device and bootloader facts
+    # to the platform's injected machine profile. Extend the same configuration
+    # as a container only for the flake check, so NixOS can realize its closure
+    # without inventing guest hardware facts in the public template.
+    loomTemplateCheck = loomConfiguration.extendModules {
+      modules = [{boot.isContainer = true;}];
+    };
   in {
     lib = ix;
     inherit (ix) nixosModules;
+    nixosConfigurations.loom = loomConfiguration;
     inherit (homeSurface) darwinModules homeModules;
     overlays.default = ix.overlay;
     templates = {};
@@ -587,6 +600,9 @@
         systemChecks
         // {
           personal-light-profile = (homeSurface.personalLightProfile system).activationPackage;
+        }
+        // lib.optionalAttrs (system == "x86_64-linux") {
+          loom-template = loomTemplateCheck.config.system.build.toplevel;
         }
     ) (collected.collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI

@@ -15,10 +15,7 @@ defmodule LoomTest do
     assert_receive {:loom, ^id, {:final, "the final answer"}}, 5_000
     assert_receive {:loom, ^id, :stopped}, 5_000
 
-    calls = FakeIx.await_calls(ctx[:calls_log], 5)
-    assert length(calls) == 5, "expected exactly 5 ix calls, got: #{inspect(calls)}"
-
-    [snapshot, new, shell, sync, stop] = calls
+    [snapshot, new, shell, sync, stop] = FakeIx.await_calls(ctx[:calls_log], 5)
     assert sync == ["shell", vm, "--noninteractive", "--", "sync"]
     assert snapshot == ["snapshot", "ctl"]
     assert new == ["new", FakeIx.snapshot_id(), "--name", vm, "--no-shell"]
