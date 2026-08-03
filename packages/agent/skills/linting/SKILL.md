@@ -111,6 +111,23 @@ the fork understands and stock clippy does not.
 So check the exit code, never the absence of a string in a log. `grep -c error`
 returning zero is not a pass when the exit code was 101.
 
+### Capture `$?` on the very next line or you are reading another command
+
+Every command sets `$?`, including one that prints nothing and reads as
+punctuation. A `date`, a `tail` to peek at the log, or a bare `echo` between
+the command and the capture overwrites it:
+
+```sh
+lint > lint.log 2>&1; echo; echo "rc=$?"   # the echo's status. Always 0.
+lint > lint.log 2>&1; rc=$?                # correct: nothing between
+if lint > lint.log 2>&1; then ...          # correct: no capture at all
+```
+
+That number is not merely wrong, it cannot be anything but zero, so the bug
+always reports success. Same family as `cmd | tail` reporting `tail`'s
+status, and worth stating separately because the pipeline version at least
+looks like it has two commands in it.
+
 A `clippy.toml` key must land in the same change that ships its lint in the
 fork, never ahead of it. A forward declaration, the key added first so the lint
 has its config waiting, aborts clippy for every crate in the workspace until the
