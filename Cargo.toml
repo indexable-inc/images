@@ -249,7 +249,7 @@ anonymous_tuple_return_type = "deny"
 fallible_int_fallback = "deny"
 
 [workspace.dependencies]
-aes = "0.8"
+aes = "0.9"
 anstream = "1"
 anstyle = "1"
 anyhow = "1"
@@ -268,13 +268,13 @@ ast-merge-langs = { path = "packages/ast-merge/langs" }
 ast-merge-matcher = { path = "packages/ast-merge/matcher" }
 astlog-core = { path = "packages/astlog/core" }
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 # Content hash for `.memories` `based_on:` entries (packages/memories). Already
 # in the lock as a transitive of the tantivy graph, so naming it here pins the
 # one version rather than adding a second.
 blake3 = "1"
 bytes = "1"
-cbc = "0.1"
+cbc = "0.2"
 # Pure-Rust bzip2 (the 0.6 default backend is libbz2-rs-sys), used to read
 # Nix's build logs, which are bzip2-compressed on disk while being written.
 bzip2 = "0.6"
@@ -338,9 +338,9 @@ rnix = "0.14"
 # The Iceberg corpus lake (issue #752). iceberg 0.9 pins arrow/parquet ^57.1
 # while the workspace parquet pair is on 59; the 57 tree stays isolated inside
 # lake-iceberg (see its Cargo.toml).
-iceberg = "0.9"
-iceberg-catalog-rest = "0.9"
-iceberg-storage-opendal = { version = "0.9", features = ["opendal-s3"] }
+iceberg = "0.10"
+iceberg-catalog-rest = "0.10"
+iceberg-storage-opendal = { version = "0.10", features = ["opendal-s3"] }
 ignore = "0.4"
 indexmap = "2"
 indicatif = "0.18"
@@ -385,34 +385,34 @@ objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-security = "0.3"
 objc2-web-kit = "0.3"
-object = { version = "0.39", default-features = false, features = ["read"] }
+object = { version = "0.40", default-features = false, features = ["read"] }
 object_store = { version = "0.14", features = ["aws"] }
 ix2nix = { path = "packages/ix2nix" }
 # JavaScript-syntax parser for ix2nix (packages/ix2nix): .ix modules are
 # parsed as ES modules and mapped 1:1 onto a typed Nix expression tree.
-oxc_allocator = "0.141"
-oxc_ast = "0.141"
-oxc_diagnostics = "0.141"
-oxc_parser = "0.141"
-oxc_span = "0.141"
+oxc_allocator = "0.143"
+oxc_ast = "0.143"
+oxc_diagnostics = "0.143"
+oxc_parser = "0.143"
+oxc_span = "0.143"
 mc-protocol = { path = "packages/minecraft/protocol" }
 mail-smtp = { path = "packages/mail-smtp" }
 mcp-server-info = { path = "packages/mcp/server-info" }
-md-5 = "0.10"
+md-5 = "0.11"
 panes-protocol = { path = "packages/panes/protocol" }
 panes-guest-transport = { path = "packages/panes/guest-transport" }
 parking_lot = "0.12"
 parquet = { version = "59", features = ["arrow"] }
-pbkdf2 = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.13", default-features = false }
 percent-encoding = "2"
 # Apple property lists for index-delta's logical-diff engines: macOS `defaults`
 # domains and LaunchAgents are plists (XML and binary), so drift in them must be
 # diffed as parsed values, not bytes.
 plist = "1"
-prettyplease = "0.2"
+prettyplease = "0.3"
 proc-macro2 = "1"
 progress-style = { path = "packages/progress-style" }
-rmcp = { version = "2.0", default-features = false, features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3.1", default-features = false, features = ["server", "macros", "transport-io"] }
 protobuf = "3"
 pty-process = { version = "0.5", features = ["async"] }
 pyo3 = { version = "0.28", features = ["abi3-py311"] }
@@ -454,9 +454,9 @@ source-meta = { path = "packages/source/meta" }
 serde = "1"
 serde_json = "1"
 serde_norway = "0.9"
-sha1 = "0.10"
+sha1 = "0.11"
 sha2 = "0.11"
-shlex = "1"
+shlex = "2"
 similar = "3"
 source-slack = { path = "packages/source/slack" }
 source-parquet = { path = "packages/source/parquet" }
@@ -464,10 +464,10 @@ sink-mixedbread = { path = "packages/sink/mixedbread" }
 sink-parquet = { path = "packages/sink/parquet" }
 snafu = "0.9"
 strip-ansi-escapes = "0.2"
-syn = { version = "2", features = ["full"] }
+syn = { version = "3", features = ["full"] }
 tango-bench = "0.7"
 tantivy = "0.26"
-tao = "0.35"
+tao = "0.36"
 tar = "0.4"
 tempfile = "3"
 terminal-light = "1"
@@ -479,8 +479,8 @@ tokio-util = "0.7"
 # WebSocket client for tests that drive a server end of the same protocol.
 # Already in the graph as axum's `ws` backend, so this pins the one version
 # rather than adding a second.
-tokio-tungstenite = "0.29"
-toml = { version = "1.1.2", default-features = false }
+tokio-tungstenite = "0.30"
+toml = { version = "1.1.4", default-features = false }
 # Format-preserving TOML rewriting for packages/mirror: inlining workspace
 # inheritance into standalone manifests without losing comments.
 toml_edit = "0.25"
@@ -547,21 +547,14 @@ webpki-roots = "1"
 # (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
 # runtime itself, WAT text support for built-in/demo instruments, and the
 # std/signals/parallel-compilation platform features.
-wasmtime = { version = "46", default-features = false, features = [
-  "anyhow",
-  "cranelift",
-  "runtime",
-  "wat",
-  "std",
-  "parallel-compilation",
-] }
+wasmtime = { version = "47", default-features = false, features = ["anyhow", "cranelift", "runtime", "wat", "std", "parallel-compilation"] }
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }
 # Container format only (ReplayMod .mcpr archives); the compression backends
 # are opted into per consumer, so the default heavyweight codecs (zstd, lzma,
 # bzip2) stay out of the build graph.
-zip = { version = "7", default-features = false }
+zip = { version = "8", default-features = false }
 
 # Workspace-wide crate substitutions. `tree-sitter-nix` is the in-repo fork
 # carrying underscore digit separators in numeric literals (the dialect the
