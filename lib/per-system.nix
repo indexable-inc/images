@@ -1968,6 +1968,9 @@
           {
             cargo-unit-real-workspaces = tests.cargoUnitRealWorkspaces;
             cargo-unit-prebuilt-library = tests.cargoUnitPrebuiltLibrary;
+            # Links a dylib crate and runs it across a `dlopen` boundary
+            # (ENG-12078); see tests/cargo-unit-dylib.nix.
+            inherit (tests) cargo-unit-dylib;
             sdk-rust-prebuilt = tests.sdkRustPrebuilt;
           }
           // rustPackageSet;

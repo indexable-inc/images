@@ -1,0 +1,10 @@
+[package]
+name = "cargo-unit-dylib-engine"
+edition.workspace = true
+version.workspace = true
+
+# Both crate types, which is the interesting case: rustc, not cargo and not the
+# build system, decides per consumer which one to link, so a consumer has to be
+# given both.
+[lib]
+crate-type = ["rlib", "dylib"]

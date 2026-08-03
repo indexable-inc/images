@@ -1140,10 +1140,11 @@
   the same `<hash>` as the real prebuilt, so injecting this unit links a
   downstream crate against a prebuilt rlib with no source present.
 
-  Scope: this is for plain `rlib` libraries only. The artifact name and
-  `extern-path` hardcode `.rlib`, so a `cdylib`, `staticlib`, or `proc-macro`
-  crate (different artifact extension, and proc-macros load as host dylibs) is
-  out of scope and would not link.
+  Scope: Rust library crate types only -- `rlib`, `dylib`, or both. A `cdylib`
+  or `staticlib` is out of scope because its consumer is a C linker or an FFI
+  host rather than a `--extern`, so an injected one would produce a unit no
+  downstream crate can reference; a `proc-macro` is out of scope because the
+  compiler loads it, so it has to match the host toolchain and not the target.
 
   Trust boundary: an injected prebuilt unit BYPASSES every per-unit policy gate
   (clippy, `--deny-panics`, unused-crate-dependencies) because those gates run
@@ -1166,8 +1167,16 @@
   - `hash`: the source-independent unit hash. Must equal the `<hash>` the
     renderer computes for the metadata-faithful stub the downstream graph sees,
     or the downstream `--extern`/`-L` references will not resolve to this unit.
-  - `rlib`: path to the compiled `.rlib` artifact.
+  - `rlib`: path to the compiled `.rlib` artifact, or `null` for a crate whose
+    only library crate type is `dylib` (`dylib` must then be given).
   - `rmeta`: path to the compiled `.rmeta` artifact.
+  - `dylib`: optional path to the compiled shared library (`.so`, `.dylib` or
+    `.dll`) for a crate whose crate types include `dylib`. Required whenever the
+    consuming graph's unit declares `dylib`: rustc picks between an rlib and a
+    dylib per consumer, so a consumer of a dylib unit is passed both artifacts,
+    and a prebuilt that omits this one is silently linked statically -- which,
+    for the crates a dylib is used for, means several copies of a crate's
+    process-global state in one process.
   - `toolchainId`: the toolchain id the prebuilt was compiled with. Asserted
     equal to `baseNameOf (toString rustToolchain)` so a toolchain mismatch
     fails at eval, never at link time. Also recorded in `passthru.toolchainId`
@@ -1201,6 +1210,7 @@
     hash,
     rlib,
     rmeta,
+    dylib ? null,
     toolchainId,
     rustToolchain ? rust.defaultRustToolchain,
     depUnits ? [],
@@ -1210,6 +1220,17 @@
     # (`render.rs:1376`). Mirror that exactly so the rlib filename and the
     # `extern-path` contents match what a from-source unit would produce.
     libName = replaceStrings ["-"] ["_"] pname;
+    # Keep the caller's extension: a consumer resolves this file through the
+    # `DT_NEEDED`/install name recorded in it, which names the platform's own
+    # spelling.
+    dylibExtension =
+      if dylib == null
+      then ""
+      else lib.head (filter (suffix: lib.hasSuffix suffix (toString dylib)) [".so" ".dylib" ".dll"]);
+    rlibPath = "$out/lib/lib${libName}-${hash}.rlib";
+    dylibPath = "$out/lib/lib${libName}-${hash}${dylibExtension}";
+    externPaths = lib.optional (rlib != null) rlibPath ++ lib.optional (dylib != null) dylibPath;
+    preferredExternPath = lib.head externPaths;
   in
     assert lib.assertMsg (toolchainId == expectedToolchainId) ''
       cargoUnit.mkPrebuiltLibraryUnit: toolchainId mismatch for `${pname}`.
@@ -1217,12 +1238,24 @@
         this workspace's toolchain: ${expectedToolchainId}
       A prebuilt rlib/rmeta only links against the toolchain that produced it.
     '';
-    # M2: this builder is rlib-only (the filename and extern-path hardcode
-    # `.rlib`). Reject an artifact that is clearly not an rlib/rmeta so a
-    # cdylib/staticlib/proc-macro mistake fails loud at eval, not at link.
-    assert lib.assertMsg (lib.hasSuffix ".rlib" (toString rlib)) ''
+    # The artifact set this builder can express is rlib, rmeta and dylib: the
+    # three a Rust library unit publishes for another Rust crate to link.
+    # `cdylib` and `staticlib` are deliberately still refused -- their consumer
+    # is a C linker or an FFI host, not a `--extern`, so injecting one here
+    # would produce a unit no downstream crate can reference. A proc-macro is
+    # refused for the same reason plus a different one: it is loaded by the
+    # compiler, so it must match the host toolchain rather than the target.
+    assert lib.assertMsg (rlib != null || dylib != null) ''
+      cargoUnit.mkPrebuiltLibraryUnit: `${pname}` must provide `rlib`, `dylib`, or both.
+    '';
+    assert lib.assertMsg (rlib == null || lib.hasSuffix ".rlib" (toString rlib)) ''
       cargoUnit.mkPrebuiltLibraryUnit: `rlib` for `${pname}` must be a .rlib path; got ${toString rlib}.
-      Only plain rlib libraries are supported (not cdylib/staticlib/proc-macro).
+      Only rlib and dylib libraries are supported (not cdylib/staticlib/proc-macro).
+    '';
+    assert lib.assertMsg (
+      dylib == null || lib.any (suffix: lib.hasSuffix suffix (toString dylib)) [".so" ".dylib" ".dll"]
+    ) ''
+      cargoUnit.mkPrebuiltLibraryUnit: `dylib` for `${pname}` must be a .so/.dylib/.dll path; got ${toString dylib}.
     '';
     assert lib.assertMsg (lib.hasSuffix ".rmeta" (toString rmeta)) ''
       cargoUnit.mkPrebuiltLibraryUnit: `rmeta` for `${pname}` must be a .rmeta path; got ${toString rmeta}.
@@ -1256,10 +1289,20 @@
       }
       ''
         mkdir -p "$out/lib" "$out/nix-support"
-        cp ${lib.escapeShellArg (toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
+        ${lib.optionalString (rlib != null) ''
+          cp ${lib.escapeShellArg (toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
+        ''}
+        ${lib.optionalString (dylib != null) ''
+          cp ${lib.escapeShellArg (toString dylib)} "$out/lib/lib${libName}-${hash}${dylibExtension}"
+        ''}
         cp ${lib.escapeShellArg (toString rmeta)} "$out/lib/lib${libName}-${hash}.rmeta"
-        # Same artifact priority as render.rs:1387-1398 (.rlib wins over .rmeta).
-        printf '%s\n' "$out/lib/lib${libName}-${hash}.rlib" > "$out/nix-support/extern-path"
+        # Same artifact priority as the renderer's install phase: the rlib is the
+        # single preferred artifact, and `extern-paths` carries every linkable
+        # one in the same order, because only rustc can pick between them.
+        printf '%s\n' "${preferredExternPath}" > "$out/nix-support/extern-path"
+        ${lib.optionalString (dylib != null) ''
+          printf '%s\n' ${lib.concatMapStringsSep " " (path: ''"${path}"'') externPaths} > "$out/nix-support/extern-paths"
+        ''}
         ${lib.concatMapStringsSep "\n" (
             dep: ''printf '%s\n' ${lib.escapeShellArg (toString dep)} >> "$out/nix-support/dependency-units"''
           )

@@ -1190,18 +1190,8 @@ fn render_driver_build_phase(
         push_arg(&mut script, "unused-crate-dependencies");
     }
 
-    for dependency in &unit.dependencies {
-        let dep_unit = &graph.units[dependency.index];
-        if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
-            continue;
-        }
-        writeln!(
-            script,
-            "rustc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
-            dependency.extern_crate_name,
-            nix_attr(&prepared.names[dependency.index])
-        )?;
-    }
+    append_extern_args(&mut script, graph, prepared, index)?;
+    append_dylib_rpath_args(&mut script, graph, prepared, index, driver)?;
 
     let source_path = source_path_expr(source, Path::new(&unit.target.src_path))?;
     writeln!(
@@ -1250,6 +1240,106 @@ fn render_driver_build_phase(
     append_driver_invocation(&mut script, driver, collect_unused_deps);
 
     Ok(script)
+}
+
+// Name each direct dependency's compiled artifacts to rustc.
+//
+// One `--extern` per artifact, not per dependency. A `dylib` unit emits a
+// shared library and (usually) an rlib from one rustc invocation, and only
+// rustc can decide which of them a given consumer links: that follows from the
+// consumer's own crate type and `-C prefer-dynamic`, not from anything visible
+// here. Cargo does the same -- `cargo build -v` over a
+// `crate-type = ["rlib", "dylib"]` dependency emits two `--extern` flags for
+// the one crate name, `libfoo.rlib` and `libfoo.so`.
+//
+// Naming only the rlib (all a single `extern-path` can express) silently
+// absorbs the dependency into every consumer statically, which for a crate
+// holding process-global state means one process carrying several copies of it.
+// That is the whole reason a dylib is being built at all.
+//
+// A dependency without a dylib crate type keeps the exact single-`--extern`
+// line it had before this existed, so a graph with no dylib in it renders
+// byte-for-byte what it used to. The `extern-path` fallback inside the dylib
+// branch covers hand-built `extraUnits` injections: only units this renderer
+// installs are guaranteed to publish `extern-paths`.
+fn append_extern_args(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+) -> Result<()> {
+    for dependency in &graph.units[index].dependencies {
+        let dep_unit = &graph.units[dependency.index];
+        if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
+            continue;
+        }
+        let dep_name = nix_attr(&prepared.names[dependency.index]);
+        let crate_name = &dependency.extern_crate_name;
+        if dep_unit.target.has_crate_type("dylib") {
+            writeln!(
+                script,
+                "if [ -f \"${{units.{dep_name}}}/nix-support/extern-paths\" ]; then\n  while IFS= read -r extern_artifact; do\n    rustc_args+=( --extern \"{crate_name}=$extern_artifact\" )\n  done < \"${{units.{dep_name}}}/nix-support/extern-paths\"\nelse\n  rustc_args+=( --extern \"{crate_name}=$(cat ${{units.{dep_name}}}/nix-support/extern-path)\" )\nfi",
+            )?;
+        } else {
+            writeln!(
+                script,
+                "rustc_args+=( --extern \"{crate_name}=$(cat ${{units.{dep_name}}}/nix-support/extern-path)\" )",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+// Point a linking unit at the store paths of the shared libraries it will ask
+// for at run time.
+//
+// rustc records a dependency dylib in the linked artifact by SONAME (ELF) or
+// `@rpath/<name>` install name (Mach-O), never by the absolute path it was
+// given, so a binary linked against `libfoo-<hash>.so` looks for that bare name
+// through the dynamic loader's search path and finds nothing. Cargo has no
+// answer to copy here -- it leaves the artifacts in one `target/` directory and
+// relies on `cargo run` setting `LD_LIBRARY_PATH` -- but under one derivation
+// per unit each dylib has its own store path, and the graph is the only place
+// that knows which.
+//
+// Transitive rather than direct: a dylib that itself links a dylib puts that
+// second one in the consumer's `DT_NEEDED` too, so the rpath list has to cover
+// the closure, matching the `-L dependency=` loop above.
+//
+// This runs only for units that actually link a dylib. Nothing else in the
+// graph gains a flag, so a workspace with no dylib crate type renders exactly
+// the bytes it did before.
+//
+// The Rust standard library is deliberately not on this list. libstd only turns
+// dynamic under `-C prefer-dynamic`, which is a caller's flag arriving through
+// `extraRustcArgs`, so the caller that asks for it also supplies
+// `-C link-arg=-Wl,-rpath,<toolchain>/lib/rustlib/<target>/lib` through
+// `extraLinkRustcArgsForPlatform`. Adding it unconditionally here would put the
+// whole Rust toolchain in the runtime closure of packages that never asked.
+fn append_dylib_rpath_args(
+    script: &mut String,
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    index: usize,
+    driver: Driver,
+) -> Result<()> {
+    // Only the rustc driver links. Clippy stops at metadata and the panic scan
+    // emits bare objects, so an rpath in either would be a flag that changes a
+    // unit's script and nothing else.
+    if driver != Driver::Rustc || !unit_links(&graph.units[index]) {
+        return Ok(());
+    }
+    for dep_index in &prepared.transitive_unit_deps[index] {
+        if !graph.units[*dep_index].target.has_crate_type("dylib") {
+            continue;
+        }
+        writeln!(
+            script,
+            "rustc_args+=( -C \"link-arg=-Wl,-rpath,${{units.{}}}/lib\" )",
+            nix_attr(&prepared.names[*dep_index])
+        )?;
+    }
+    Ok(())
 }
 
 fn append_bin_exe_env(
@@ -1650,6 +1740,43 @@ fi
         )
     } else {
         let lib_name = unit.target.name.replace('-', "_");
+        // A dylib unit publishes every linkable artifact it produced, one per
+        // line, because a consumer has to pass all of them to rustc (see
+        // `render_driver_build_phase`). `extern-path` above stays the single
+        // preferred artifact so existing readers are unaffected.
+        //
+        // The missing-shared-library check is not paranoia: this file is what
+        // makes dynamic linking happen at all, and a dylib unit that quietly
+        // produced no shared library would fall back to the rlib and link
+        // statically -- succeeding, and losing the single-copy property the
+        // dylib exists for. Fail here instead, where the cause is on screen.
+        let dylib_extern_paths_install = if unit.target.has_crate_type("dylib") {
+            format!(
+                "\
+shared_library=\"\"
+for artifact in \\
+  \"$out/lib/lib{lib_name}-{hash}.rlib\" \\
+  \"$out/lib/lib{lib_name}-{hash}.so\" \\
+  \"$out/lib/lib{lib_name}-{hash}.dylib\" \\
+  \"$out/lib/{lib_name}-{hash}.dll\"; do
+  if [ -f \"$artifact\" ]; then
+    printf '%s\\n' \"$artifact\" >> $out/nix-support/extern-paths
+    case \"$artifact\" in
+      *.rlib) ;;
+      *) shared_library=\"$artifact\" ;;
+    esac
+  fi
+done
+if [ -z \"$shared_library\" ]; then
+  echo >&2 \"error: unit {lib_name} declares crate-type dylib but produced no shared library in:\"
+  ls >&2 \"$out/lib\"
+  exit 1
+fi
+"
+            )
+        } else {
+            String::new()
+        };
         format!(
             "\
 {ORPHAN_OUTPUT_PRECHECK}mkdir -p $out/lib $out/nix-support
@@ -1675,7 +1802,7 @@ for artifact in \\
   fi
 done
 [ -n \"$extern_path\" ] && printf '%s\\n' \"$extern_path\" > $out/nix-support/extern-path
-{unused_crate_dependencies_install}
+{dylib_extern_paths_install}{unused_crate_dependencies_install}
 "
         )
     }
@@ -3757,6 +3884,131 @@ mod tests {
         )
         .unwrap_err()
         .to_string()
+    }
+
+    /// A binary depending on a library, where the library's crate types are the
+    /// argument: `["lib"]` for the ordinary case, `["rlib", "dylib"]` for the
+    /// one under test.
+    fn bin_over_library_graph(library_crate_types: &str) -> UnitGraph {
+        serde_json::from_str(&format!(
+            r#"{{
+              "version": 1,
+              "units": [
+                {{
+                  "pkg_id": "path+file:///workspace#app@0.1.0",
+                  "target": {{
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "app",
+                    "src_path": "/workspace/app/src/main.rs",
+                    "edition": "2024"
+                  }},
+                  "profile": {{ "name": "release", "opt_level": "3" }},
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": [{{ "index": 1, "extern_crate_name": "engine" }}]
+                }},
+                {{
+                  "pkg_id": "path+file:///workspace#engine@0.1.0",
+                  "target": {{
+                    "kind": ["lib"],
+                    "crate_types": {library_crate_types},
+                    "name": "engine",
+                    "src_path": "/workspace/engine/src/lib.rs",
+                    "edition": "2024"
+                  }},
+                  "profile": {{ "name": "release", "opt_level": "3" }},
+                  "features": [],
+                  "mode": "build",
+                  "dependencies": []
+                }}
+              ],
+              "roots": [0]
+            }}"#
+        ))
+        .unwrap()
+    }
+
+    fn render_for_test(graph: &UnitGraph) -> String {
+        render_units_nix(
+            graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: Some("rustc-test".to_string()),
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+            },
+        )
+        .unwrap()
+    }
+
+    /// Cargo passes rustc two `--extern` flags for one crate name when the
+    /// dependency offers both an rlib and a dylib, because the choice belongs
+    /// to rustc. Naming only the rlib links the dependency statically into
+    /// every consumer, which for a crate holding process-global state is
+    /// several copies of that state in one process.
+    #[test]
+    fn dylib_dependency_is_offered_to_rustc_in_every_form() {
+        let rendered = render_for_test(&bin_over_library_graph(r#"["rlib", "dylib"]"#));
+
+        assert!(
+            rendered.contains("nix-support/extern-paths"),
+            "a consumer of a dylib unit must read every published artifact:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(r#"rustc_args+=( --extern "engine=$extern_artifact" )"#),
+            "the extern-paths loop must emit one --extern per artifact:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(r#"printf '%s\n' "$artifact" >> $out/nix-support/extern-paths"#),
+            "a dylib unit must publish extern-paths at install time:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("declares crate-type dylib but produced no shared library"),
+            "a dylib unit that produced no shared library must fail loudly:\n{rendered}"
+        );
+    }
+
+    /// rustc records a dependency dylib by SONAME or `@rpath/<name>`, so a
+    /// linked artifact needs the store path of every dylib below it. Only
+    /// linking units get this: an rlib consumer links nothing.
+    #[test]
+    fn linking_units_get_an_rpath_to_each_dylib_dependency() {
+        let rendered = render_for_test(&bin_over_library_graph(r#"["rlib", "dylib"]"#));
+        let rpaths = rendered
+            .matches(r#"rustc_args+=( -C "link-arg=-Wl,-rpath,"#)
+            .count();
+
+        assert_eq!(
+            rpaths, 1,
+            "exactly the one linking unit (the bin) should carry a dylib rpath:\n{rendered}"
+        );
+    }
+
+    /// The whole change is gated on a `dylib` crate type, so a graph without
+    /// one has to render exactly what it rendered before. Otherwise every
+    /// existing unit in the repo moves for a feature it does not use.
+    #[test]
+    fn a_graph_without_a_dylib_renders_the_plain_extern_path() {
+        let rendered = render_for_test(&bin_over_library_graph(r#"["lib"]"#));
+
+        assert!(
+            rendered.contains(
+                r#"rustc_args+=( --extern "engine=$(cat ${units."engine-0.1.0-"#
+            ),
+            "a plain rlib dependency must keep the single extern-path form:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("extern-paths"),
+            "nothing about extern-paths may appear without a dylib:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("-Wl,-rpath,"),
+            "no rpath may appear without a dylib:\n{rendered}"
+        );
     }
 
     #[test]
