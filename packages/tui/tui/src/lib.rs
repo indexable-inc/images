@@ -44,6 +44,7 @@ mod frame;
 mod manager;
 #[cfg(feature = "publish")]
 pub mod publish;
+mod raw;
 mod slice;
 mod types;
 
@@ -58,7 +59,9 @@ pub use manager::{TuiInstance, TuiManager};
 #[cfg(feature = "publish")]
 pub use publish::{Publisher, publish};
 pub use slice::{ColRange, RowRange, slice_2d};
-pub use types::{Color, CursorPos, CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
+pub use types::{
+    Color, CursorPos, CursorShape, ExitState, ExitStatus, FullOutput, SpawnConfig, StyledCell,
+};
 
 #[cfg(test)]
 mod tests;

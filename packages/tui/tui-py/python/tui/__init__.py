@@ -11,7 +11,8 @@ async: every method that touches the terminal is a coroutine you must `await`.
 The awaitables are native asyncio coroutines bridged from Rust via
 pyo3-async-runtimes, with no thread-pool hop. The only synchronous surface is
 construction and the cached accessors: `id`, `command`, `args`, `size`,
-`is_alive`, `exit_code`. Everything else (`send`, `enter`, `read`, `viewport`,
+`is_alive`, `exit_code`, `returncode`, `raw_output`. Everything else
+(`send`, `enter`, `read`, `viewport`,
 `text`, `snapshot`, `wait_for`, `resize`, `kill`, `close`) is a coroutine.
 
 In a Jupyter notebook the cell already runs in an event loop, so drive a
@@ -543,8 +544,9 @@ class Tui:
     always win. A single process-wide tokio runtime drives every
     spawned PTY; each I/O method returns a native asyncio coroutine bridged
     through pyo3-async-runtimes, with no thread-pool hop. Construction and the
-    shape accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`)
-    are the only synchronous surface; everything else is a coroutine to await.
+    cached accessors (`id`, `command`, `args`, `size`, `is_alive`, `exit_code`,
+    `returncode`, `raw_output`) are the only synchronous surface; everything
+    else is a coroutine to await.
 
     The first `Tui(...)` auto-publishes this process to the web dashboard, so
     `nix run .#dashboard` shows the terminal without an explicit
@@ -620,8 +622,33 @@ class Tui:
 
     @property
     def exit_code(self) -> int | None:
-        """The exit code, or `None` while running or if killed by a signal."""
+        """The exit code, or `None` while running or if killed by a signal.
+
+        `None` therefore conflates running with a signal death; `returncode`
+        distinguishes them.
+        """
         return self._raw.exit_code()
+
+    @property
+    def returncode(self) -> int | None:
+        """`subprocess.Popen`-style status, without blocking.
+
+        `None` while the child is running, its exit code after a normal exit,
+        and the negated signal number after a signal death (SIGKILL is `-9`).
+        The non-blocking liveness probe: `t.returncode is None` means running.
+        """
+        return self._raw.returncode()
+
+    def raw_output(self, tail: int | None = None) -> bytes:
+        """The PTY output byte stream as received, before VT parsing.
+
+        The rendered views (`snapshot`, `viewport`) consume escape sequences
+        into screen state; this is the pre-parse stream for debugging what the
+        child actually emitted. Ring-buffered like scrollback (the most recent
+        1 MiB is kept, the oldest bytes fall off). With `tail`, only the
+        trailing `tail` bytes. Synchronous: reads a cached ring.
+        """
+        return self._raw.raw_output(tail)
 
     # -- writing ------------------------------------------------------------
 

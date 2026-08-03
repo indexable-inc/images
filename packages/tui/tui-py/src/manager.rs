@@ -4,6 +4,7 @@ use std::time::Duration;
 use ndarray::Array2;
 use numpy::PyArray2;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use pyo3_async_runtimes::tokio::future_into_py;
 
 use crate::types::StyledCell;
@@ -122,9 +123,27 @@ impl TuiInstance {
     /// Reads cached state, so it stays synchronous.
     fn exit_code(&self) -> Option<i32> {
         match self.inner.exit_state() {
-            tui::ExitState::Exited(code) => code,
+            tui::ExitState::Exited(status) => status.code(),
             tui::ExitState::Running => None,
         }
+    }
+
+    /// `subprocess.Popen.returncode`-style status: `None` while running, the
+    /// exit code after a normal exit, the negated signal number after a
+    /// signal death. Reads cached state, so it stays synchronous.
+    fn returncode(&self) -> Option<i32> {
+        match self.inner.exit_state() {
+            tui::ExitState::Exited(status) => status.returncode(),
+            tui::ExitState::Running => None,
+        }
+    }
+
+    /// The PTY output byte stream as received, before VT parsing.
+    /// Ring-buffered like scrollback; with `tail`, only the trailing `tail`
+    /// bytes. Reads a cached ring, so it stays synchronous.
+    #[pyo3(signature = (tail=None))]
+    fn raw_output<'py>(&self, py: Python<'py>, tail: Option<usize>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.raw_output(tail))
     }
 
     // -- async I/O (native asyncio-awaitable coroutines) ------------------
@@ -222,7 +241,7 @@ impl TuiInstance {
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let code = match inner.wait_async().await {
-                tui::ExitState::Exited(code) => code,
+                tui::ExitState::Exited(status) => status.code(),
                 tui::ExitState::Running => None,
             };
             Ok(code)

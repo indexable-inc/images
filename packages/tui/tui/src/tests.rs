@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{SpawnConfig, TuiManager};
+use crate::{ExitState, ExitStatus, SpawnConfig, TuiManager};
 
 fn spawn(manager: &TuiManager, command: &str, args: &[&str]) -> crate::TuiInstance {
     let args = args.iter().map(|a| (*a).to_string()).collect();
@@ -284,4 +284,54 @@ fn dsr_cursor_position_reply_reaches_child() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn raw_output_keeps_pre_parse_escape_bytes() {
+    let manager = TuiManager::new();
+    let instance = spawn(&manager, "sh", &["-c", r#"printf '\033[2Jhello-raw'"#]);
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    let raw = instance.raw_output(None);
+    let contains = |needle: &[u8]| raw.windows(needle.len()).any(|window| window == needle);
+    assert!(
+        contains(b"\x1b[2J"),
+        "raw output should keep the clear-screen escape the child emitted, got {raw:?}"
+    );
+    assert!(
+        contains(b"hello-raw"),
+        "raw output should contain the literal text, got {raw:?}"
+    );
+
+    // The rendered viewport has consumed the escape: only the text survives.
+    let viewport = instance.read_viewport().expect("viewport read failed");
+    assert!(
+        viewport.iter().any(|line| line.contains("hello-raw")),
+        "viewport should show the text, got {viewport:?}"
+    );
+
+    // `tail` returns exactly the trailing bytes.
+    let tail = instance.raw_output(Some(4));
+    assert_eq!(tail, raw[raw.len() - 4..].to_vec());
+}
+
+#[test]
+fn exit_state_distinguishes_code_and_signal() {
+    let manager = TuiManager::new();
+
+    let exited = spawn(&manager, "sh", &["-c", "exit 7"]);
+    assert_eq!(
+        exited.wait(Some(Duration::from_secs(5))),
+        Some(ExitState::Exited(ExitStatus::Code(7)))
+    );
+    assert_eq!(exited.exit_state(), ExitState::Exited(ExitStatus::Code(7)));
+
+    let signaled = spawn(&manager, "sh", &["-c", "kill -9 $$"]);
+    assert_eq!(
+        signaled.wait(Some(Duration::from_secs(5))),
+        Some(ExitState::Exited(ExitStatus::Signal(9)))
+    );
+    assert_eq!(ExitStatus::Signal(9).returncode(), Some(-9));
+    assert_eq!(ExitStatus::Signal(9).code(), None);
 }
