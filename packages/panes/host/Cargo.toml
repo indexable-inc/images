@@ -16,7 +16,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-lz4_flex = "0.13"
+lz4_flex = "0.14"
 panes-protocol.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

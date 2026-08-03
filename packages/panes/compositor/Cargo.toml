@@ -18,11 +18,7 @@ anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 # Block-format LZ4 for damage tiles (the wire's `Encoding::Lz4`). Default
 # features add the frame format + xxhash we never put on the wire.
-lz4_flex = { version = "0.13", default-features = false, features = [
-  "std",
-  "safe-encode",
-  "safe-decode",
-] }
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 panes-protocol.workspace = true
 panes-guest-transport.workspace = true
 # Band-parallel damage diff + LZ4 (src/frame.rs): the encode runs on the
