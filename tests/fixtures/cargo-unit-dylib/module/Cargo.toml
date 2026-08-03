@@ -1,0 +1,13 @@
+[package]
+name = "cargo-unit-dylib-module"
+edition.workspace = true
+version.workspace = true
+
+# A dylib and not a cdylib. A cdylib would get its own static copy of every Rust
+# dependency, including the engine, which is the state duplication this fixture
+# exists to catch.
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+cargo-unit-dylib-engine.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "cargo-unit-dylib-host"
+edition.workspace = true
+version.workspace = true
+
+# Deliberately no dependency on the module: the host loads it at run time, which
+# is what makes the shared-engine question real rather than a link-time detail.
+[dependencies]
+cargo-unit-dylib-engine.workspace = true

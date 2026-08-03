@@ -7263,6 +7263,13 @@
   devProfileFortifyTest = import ./dev-profile-fortify.nix {
     inherit lib pkgs ix;
   };
+
+  # cargoUnit's dylib crate-type support (ENG-12078). Its own check rather than
+  # part of the eval aggregate: it compiles a workspace, links it dynamically
+  # and runs the result.
+  cargoUnitDylibTest = import ./cargo-unit-dylib.nix {
+    inherit lib pkgs ix;
+  };
 in {
   inherit
     groupTests
@@ -7282,6 +7289,7 @@ in {
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
   dev-profile-fortify = devProfileFortifyTest.premiseStillHolds;
+  cargo-unit-dylib = cargoUnitDylibTest;
 
   # Aggregate. Pulls every group test into one derivation so
   # `nix flake check` covers the whole suite.
