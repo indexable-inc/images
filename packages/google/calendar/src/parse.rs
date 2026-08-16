@@ -48,9 +48,6 @@ pub enum ParseEventTimeError {
 /// The `map_err` for a boundary parse: names the field, the rejected input,
 /// and the shape that was expected. One constructor keeps the all-day and
 /// timed branches from each spelling out the same closure.
-// The fork's anonymous_tuple_return_type lint misreads FnOnce(A) -> B sugar
-// as a tuple return (index#3970); remove this allow when the lint is fixed.
-#[allow(clippy::anonymous_tuple_return_type)]
 fn parse_failure(
     field: &'static str,
     input: &str,

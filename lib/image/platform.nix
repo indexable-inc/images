@@ -402,8 +402,200 @@
     })
     config.ix.networking.expose;
   exposeFirewallPorts = proto: map (e: e.port) (lib.filter (e: e.firewall && e.protocol == proto) exposeList);
+
+  # --- account-store secret attachments --------------------------------------
+  #
+  # Which stored secrets a VM is created with, declared in the image so the
+  # answer travels with the definition rather than with whoever typed the
+  # command. `deployment.secrets` in a fleet spec lands here (see
+  # `identityModule` in fleet.nix), and both readers -- the fleet plan
+  # ix-fleet consumes and the `fleet.resolve` evaluator `ix apply` reads --
+  # take `ix.secretAttachments`, so there is one normalization rather than two
+  # that drift.
+
+  # The account-store key. Lower snake_case is ix's own constraint on a secret
+  # name, checked here so a typo fails the eval instead of the create RPC.
+  isSecretName = name: builtins.match "[a-z][a-z0-9_]*" name != null;
+
+  secretType = lib.types.submodule {
+    options = {
+      env = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "GH_TOKEN";
+        description = ''
+          Environment variable name the stored value is injected as. Mutually
+          exclusive with `file`.
+        '';
+      };
+
+      file = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "github/token";
+        description = ''
+          Guest-relative path the stored value is written to, under
+          `/run/secrets`. Mutually exclusive with `env`.
+        '';
+      };
+
+      owner = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "nginx";
+        description = ''
+          Guest unix user that owns the delivered file. File targets only;
+          `null` keeps the root-owned default.
+        '';
+      };
+
+      mode = lib.mkOption {
+        # A quoted octal string, never a Nix integer. `mode = 0400` is the
+        # decimal 400 to Nix, which is 0620 as permission bits -- nothing
+        # anyone means, and unrecoverable once it is a number. ix-fleet's plan
+        # model still accepts `str | int` for the same key; this refuses the
+        # int half at eval rather than carrying the ambiguity into the create
+        # RPC, which parses the string as octal exactly like `--secret-file`.
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "0400";
+        description = ''
+          Permission bits for the delivered file, as a quoted octal string
+          between `"0001"` and `"0777"`. File targets only; `null` keeps the
+          0600 default.
+        '';
+      };
+    };
+  };
+
+  # One `ix.secrets` entry as the create RPC's `SecretAttachment`. `owner` and
+  # `mode` are omitted rather than sent as null, because the server tells
+  # "absent, keep the default" from "explicitly set" by the key's presence.
+  secretAttachment = sourceName: secret:
+    assert lib.assertMsg (isSecretName sourceName)
+    "secret key '${sourceName}' must be lower snake_case: [a-z][a-z0-9_]*";
+    assert lib.assertMsg (!(secret.env != null && secret.file != null))
+    "secret '${sourceName}' cannot set both env and file";
+    assert lib.assertMsg (secret.env != null || secret.file != null)
+    "secret '${sourceName}' must set either env or file";
+      if secret.env != null
+      then {
+        name = sourceName;
+        target = {
+          name = secret.env;
+          injectAs = "env";
+        };
+      }
+      else {
+        name = sourceName;
+        target =
+          {
+            name = secret.file;
+            injectAs = "file";
+          }
+          // lib.optionalAttrs (secret.owner != null) {inherit (secret) owner;}
+          // lib.optionalAttrs (secret.mode != null) {inherit (secret) mode;};
+      };
+
+  # Every tmpfs this image sizes against RAM, as `{mountpoint, size}` with the
+  # declared spec verbatim ("50%", "2G").
+  #
+  # A tmpfs `size=N%` is resolved exactly once, when the filesystem is mounted,
+  # against `totalram_pages()`, and stored as a fixed block count (mm/shmem.c,
+  # `shmem_parse_one`). The fraction does not survive: /proc/self/mountinfo
+  # carries the donor's already-resolved byte count and nothing that says which
+  # fraction produced it. A golden restore never re-mounts, so a clone keeps
+  # the caps the DONOR's RAM produced. Publishing the declaration is what lets
+  # ix-vm-guest recompute them for the machine it was actually restored onto
+  # (ENG-12403; the reader is `handler/configure/tmpfs_sizing.rs`).
+  #
+  # Read from the evaluated config rather than hand-listed. `boot.runSize`,
+  # `boot.devShmSize` and `boot.tmp.tmpfsSize` are ordinary options an image
+  # may override, so a fixed list here would eventually hand the guest a
+  # fraction its mounts were never built from -- the disagreement this is
+  # meant to make impossible.
+  declaredTmpfsSize = options: let
+    sized = builtins.filter (option: lib.hasPrefix "size=" option) options;
+  in
+    if sized == []
+    then null
+    else lib.removePrefix "size=" (lib.last sized);
+
+  ramSizedMount = mountPoint: fsType: options: let
+    size = declaredTmpfsSize options;
+  in
+    lib.optional (fsType == "tmpfs" && size != null) {
+      mountpoint = mountPoint;
+      inherit size;
+    };
+
+  ramSizedMountsIn = fileSystemAttrs:
+    lib.concatLists (
+      lib.mapAttrsToList (
+        mountPoint: fs: ramSizedMount mountPoint fs.fsType fs.options
+      )
+      fileSystemAttrs
+    );
+
+  # `boot.specialFileSystems` is where /run and /dev/shm get their fractions,
+  # `fileSystems` is any tmpfs the image declares itself, and `systemd.mounts`
+  # is where `boot.tmp.useTmpfs = true` lands /tmp.
+  ramSizedTmpfsMounts =
+    ramSizedMountsIn config.boot.specialFileSystems
+    ++ ramSizedMountsIn config.fileSystems
+    ++ lib.concatLists (
+      map (
+        mount:
+          ramSizedMount mount.where mount.type (
+            lib.splitString "," (mount.options or "")
+            ++ lib.splitString "," (mount.mountConfig.Options or "")
+          )
+      )
+      config.systemd.mounts
+    );
 in {
   options.ix = {
+    secrets = lib.mkOption {
+      type = lib.types.attrsOf secretType;
+      default = {};
+      example = lib.literalExpression ''
+        {
+          github_token = {
+            file = "github/token";
+            owner = "root";
+            mode = "0400";
+          };
+        }
+      '';
+      description = ''
+        Account-store secrets delivered into this image's VM, keyed by the
+        name they were stored under with `ix secret set`.
+
+        Declared in the image so the VM's secret needs travel with its
+        definition: a fleet's `deployment.secrets` merges into this option, and
+        a module that needs a credential can ask for it directly instead of
+        relying on whoever runs the deploy to pass `--secret-file`.
+
+        Delivery happens once, when the VM is created. Adding an entry for a VM
+        that already exists is refused by `ix apply` with the recreate spelled
+        out rather than applied half way, because nothing copies a stored value
+        into a live VM (ENG-12214).
+      '';
+    };
+
+    secretAttachments = lib.mkOption {
+      type = lib.types.listOf (lib.types.attrsOf lib.types.anything);
+      internal = true;
+      readOnly = true;
+      description = ''
+        [`ix.secrets`](#opt-ix.secrets) in the shape both consumers want: the
+        create RPC's `SecretAttachment` list, ordered by source key.
+
+        Read by the fleet plan (`ix-fleet`) and by the `fleet.resolve`
+        evaluator (`ix apply`). Not an input; set `ix.secrets`.
+      '';
+    };
+
     healthChecks = lib.mkOption {
       type = lib.types.attrsOf healthCheckType;
       default = {};
@@ -516,6 +708,8 @@ in {
   };
 
   config = {
+    ix.secretAttachments = lib.mapAttrsToList secretAttachment config.ix.secrets;
+
     ix.networking.portClaims =
       exposePortClaims
       // {
@@ -644,8 +838,11 @@ in {
       # mounts /tmp while only the unpluggable virtio-mem base is present
       # (`VIRTIO_MEM_BOOT_BASE_MIB`, 3 GiB), well before the host's
       # post-health-check resize, so the cap is taken against a ~3 GiB
-      # total and then frozen for the life of the VM. A restored VM
-      # inherits whatever cap its golden capture happened to mount.
+      # total and then frozen for the life of the VM. Golden restore no
+      # longer inherits that answer -- `ix/tmpfs-sizing.json` below hands
+      # the declared fraction to ix-vm-guest, which re-resolves it against
+      # the restored machine's own memory (ENG-12403) -- but the boot-time
+      # freeze against the 3 GiB base is still what a first boot gets.
       #
       # Measured on two live hil guests (2026-07-29): /tmp mounted
       # `size=1491832k` -- an absolute 1.42 GiB, not a percentage -- while
@@ -684,6 +881,17 @@ in {
         # earlier boot. The 10d age rule above reclaims the same space
         # without racing the workload.
       };
+    };
+
+    # The mount-time RAM fractions this image declared, published for the guest
+    # daemon's re-personalization step: the kernel throws the fraction away at
+    # mount time, so a restored clone cannot recompute its own caps without
+    # being told what they were meant to be. Path is duplicated in
+    # `MANIFEST_PATH` in crates/vm/guest/daemon/src/handler/configure/
+    # tmpfs_sizing.rs; a rename on either side shows up as "image declares no
+    # RAM-derived tmpfs caps" at debug in the guest journal.
+    environment.etc."ix/tmpfs-sizing.json".source = (pkgs.formats.json {}).generate "ix-tmpfs-sizing.json" {
+      mounts = ramSizedTmpfsMounts;
     };
 
     # Many ix VMs are SSH'd into and used as interactive dev machines, where
@@ -861,6 +1069,10 @@ in {
           "fetch-closure"
           "fetch-tree"
           "ca-derivations"
+          # Rust units address their output with blake3 (ADR 0003); parsing
+          # `outputHashAlgo = "blake3"` is gated on this feature, so an in-VM
+          # `nix build` of a rendered unit needs it.
+          "blake3-hashes"
           "dynamic-derivations"
           "git-hashing"
           # `.ix` imports convert in-eval via `builtins.wasm` over the

@@ -114,7 +114,11 @@ mod _plumb {
 
         /// Ids of the retained runs, oldest first.
         pub fn run_ids(&self) -> Vec<u64> {
-            self.inner.reports().iter().map(|report| report.id).collect()
+            self.inner
+                .reports()
+                .iter()
+                .map(|report| report.id)
+                .collect()
         }
 
         /// Read a variable (auto-bound run outputs included).

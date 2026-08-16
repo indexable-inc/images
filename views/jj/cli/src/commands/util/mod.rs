@@ -1,0 +1,77 @@
+// Copyright 2020 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+mod backend;
+mod completion;
+mod config_schema;
+mod exec;
+mod gc;
+mod install_man_pages;
+mod markdown_help;
+mod snapshot;
+
+use clap::Subcommand;
+use tracing::instrument;
+
+use self::backend::UtilBackendCommand;
+use self::backend::cmd_util_backend;
+use self::completion::UtilCompletionArgs;
+use self::completion::cmd_util_completion;
+use self::config_schema::UtilConfigSchemaArgs;
+use self::config_schema::cmd_util_config_schema;
+use self::exec::UtilExecArgs;
+use self::exec::cmd_util_exec;
+use self::gc::UtilGcArgs;
+use self::gc::cmd_util_gc;
+use self::install_man_pages::UtilInstallManPagesArgs;
+use self::install_man_pages::cmd_util_install_man_pages;
+use self::markdown_help::UtilMarkdownHelp;
+use self::markdown_help::cmd_util_markdown_help;
+use self::snapshot::UtilSnapshotArgs;
+use self::snapshot::cmd_util_snapshot;
+use crate::cli_util::CommandHelper;
+use crate::command_error::CommandError;
+use crate::ui::Ui;
+
+/// Infrequently used commands such as for generating shell completions
+#[derive(Subcommand, Clone, Debug)]
+pub(crate) enum UtilCommand {
+    #[command(subcommand)]
+    Backend(UtilBackendCommand),
+    Completion(UtilCompletionArgs),
+    ConfigSchema(UtilConfigSchemaArgs),
+    Exec(UtilExecArgs),
+    Gc(UtilGcArgs),
+    InstallManPages(UtilInstallManPagesArgs),
+    MarkdownHelp(UtilMarkdownHelp),
+    Snapshot(UtilSnapshotArgs),
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn cmd_util(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    subcommand: &UtilCommand,
+) -> Result<(), CommandError> {
+    match subcommand {
+        UtilCommand::Backend(args) => cmd_util_backend(ui, command, args).await,
+        UtilCommand::Completion(args) => cmd_util_completion(ui, command, args).await,
+        UtilCommand::ConfigSchema(args) => cmd_util_config_schema(ui, command, args).await,
+        UtilCommand::Exec(args) => cmd_util_exec(ui, command, args).await,
+        UtilCommand::Gc(args) => cmd_util_gc(ui, command, args).await,
+        UtilCommand::InstallManPages(args) => cmd_util_install_man_pages(ui, command, args).await,
+        UtilCommand::MarkdownHelp(args) => cmd_util_markdown_help(ui, command, args).await,
+        UtilCommand::Snapshot(args) => cmd_util_snapshot(ui, command, args).await,
+    }
+}

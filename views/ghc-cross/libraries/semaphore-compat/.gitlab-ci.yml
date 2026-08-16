@@ -1,0 +1,60 @@
+variables:
+  GIT_SSL_NO_VERIFY: "1"
+
+  # Commit of ghc/ci-images repository from which to pull Docker images
+  DOCKER_REV: 572353e0644044fe3a5465bba4342a9a0b0eb60e
+
+  # Sequential version number of all cached things.
+  # Bump to invalidate GitLab CI cache.
+  CACHE_REV: 10
+
+  # Disable shallow clones; they break our linting rules
+  GIT_DEPTH: 0
+
+  # Always start with a fresh clone to avoid non-hermetic builds
+  GIT_STRATEGY: clone
+
+default:
+  interruptible: true
+
+stages:
+  - build
+
+workflow:
+  # N.B. Don't run on wip/ branches, instead on run on merge requests.
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: '$CI_COMMIT_BRANCH =~ /ghc-[0-9]+\.[0-9]+/'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+.version_matrix : &version_matrix
+  matrix:
+    - VERSION: 8.4.4
+    - VERSION: 9.2.5
+    - VERSION: 9.4.4
+    - VERSION: 9.6.1
+
+build-linux:
+  tags:
+    - x86_64-linux
+  parallel: *version_matrix
+  before_script:
+    - sudo chown ghc:ghc -R .
+  stage: build
+  image: "registry.gitlab.haskell.org/ghc/ci-images/x86_64-linux-deb10:$DOCKER_REV"
+  needs: []
+  dependencies: []
+  script:
+    - .gitlab/ci.sh
+
+build-windows:
+  tags:
+    - new-x86_64-windows
+  parallel: *version_matrix
+  needs: []
+  dependencies: []
+  stage: build
+  script:
+    - bash .gitlab/ci.sh

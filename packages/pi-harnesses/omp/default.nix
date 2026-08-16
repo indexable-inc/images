@@ -54,6 +54,9 @@ in
     dontUnpack = true;
     dontStrip = true;
 
+    # Upstream release binary; nothing to test at build time.
+    doCheck = false;
+
     # The binary links only glibc; patching the interpreter makes the
     # package run on hosts without nix-ld.
     nativeBuildInputs = lib.optional stdenvNoCC.hostPlatform.isLinux autoPatchelfHook;

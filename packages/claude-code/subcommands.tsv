@@ -1,4 +1,4 @@
-# claude-code positional argv tokens, extracted from Claude Code cli.js 2.1.220
+# claude-code positional argv tokens, extracted from Claude Code cli.js 2.1.228
 # by packages/claude-code/extract-subcommands.py. Regenerate with
 #   nix run .#claude-code.updateScript -- <version>
 # token	source

@@ -299,19 +299,18 @@
     zoomAt(a.x, a.y, 1.8);
   }
 
-  // Trackpad pinch arrives as ctrl+wheel (Chrome/Firefox); plain wheel and
-  // two-finger scroll pan, like a map. Safari pinch uses the gesture events
-  // wired in the effect below. Both need a non-passive listener to preventDefault.
+  // Zoom rides ctrl/cmd+wheel (trackpad pinch arrives as ctrl+wheel in
+  // Chrome/Firefox; Safari pinch uses the gesture events wired in the effect
+  // below). A plain wheel is the page scrolling and passes through
+  // untouched, so hovering the map never traps the reader; panning is the
+  // pointer drag. The listener stays non-passive to preventDefault the
+  // zoom case.
   function onWheel(e: WheelEvent): void {
+    if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     stopInertia();
-    if (e.ctrlKey) {
-      const a = toView(e.clientX, e.clientY);
-      zoomAt(a.x, a.y, Math.exp(-e.deltaY * 0.01));
-    } else {
-      const s = viewScale();
-      panBy(-e.deltaX * s, -e.deltaY * s);
-    }
+    const a = toView(e.clientX, e.clientY);
+    zoomAt(a.x, a.y, Math.exp(-e.deltaY * 0.01));
   }
 
   type GestureLikeEvent = Event & { scale: number; clientX: number; clientY: number };
@@ -559,8 +558,10 @@
     border: 1px solid var(--rule);
     border-radius: var(--radius);
     /* No overflow clipping: the tooltip must escape the chart box. */
-    /* The map owns every gesture; stop the page from scrolling/zooming under it. */
-    touch-action: none;
+    /* Vertical swipes stay the page's scroll; the map takes horizontal
+       drags and pinch (its pointer/gesture handlers), so a reader can
+       always scroll past the chart. */
+    touch-action: pan-y;
     cursor: grab;
   }
 

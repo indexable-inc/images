@@ -468,8 +468,8 @@ pub fn bash_habits_guard() {
     if let Some(sub) = ext_diff_offender(&raw)
         && let Some(driver) = configured_diff_driver(cwd)
     {
-            deny(format!(
-                "`git {sub}` here renders through `diff.external = {driver}`, not git. You get \
+        deny(format!(
+            "`git {sub}` here renders through `diff.external = {driver}`, not git. You get \
                  columnar side-by-side text with no `+`/`-` prefixes, no `@@` headers and no \
                  `a/`,`b/` paths -- so a sweep for added lines silently matches nothing, and the \
                  output is not a patch you can apply. Add `--no-ext-diff` (and `--no-textconv` \
@@ -575,6 +575,98 @@ pub fn search_guard() {
          matches. (search-guard hook)"
             .to_owned(),
     );
+}
+
+// --- kernel-only-guard ---
+
+/// MCP server prefixes that ARE the index Elixir kernel, and so survive strict
+/// mode. Two names for one server, both legitimate: sessions bind it as
+/// `index`, while a subagent that needs its own serve process must bind an
+/// inline copy under a DIFFERENT name or the CLI silently discards it and
+/// shares the parent's connection instead (index#2382). `own-kernel` is the
+/// name `packages/agent/subagents.nix` settled on for that, so denying it here
+/// would shut off the one shell surface subagents reliably have.
+const KERNEL_TOOL_PREFIXES: &[&str] = &["mcp__index__", "mcp__own-kernel__"];
+
+/// What strict mode tells the agent when it reaches for a denied tool. A deny
+/// reason is read by the model as an instruction, so it names the destination
+/// rather than only the refusal: an agent told "no" invents a workaround, an
+/// agent told "use the kernel" uses the kernel.
+fn kernel_only_message(tool: &str) -> String {
+    format!(
+        "elixir-only mode: use the index kernel (exec). `{tool}` is denied because \
+         this agent runs with `kernelOnly = true` \
+         (packages/agent/policy/permissions.nix), which makes the index Elixir \
+         kernel the only tool surface. Run the work in a kernel cell instead: \
+         `Cmd.run(\"git\", [\"-C\", dir, \"status\"])` for commands, \
+         `Read.file(path)` and `Edit.write(path, body)` for files, and the \
+         pre-aliased `Jobs`/`Fleet`/`Sessions` helpers for everything they \
+         cover. Bindings persist across cells, so build on the workspace rather \
+         than re-deriving state each call. (kernel-only-guard hook)"
+    )
+}
+
+/// The strict-mode decision: `Some(reason)` denies, `None` lets the call
+/// through. Allowlist-shaped on purpose. A deny list of tool names would have
+/// to be re-enumerated every time the CLI grows a tool or a wrapper bakes an
+/// MCP server, and the failure mode of a stale list is a silent hole in the
+/// exact guarantee the mode exists to make.
+fn kernel_only_decision(tool: Option<&str>) -> Option<String> {
+    // Unlike its neighbours this guard fails CLOSED. Every other guard in this
+    // file blocks a known-bad call, so an unreadable payload should let a
+    // presumed-good one proceed. This one enforces a boundary the operator
+    // opted into, and a boundary that dissolves whenever stdin is malformed is
+    // not a boundary. The refusal is loud and names the setting, so a wedged
+    // hook is visible and one config flip undoes it.
+    let Some(tool) = tool else {
+        return Some(kernel_only_message("<unreadable tool_name>"));
+    };
+    if KERNEL_TOOL_PREFIXES
+        .iter()
+        .any(|prefix| tool.starts_with(prefix))
+    {
+        return None;
+    }
+    Some(kernel_only_message(tool))
+}
+
+/// Set by the index CLI wrappers' launch layer (claude-code/default.nix
+/// `launchSpec.env`) when the invocation actually bakes the index kernel MCP
+/// server. Launch env, deliberately NOT settings `env`: the hook itself is
+/// armed through managed-settings.json, which applies machine-wide -- to the
+/// desktop app and ccd-dispatched sessions too, which have no baked MCP
+/// servers at all. In such a session "use the kernel instead" points at a
+/// tool that does not exist, and the guard's fail-closed posture turns into
+/// an agent with no tools at all (observed 2026-08-07: a ccd session had
+/// every call from Bash to `ToolSearch` denied, with `exec` nonexistent). The
+/// launch layer is the one channel only kernel-carrying invocations pass
+/// through, so its presence is the truth this guard needs.
+const KERNEL_BAKED_ENV: &str = "IX_KERNEL_MCP_BAKED";
+
+/// The full guard decision: enforce strict mode only when the launching
+/// wrapper attests a kernel is actually attached; otherwise stand down. The
+/// fail-CLOSED posture of `kernel_only_decision` is unchanged where it
+/// applies -- a malformed payload still denies -- but a session that never
+/// had a kernel has no boundary to enforce, only tools to brick.
+fn kernel_only_guard_decision(kernel_baked: bool, tool: Option<&str>) -> Option<String> {
+    if !kernel_baked {
+        return None;
+    }
+    kernel_only_decision(tool)
+}
+
+/// `PreToolUse(*)`: under `kernelOnly` deny every tool that is not an index
+/// kernel tool. Armed only when the wrapper sets the mode, so an unarmed
+/// session never pays for the hook (`packages/agent/policy/hooks.nix`).
+pub fn kernel_only_guard() {
+    let payload = payload();
+    let tool = payload
+        .as_ref()
+        .and_then(|p| p.get("tool_name"))
+        .and_then(Value::as_str);
+    if let Some(reason) = kernel_only_guard_decision(crate::flag_set(KERNEL_BAKED_ENV), tool) {
+        deny(reason);
+    }
 }
 
 // --- git-guard ---
@@ -1567,8 +1659,8 @@ enum Writes {
 
 fn writes(name: &str) -> Option<Writes> {
     match name {
-        "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "touch" | "mkdir" | "mkfifo"
-        | "tee" | "mv" => Some(Writes::Operands),
+        "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "touch" | "mkdir" | "mkfifo" | "tee"
+        | "mv" => Some(Writes::Operands),
         "chmod" | "chown" | "chgrp" => Some(Writes::OperandsAfterMode),
         "cp" | "install" | "ln" | "rsync" => Some(Writes::LastOperand),
         "sed" | "gsed" | "perl" => Some(Writes::InPlaceOperands),
@@ -1592,7 +1684,9 @@ fn value_opts(name: &str) -> &'static [&'static str] {
         // (`s|a/b|c/d|`) and is not one.
         "sed" | "gsed" => &["-e", "--expression", "-f", "--file", "-l", "--line-length"],
         "perl" => &["-e", "-E"],
-        "install" => &["-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"],
+        "install" => &[
+            "-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix",
+        ],
         "cp" | "mv" | "ln" => &["-S", "--suffix"],
         "rsync" => &["--exclude", "--include", "--filter", "-e", "--rsh"],
         "chmod" | "chown" | "chgrp" => &["--reference"],
@@ -1619,22 +1713,20 @@ fn target_directory(args: &[String]) -> Option<&str> {
 /// True when a `sed`/`perl` argument selects in-place editing: `-i`,
 /// `--in-place`, the suffix form (`-i.bak`), or a bundled group (`-pi`).
 fn edits_in_place(args: &[String]) -> bool {
-    args.iter()
-        .take_while(|a| a.as_str() != "--")
-        .any(|a| {
-            if a == "--in-place" || a.starts_with("--in-place=") {
-                return true;
-            }
-            // A backup suffix rides attached to the flag (`-i.bak`), so only the
-            // leading alphanumerics of a short group are flags.
-            a.strip_prefix('-')
-                .filter(|rest| !rest.starts_with('-'))
-                .is_some_and(|rest| {
-                    rest.chars()
-                        .take_while(char::is_ascii_alphanumeric)
-                        .any(|c| c == 'i')
-                })
-        })
+    args.iter().take_while(|a| a.as_str() != "--").any(|a| {
+        if a == "--in-place" || a.starts_with("--in-place=") {
+            return true;
+        }
+        // A backup suffix rides attached to the flag (`-i.bak`), so only the
+        // leading alphanumerics of a short group are flags.
+        a.strip_prefix('-')
+            .filter(|rest| !rest.starts_with('-'))
+            .is_some_and(|rest| {
+                rest.chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .any(|c| c == 'i')
+            })
+    })
 }
 
 /// The target part of a token that opens an output redirection (`>`, `>>`,
@@ -1780,8 +1872,9 @@ struct Write {
 fn literal_prefix(tok: &str) -> Option<&str> {
     // Without a `/` the expansion is the whole path component, so there is no
     // directory left to judge.
-    tok.find(['$', '`'])
-        .map_or(Some(tok), |at| tok[..at].rfind('/').map(|slash| &tok[..=slash]))
+    tok.find(['$', '`']).map_or(Some(tok), |at| {
+        tok[..at].rfind('/').map(|slash| &tok[..=slash])
+    })
 }
 
 /// Resolve a write target token against the statement's working directory,
@@ -1924,8 +2017,7 @@ fn write_guard_decision(env: &WriteGuardEnv, payload: &Value) -> Option<String> 
             continue;
         }
         for write in writes_of(&stmt, &cwd) {
-            if let Some(toplevel) =
-                crate::protected_toplevel(&env.git, &write.path, &env.protected)
+            if let Some(toplevel) = crate::protected_toplevel(&env.git, &write.path, &env.protected)
             {
                 return Some(refusal(&write.subject, &toplevel));
             }
@@ -1991,7 +2083,9 @@ mod tests {
     use super::{
         GitGuardEnv, WriteGuardEnv, authored_prose_dash, discards_stderr_unhandled,
         discards_worktree, edits_in_place, expanded_statements, ext_diff_offender,
-        git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag, mutates_checkout,
+        git_guard_decision, grep_walks_tree, has_flag, is_recursive_flag, kernel_only_decision,
+        kernel_only_guard_decision,
+        mutates_checkout,
         operands, parse_git_call, reads_other_revision, redirect_targets, statements,
         strip_heredocs, write_guard_decision,
     };
@@ -3195,15 +3289,24 @@ mod tests {
         for (cwd, cmd) in [
             // Reading inside a primary checkout is always fine, including a
             // read whose OUTPUT goes somewhere else entirely.
-            (&fx.primary, "rg -n pattern flake.nix > /tmp/hits.txt".to_owned()),
-            (&fx.primary, "cat flake.nix | sed -e 's/a/b/' > /tmp/x".to_owned()),
+            (
+                &fx.primary,
+                "rg -n pattern flake.nix > /tmp/hits.txt".to_owned(),
+            ),
+            (
+                &fx.primary,
+                "cat flake.nix | sed -e 's/a/b/' > /tmp/x".to_owned(),
+            ),
             (&fx.primary, "sed -e 's/a/b/' flake.nix".to_owned()),
             (&fx.primary, "cp flake.nix /tmp/backup.nix".to_owned()),
             (&fx.primary, "truncate -s 0 /tmp/log".to_owned()),
             (&fx.primary, "chmod 0755 /tmp/script.sh".to_owned()),
             (&fx.primary, "make 2>&1 | tee /tmp/build.log".to_owned()),
             // The caller's own linked worktree is theirs to write.
-            (&worktree, "cat > doc/note.md <<'EOF'\nhello\nEOF".to_owned()),
+            (
+                &worktree,
+                "cat > doc/note.md <<'EOF'\nhello\nEOF".to_owned(),
+            ),
             (&worktree, "rm -rf modules/new.nix".to_owned()),
             (&worktree, "patch -p1 < /tmp/x.diff".to_owned()),
             // git is git-guard's, so this guard stays silent on it rather than
@@ -3237,10 +3340,7 @@ mod tests {
             },
             write_env(&[]),
         ] {
-            assert_eq!(
-                write_guard_decision(&env, &bash(&fx.primary, danger)),
-                None
-            );
+            assert_eq!(write_guard_decision(&env, &bash(&fx.primary, danger)), None);
         }
         // Another tool's payload, and a payload carrying no command at all.
         assert_eq!(
@@ -3251,5 +3351,102 @@ mod tests {
             write_guard_decision(&env, &json!({"tool_name": "Bash"})),
             None
         );
+    }
+    // --- kernel-only-guard ---
+
+    #[test]
+    fn kernel_only_allows_only_index_kernel_tools() {
+        // The two names one index kernel is bound under: sessions bind `index`,
+        // subagents bind an inline copy as `own-kernel` (index#2382).
+        for tool in [
+            "mcp__index__exec",
+            "mcp__index__session_set_name",
+            "mcp__index__topic_set",
+            "mcp__own-kernel__exec",
+        ] {
+            assert_eq!(
+                kernel_only_decision(Some(tool)),
+                None,
+                "{tool} is an index kernel tool and must survive strict mode"
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_only_denies_everything_else_by_name() {
+        // Native tools, the orchestration surface, and OTHER MCP servers --
+        // exa named explicitly, since "elixir only" means the exa toolset goes
+        // even though the exa capability stays (through the kernel's Web
+        // helpers, which speak to the same API).
+        for tool in [
+            "Bash",
+            "Read",
+            "Write",
+            "Edit",
+            "Glob",
+            "Grep",
+            "WebSearch",
+            "WebFetch",
+            "Agent",
+            "Skill",
+            "Monitor",
+            "TaskCreate",
+            "mcp__exa__web_search_exa",
+            "mcp__exa__web_fetch_exa",
+            "mcp__superhuman__list_threads",
+            // A tool nobody enumerated: the allowlist shape is the point, so a
+            // CLI that grows a tool tomorrow is covered without a code change.
+            "SomeToolInventedNextRelease",
+            // Near-misses on the allowlist prefix must not slip through.
+            "mcp__index",
+            "mcp__indexer__exec",
+            "notmcp__index__exec",
+        ] {
+            let reason = kernel_only_decision(Some(tool))
+                .unwrap_or_else(|| panic!("{tool} must be denied in strict mode"));
+            assert!(
+                reason.contains("elixir-only mode: use the index kernel (exec)"),
+                "the deny must open with the instruction, got: {reason}"
+            );
+            assert!(
+                reason.contains("kernelOnly"),
+                "the deny must name the setting so it can be turned off, got: {reason}"
+            );
+            assert!(
+                reason.contains(tool),
+                "the deny must name the tool it blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn kernel_only_stands_down_without_a_baked_kernel() {
+        // The hook arrives machine-wide via managed-settings, but only
+        // wrapper-launched sessions carry a kernel to redirect to. Without the
+        // launch-layer attestation the guard must allow everything -- even the
+        // unreadable-payload case, which fail-closed would otherwise deny --
+        // because "deny and use the kernel" is a brick when there is no kernel.
+        for tool in [Some("Bash"), Some("Read"), Some("mcp__exa__web_search_exa"), None] {
+            assert_eq!(
+                kernel_only_guard_decision(false, tool),
+                None,
+                "{tool:?} must pass when no kernel is attached"
+            );
+        }
+        // And with the attestation present, enforcement is exactly the pure
+        // decision: kernel tools pass, everything else is denied.
+        assert_eq!(kernel_only_guard_decision(true, Some("mcp__index__exec")), None);
+        assert!(kernel_only_guard_decision(true, Some("Bash")).is_some());
+        assert!(kernel_only_guard_decision(true, None).is_some());
+    }
+
+    #[test]
+    fn kernel_only_fails_closed_on_an_unreadable_payload() {
+        // Deliberately unlike every other guard in this file. A boundary that
+        // dissolves on a malformed payload is not a boundary; the refusal still
+        // names the setting, so a wedged hook is one config flip from undone.
+        let reason =
+            kernel_only_decision(None).expect("an unreadable payload must deny, not proceed");
+        assert!(reason.contains("elixir-only mode"));
     }
 }

@@ -86,7 +86,6 @@ let
         pkgs = final;
         cargoUnit = cargoUnitFor final;
         rustWorkspace = rustWorkspaceFor final;
-        patchedSrc = ix.patchedSrcFor final;
       };
     pkgs = final;
     inherit (entry) path;

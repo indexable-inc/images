@@ -255,7 +255,7 @@ defmodule IxMcp.FleetDigestTest do
     end
 
     test "every mute shape is accepted and nonsense is refused" do
-      for id <- ~w(heartbeat anomaly digest digest:warning ci_oom_success) do
+      for id <- ~w(heartbeat anomaly digest digest:warning observability_blind) do
         assert id in IxMcp.Fleet.mutable(), "#{id} must be mutable"
       end
 

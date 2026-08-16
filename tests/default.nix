@@ -5,6 +5,7 @@
   ix,
   paths,
   home-manager,
+  disko,
 }: let
   inherit (nixpkgs) lib;
   inherit (ix) pkgs;
@@ -48,11 +49,34 @@
       paths
       ;
   };
+  # Measures what `ix.systemdHardening` (PrivateUsers=true) plus
+  # `StateDirectory=` actually does to ownership for a static `User=`, flat
+  # and nested, against `DynamicUser=` in the same VM (ENG-12400). qemu VM,
+  # so its own check (`checks.<system>.hardened-state-directory-vm`).
+  hardenedStateDirectoryVmTest = import ./hardened-state-directory-vm.nix {
+    inherit lib pkgs ix;
+  };
   # The only test in the suite that runs a generation switch rather than
   # reading the generation it would build. Same deal again: qemu VM, so its
   # own check (`checks.<system>.switch-stops-a-mount-vm`).
   switchStopsAMountVmTest = import ./switch-stops-a-mount-vm.nix {
     inherit lib pkgs paths;
+  };
+  # The only test in the suite that reboots. `modules/system/ephemeral-root`
+  # deletes the root filesystem at boot, and no eval-time check can tell a
+  # wipe that fired from one that silently did not. qemu VM, so its own check
+  # (`checks.<system>.ephemeral-root-vm`).
+  ephemeralRootVmTest = import ./ephemeral-root-vm.nix {
+    inherit ix pkgs paths;
+  };
+  # The same module's `rollback.method = "lvmthin"`, which the test above
+  # cannot reach: its root has to be a thin LV that exists on disk before the
+  # initrd runs, and `pkgs.testers.runNixOSTest` cannot produce one (see the
+  # header of the file below). Installs a real layout with disko and boots it,
+  # so it is its own check (`checks.<system>.ephemeral-root-lvmthin-vm`).
+  ephemeralRootLvmThinVmTest = import ./ephemeral-root-lvmthin-vm.nix {
+    inherit ix pkgs paths;
+    diskoLib = disko.lib;
   };
   # Public Rust SDK: validates the prebuilt, R2-hosted ix-sdk-wire artifact
   # pins. The old end-to-end link proof needs a matching published rustc
@@ -211,6 +235,16 @@
   googleOauthEnvVars = [
     "GOOGLE_OAUTH_CLIENT_ID"
     "GOOGLE_OAUTH_CLIENT_SECRET"
+  ];
+  # The forge verdict feed's target and off switch. Forwarding is what makes
+  # the feed reachable at all: the Claude renderer emits `${NAME:-}` for each
+  # declared name and nothing else, so a name missing here is a feed that can
+  # never start no matter what the operator sets.
+  forgeVerdictsEnvVars = [
+    "IX_MCP_FORGE_CI"
+    "IX_MCP_FORGE_WATCH"
+    "IX_MCP_FORGE_WATCH_BACKFILL_S"
+    "IX_MCP_FORGE_WATCH_INTERVAL_MS"
   ];
   sampleMcpServers = ix.mcp.defaultServers {
     indexCommand = "/bin/ix-mcp";
@@ -816,6 +850,7 @@
       ./fixtures/cargo-unit-hello/Cargo.lock
       ./fixtures/cargo-unit-hello/Cargo.toml
       ./fixtures/cargo-unit-hello/src
+      ./fixtures/cargo-unit-hello/tests
     ];
   };
 
@@ -959,6 +994,213 @@
     };
   };
 
+  # ── Fork-toolchain test discovery (packages/rustc-ix + testDiscovery) ─────
+  # Three workspaces over the same fixture, differing in exactly one knob
+  # each, so every property below is isolated:
+  #   * fork toolchain + "binary" discovery (the old manifest, fork rustc);
+  #   * fork toolchain + "dump-test-names" discovery (the new manifest);
+  #   * default toolchain (the toolchainId-salting control).
+  # The parity bar: the two manifests must be byte-identical, directory-wide.
+  # `-Zdump-test-names` emits the harness's collected tests in registration
+  # order with the exact `name: kind` strings the terse formatter prints, so
+  # anything short of `diff -r` silence is a discovery regression. The lib
+  # unittests and tests/discovery.rs are the two non-empty targets
+  # (discovery.rs deliberately mixes nesting, #[ignore] with and without
+  # message, #[should_panic], and a macro-generated test); the two bin
+  # unittest targets pin the empty-list case.
+  cargoUnitForkArgs = {
+    src = cargoUnitFixture;
+    workspaceRoot = ./fixtures/cargo-unit-hello;
+    cargoArgs = [
+      "--workspace"
+      "--tests"
+    ];
+    packageTestInputs.cargo-unit-hello = [pkgs.hello];
+    packageTestEnv.cargo-unit-hello = {
+      CARGO_UNIT_BUILD_ENV_EXPECTED = "build-ok";
+      CARGO_UNIT_FIXTURE_ENV = "ok";
+    };
+    packageBuildEnv.cargo-unit-hello.CARGO_UNIT_BUILD_ENV = "build-ok";
+    # The fork toolchain carries no clippy-driver and the parity question is
+    # about discovery, not gates; same relaxed posture as the coverage and
+    # policy-disabled fixtures above.
+    policy = {
+      denyUnusedCrateDependencies = false;
+      cargoAudit.enable = false;
+      cargoMachete.enable = false;
+      clippy.enable = false;
+    };
+  };
+
+  cargoUnitForkBinaryDiscoveryWorkspace = ix.cargoUnit.buildWorkspace (
+    cargoUnitForkArgs
+    // {
+      rustToolchain = repoPackages.rustc-ix;
+    }
+  );
+
+  cargoUnitForkDumpDiscoveryWorkspace = ix.cargoUnit.buildWorkspace (
+    cargoUnitForkArgs
+    // {
+      rustToolchain = repoPackages.rustc-ix;
+      testDiscovery = "dump-test-names";
+    }
+  );
+
+  cargoUnitForkDefaultToolchainWorkspace = ix.cargoUnit.buildWorkspace cargoUnitForkArgs;
+
+  cargoUnitForkDiscoveryTest = let
+    unitDrvPath = workspace: workspace.binaries.cargo-unit-hello.drvPath;
+    binaryManifest = cargoUnitForkBinaryDiscoveryWorkspace.testManifestDrv;
+    dumpManifest = cargoUnitForkDumpDiscoveryWorkspace.testManifestDrv;
+  in
+    # Deliverable-2 identity properties, checked at eval so they hold before
+    # anything builds. Flipping the toolchain must flip every unit's identity
+    # (the renderer salts unit hashes with `rust.toolchainId`, the toolchain
+    # store-path basename), and flipping only `testDiscovery` must flip
+    # nothing on the build side: discovery is a manifest concern, and a
+    # discovery mode that perturbed build units would rebuild the world to
+    # change how test names are read.
+    assert lib.assertMsg (
+      unitDrvPath cargoUnitForkBinaryDiscoveryWorkspace
+      != unitDrvPath cargoUnitForkDefaultToolchainWorkspace
+    ) "cargo-unit fork fixtures: flipping rustToolchain to rustc-ix left a unit drvPath unchanged; toolchainId salting is broken";
+    assert lib.assertMsg (
+      unitDrvPath cargoUnitForkBinaryDiscoveryWorkspace
+      == unitDrvPath cargoUnitForkDumpDiscoveryWorkspace
+    ) "cargo-unit fork fixtures: testDiscovery flipped a build unit's drvPath; discovery mode must only affect the manifest";
+      pkgs.runCommand "cargo-unit-fork-discovery-parity" {__structuredAttrs = true;} ''
+        # The whole gate: byte-for-byte equality of the two manifests, every
+        # target's `.list` and `.ignored.list`, order included.
+        diff -r ${binaryManifest} ${dumpManifest}
+
+        # Spot-check the shapes the fixture exists to cover, so an
+        # accidentally-empty pair of manifests cannot pass as "equal".
+        grep -qx 'tests::returns_greeting: test' ${dumpManifest}/cargo_unit_hello.list
+        grep -qx 'nested::deeper::nested_case: test' ${dumpManifest}/discovery.list
+        grep -qx 'macro_generated_case: test' ${dumpManifest}/discovery.list
+        grep -qx 'should_panic_case: test' ${dumpManifest}/discovery.list
+        grep -qx 'ignored_case: test' ${dumpManifest}/discovery.ignored.list
+        grep -qx 'ignored_with_message_case: test' ${dumpManifest}/discovery.ignored.list
+
+        # The discovered cases fan out into runnable per-#[test] derivations
+        # through the same template path as the binary mode; run one that the
+        # dump-mode manifest named, end to end, with the fork toolchain.
+        test -d ${cargoUnitForkDumpDiscoveryWorkspace.tests.discovery.cases.top_level_case}
+        test -d ${cargoUnitForkDumpDiscoveryWorkspace.tests.cargo_unit_hello.all}
+
+        mkdir -p "$out"
+        echo "fork discovery manifests are byte-identical" > "$out/result"
+      '';
+
+  # ── rmeta byte-stability cutoff (fork -Zrmeta-* trio + CA early cutoff) ───
+  # The end-to-end property the fork's rmeta-stability flags exist for: a
+  # comment edit in a leaf crate recompiles that leaf once, its output
+  # converges byte-for-byte, and content addressing stops the cascade there;
+  # no dependent recompiles, no link re-runs. Pinned as store-path equality
+  # over a 4-crate chain (a <- b <- c <- d bin), which is exactly what "not
+  # re-derived" means in a CA store: the dependent's resolved derivation is
+  # already realized. The negative control pins the other half of the
+  # contract: an interface edit (new pub fn) must still cascade.
+  #
+  # Everything runs on the fork toolchain (repoPackages.rustc-ix): the trio
+  # is fork-only, and resolve.nix refuses it on any toolchain that records no
+  # fork rev. The fixture pins debuginfo off and keeps the leaf panic-free,
+  # because line tables and panic-location strings legitimately move with a
+  # line shift; those are codegen policy questions, and this check isolates
+  # the metadata one. See fixtures/cargo-unit-rmeta-chain/demo.md for the
+  # rebuild-count procedure over the same passthru attrs.
+  cargoUnitRmetaChainFixture = fs.toSource {
+    root = ./fixtures/cargo-unit-rmeta-chain;
+    fileset = fs.unions [
+      ./fixtures/cargo-unit-rmeta-chain/Cargo.lock
+      ./fixtures/cargo-unit-rmeta-chain/Cargo.toml
+      ./fixtures/cargo-unit-rmeta-chain/chain-a
+      ./fixtures/cargo-unit-rmeta-chain/chain-b
+      ./fixtures/cargo-unit-rmeta-chain/chain-c
+      ./fixtures/cargo-unit-rmeta-chain/chain-d
+    ];
+  };
+
+  # Each variant is the same tree with one scripted edit, staged through a
+  # runCommand so the three workspaces differ in exactly the bytes the edit
+  # class describes.
+  cargoUnitRmetaChainVariant = name: editScript:
+    pkgs.runCommand "cargo-unit-rmeta-chain-${name}" {__structuredAttrs = true;} ''
+      cp -r ${cargoUnitRmetaChainFixture} $out
+      chmod -R u+w $out
+      ${editScript}
+    '';
+
+  cargoUnitRmetaChainWorkspaceFor = src:
+    ix.cargoUnit.buildWorkspace {
+      pname = "cargo-unit-rmeta-chain";
+      inherit src;
+      workspaceRoot = src;
+      cargoArgs = ["--workspace"];
+      rustToolchain = repoPackages.rustc-ix;
+      # No compiler.rmetaStability line, again: auto resolves to the full
+      # trio for any fork-toolchain graph (the hygiene-preserving strip-spans
+      # of fork rev 42daae19928e closed the ICE that had forced auto
+      # stripSpans off between #10170 and this pin), so cutoff holding here
+      # proves the DEFAULT path, and an accidental weakening of the auto
+      # resolution fails this check.
+      policy = {
+        # The gates ran on this fixture's shape already (it is first-party
+        # test data, not shipped code), and the fork carries no clippy-driver;
+        # same relaxed posture as the fork-discovery fixtures above.
+        denyUnusedCrateDependencies = false;
+        cargoAudit.enable = false;
+        cargoMachete.enable = false;
+        clippy.enable = false;
+        tests.enable = false;
+      };
+    };
+
+  cargoUnitRmetaCutoffTest = let
+    base = cargoUnitRmetaChainWorkspaceFor (cargoUnitRmetaChainVariant "base" "");
+    comment = cargoUnitRmetaChainWorkspaceFor (cargoUnitRmetaChainVariant "comment-edit" ''
+      sed -i 's|// CUTOFF-DEMO-EDIT-SITE.*|&\n// a line-shifting comment insertion: the edit class this check exists\n// to stop from cascading past the leaf|' \
+        $out/chain-a/src/lib.rs
+    '');
+    signature = cargoUnitRmetaChainWorkspaceFor (cargoUnitRmetaChainVariant "signature-edit" ''
+      printf '\npub fn leaf_extra() -> u32 {\n    7\n}\n' >> $out/chain-a/src/lib.rs
+    '');
+  in
+    pkgs.runCommand "cargo-unit-rmeta-cutoff" {
+      # The demo script drives rebuild counts over exactly these roots.
+      passthru = {
+        baseBin = base.binaries.chain-d;
+        commentBin = comment.binaries.chain-d;
+        signatureBin = signature.binaries.chain-d;
+      };
+    } ''
+      # Comment edit: the leaf recompiles, its output converges, and in a CA
+      # store path equality here IS the cutoff; every downstream resolved
+      # derivation is already realized. Assert it at every level of the chain.
+      [ "${base.libraries.chain_a}" = "${comment.libraries.chain_a}" ]
+      [ "${base.libraries.chain_b}" = "${comment.libraries.chain_b}" ]
+      [ "${base.libraries.chain_c}" = "${comment.libraries.chain_c}" ]
+      [ "${base.binaries.chain-d}" = "${comment.binaries.chain-d}" ]
+
+      # The chain is real: the bin runs and computes through all four crates.
+      ${base.binaries.chain-d}/bin/chain-d > chain.out
+      grep -qx '114' chain.out
+
+      # Negative control: an interface edit must still cascade, at the rmeta
+      # byte level and all the way to the bin path.
+      if cmp -s "$(ls ${base.libraries.chain_a}/lib/libchain_a-*.rmeta)" \
+                "$(ls ${signature.libraries.chain_a}/lib/libchain_a-*.rmeta)"; then
+        echo "signature edit left the leaf rmeta byte-identical; the flags are blanking metadata" >&2
+        exit 1
+      fi
+      [ "${base.libraries.chain_a}" != "${signature.libraries.chain_a}" ]
+      [ "${base.binaries.chain-d}" != "${signature.binaries.chain-d}" ]
+
+      mkdir -p "$out"
+      echo "comment edit converged at the leaf; signature edit cascaded" > "$out/result"
+    '';
+
   # Self-test for the prebuilt-library injection seam (mkPrebuiltLibraryUnit +
   # extraUnits / extraLibraries). The shape: build a leaf library crate normally
   # (the consumer's own source, `answer() = 42`), then inject a prebuilt unit
@@ -985,7 +1227,7 @@
   # of 42. Same package name/version/edition/deps, so cargo-unit computes the
   # same unit key; only the function body (source bytes, which the key ignores)
   # differs. This stands in for "a prebuilt artifact compiled elsewhere".
-  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" {} ''
+  cargoUnitPrebuiltVariantSource = pkgs.runCommand "cargo-unit-prebuilt-variant-source" {__structuredAttrs = true;} ''
     cp -R ${cargoUnitPrebuiltFixture}/. "$out"
     chmod -R u+w "$out"
     sed -i 's/^    42$/    99/' "$out/crates/prebuilt-lib/src/lib.rs"
@@ -1095,7 +1337,7 @@
       rlib = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rlib";
       rmeta = "${cargoUnitPrebuiltVariantMid.unit}/lib/libprebuilt_mid-${cargoUnitPrebuiltVariantMid.hash}.rmeta";
       toolchainId = ix.cargoUnit.defaultToolchainId;
-      depUnits = [(pkgs.runCommand "not-a-prebuilt-unit" {} ''mkdir "$out"'')];
+      depUnits = [(pkgs.runCommand "not-a-prebuilt-unit" {__structuredAttrs = true;} ''mkdir "$out"'')];
     }).drvPath
     true
   );
@@ -1350,7 +1592,7 @@
     packages = ["."];
   };
 
-  goUnitDerivedStdlibSource = pkgs.runCommand "go-unit-stdlib-source" {} ''
+  goUnitDerivedStdlibSource = pkgs.runCommand "go-unit-stdlib-source" {__structuredAttrs = true;} ''
     cp -R ${goUnitStdlibFixture}/. "$out"
   '';
 
@@ -1361,7 +1603,7 @@
     vendorHash = null;
     packages = ["."];
   };
-  goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" {} ''
+  goUnitDerivedSource = pkgs.runCommand "go-unit-hello-source" {__structuredAttrs = true;} ''
     cp -R ${goUnitFixture}/. "$out"
   '';
   goUnitDerivedWorkspaceWithVendorHashFile = ix.goUnit.buildWorkspace {
@@ -1517,13 +1759,13 @@
   # design, so a second copy on disk is duplication the clone gate charges for
   # every time either side is edited, and a second place to forget when the
   # fixture grows a target.
-  cargoUnitScopeAlphaChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-alpha-changed" {} ''
+  cargoUnitScopeAlphaChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-alpha-changed" {__structuredAttrs = true;} ''
     cp -R ${cargoUnitScopeFixture}/. "$out"
     chmod -R u+w "$out"
     substituteInPlace "$out/crates/alpha/src/lib.rs" --replace-fail 'alpha:' 'alpha changed:'
   '';
 
-  cargoUnitScopeLockChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-lock-changed" {} ''
+  cargoUnitScopeLockChangedFixture = pkgs.runCommand "cargo-unit-workspace-scope-lock-changed" {__structuredAttrs = true;} ''
     cp -R ${cargoUnitScopeFixture}/. "$out"
     chmod -R u+w "$out"
     cp ${./fixtures/cargo-unit-workspace-scope/Cargo.itoa-1.0.14.lock} "$out/Cargo.lock"
@@ -1647,7 +1889,7 @@
     upstream,
     lockFile,
   }:
-    pkgs.runCommand "cargo-unit-${name}-source-with-lock" {} ''
+    pkgs.runCommand "cargo-unit-${name}-source-with-lock" {__structuredAttrs = true;} ''
       cp -R ${upstream}/. "$out"
       chmod -R u+w "$out"
       cp ${lockFile} "$out/Cargo.lock"
@@ -2700,7 +2942,9 @@
   # no ValidPaths row for it however the image is built. Mock selves because
   # the real `self` only ever has one shape per evaluation.
   imageRegistryPinAssertions = let
-    registryPin = import (paths.root + "/lib/image/registry-pin.nix") {inherit lib;};
+    registryPinModule = import (paths.root + "/lib/image/registry-pin.nix") {inherit lib;};
+    inherit (registryPinModule) excludedTracked;
+    registryPin = registryPinModule.pin;
     # The construction never validates `narHash`, so a labeled mock keeps the
     # fixture honest; a plausible SRI literal would read as a real pin.
     mockNarHash = "sha256-mock+image-registry-pin";
@@ -2732,6 +2976,39 @@
       outPath = mockSubPath;
       narHash = mockNarHash;
     };
+    # The REAL tree, filtered exactly the way an image pins it, so the two ways
+    # `excludedTracked` drifts can be made to fail here instead of in a guest
+    # weeks later (registry-pin.nix spells out both directions). Forcing the
+    # copy is the point: nothing else in any gate evaluates the filtered tree.
+    realSeamPin = registryPin {
+      self = {outPath = mockSubPath;};
+      sourceRoot = paths.root;
+    };
+    rootEntries = builtins.readDir paths.root;
+    pinnedEntries = builtins.readDir realSeamPin.path;
+    # A rule naming an entry the tree no longer has is dead, and a dead rule
+    # silently restores the churn it was written to remove.
+    deadExclusions = builtins.filter (name: !(rootEntries ? ${name})) excludedTracked;
+    leakedExclusions = builtins.filter (name: pinnedEntries ? ${name}) excludedTracked;
+    # What index's flake reads before it can produce any output at all: the
+    # flake and its lock, plus the nix-code roots `paths` (flake.nix) names.
+    # Coarse on purpose -- it catches a filter that swallowed a whole subtree,
+    # not one that dropped a single file.
+    pinMustKeep = [
+      "Cargo.lock"
+      "Cargo.toml"
+      "examples"
+      "flake.lock"
+      "flake.nix"
+      "images"
+      "lib"
+      "modules"
+      "packages"
+      "skills"
+      "tests"
+      "users"
+    ];
+    missingFromPin = builtins.filter (name: !(pinnedEntries ? ${name})) pinMustKeep;
   in [
     {
       assertion =
@@ -2777,6 +3054,18 @@
       # The one shape carrying BOTH a subpath outPath and a narHash.
       assertion = !(dirPin ? narHash);
       message = "a ?dir= self's narHash describes the enclosing repository, not the pinned subtree, so it must be dropped rather than locking the pin to content it does not name";
+    }
+    {
+      assertion = deadExclusions == [];
+      message = "registry-pin.nix keeps ${lib.concatStringsSep ", " deadExclusions} out of the pinned copy, but index's tree has no such top-level entry: the rule is dead, and whatever it used to exclude is silently churning every fleet system closure again (ENG-12789). Re-point or delete the rule in the same commit as the rename.";
+    }
+    {
+      assertion = leakedExclusions == [];
+      message = "the pinned copy still holds ${lib.concatStringsSep ", " leakedExclusions} even though registry-pin.nix excludes it: the filter is not reaching the copy the image pins";
+    }
+    {
+      assertion = missingFromPin == [];
+      message = "the pinned copy is missing ${lib.concatStringsSep ", " missingFromPin}, which index's flake reads before it can produce any output: an in-guest `nix run index#<attr>` against this pin would fail on a path that is not there. Drop the offending entry from registry-pin.nix's excludedTracked rather than special-casing the reader.";
     }
   ];
 
@@ -2988,7 +3277,7 @@
       {
         services.minestom = {
           enable = true;
-          serverJar = pkgs.runCommand "fake-minestom.jar" {} "touch $out";
+          serverJar = pkgs.runCommand "fake-minestom.jar" {__structuredAttrs = true;} "touch $out";
           yourkit = {
             enable = true;
             listen = "all";
@@ -3011,7 +3300,7 @@
       {
         services.minestom = {
           enable = true;
-          serverJar = pkgs.runCommand "fake-minestom.jar" {} "touch $out";
+          serverJar = pkgs.runCommand "fake-minestom.jar" {__structuredAttrs = true;} "touch $out";
         };
       }
     ];
@@ -3103,6 +3392,8 @@
         version = "0";
         strictDeps = true;
         dontUnpack = true;
+        # Eval-only fixture: the tryEval above forces drvPath, never a build.
+        doCheck = false;
       };
     }).drvPath
     true
@@ -3215,53 +3506,6 @@
       };
     }
   ];
-
-  # --- patched-src series restriction ----------------------------------------
-  # Pure-eval facts about `patchedSrc`'s optional series restriction, still
-  # exercised by downstream patch-dir forks (ix) and the test fixtures here.
-  patchedSrcFixture = args:
-    ix.patchedSrc ({
-        name = "patched-src-fixture";
-        src = ./fixtures/patched-src;
-        patchDir = ./fixtures/patched-src;
-      }
-      // args);
-  # Forcing `.patches` runs the eval-time selection + canonical assertions
-  # without building anything.
-  patchedSrcSubset = patchedSrcFixture {patchNames = ["0001-canonical.patch"];};
-  patchedSrcAlternate = ix.patchedSrc {
-    name = "patched-src-alternate-fixture";
-    src = ./fixtures/patched-src;
-    patchDir = ./fixtures/patched-src-alternate;
-    patchNames = [
-      "0002-canonical.patch"
-      "0001-canonical.patch"
-    ];
-  };
-  patchedSrcSubsetEval = builtins.tryEval (
-    builtins.deepSeq patchedSrcSubset.patches true
-  );
-  patchedSrcPatchSetEval = builtins.tryEval (
-    let
-      result = {
-        count = patchedSrcSubset.patchSet.count;
-        names = map (patch: patch.name) patchedSrcSubset.patchSet.patches;
-        hashLength = builtins.stringLength patchedSrcSubset.patchSet.digest;
-        hashChangesWithContent = patchedSrcSubset.patchSet.digest != patchedSrcAlternate.patchSet.digest;
-        alternateNames = map (patch: patch.name) patchedSrcAlternate.patchSet.patches;
-      };
-    in
-      builtins.deepSeq result result
-  );
-  patchedSrcSubsetNonCanonicalEval = builtins.tryEval (
-    builtins.deepSeq (patchedSrcFixture {patchNames = ["0002-noncanonical.patch"];}).patches true
-  );
-  patchedSrcSubsetUnknownEval = builtins.tryEval (
-    builtins.deepSeq (patchedSrcFixture {patchNames = ["9999-missing.patch"];}).patches true
-  );
-  patchedSrcDefaultEval = builtins.tryEval (
-    builtins.deepSeq (patchedSrcFixture {}).patches true
-  );
 
   # The rust build policy's link-arg surface. Imported directly rather than
   # reached through `ix.cargoUnit`, because the resolved args are not on any
@@ -3388,43 +3632,6 @@
     # exactly the golden plan IR the efx CLI's tests parse, and everything the
     # translator cannot express must throw. See tests/efx-plan.nix.
     efx = import ./efx-plan.nix {inherit lib ix paths;};
-    patched-src-series = [
-      {
-        assertion = patchedSrcSubsetEval.success;
-        message = "patchedSrc should accept a patchNames subset of the discovered series";
-      }
-      {
-        assertion =
-          patchedSrcPatchSetEval.success
-          && patchedSrcPatchSetEval.value
-          == {
-            count = 1;
-            names = ["0001-canonical.patch"];
-            hashLength = 64;
-            hashChangesWithContent = true;
-            alternateNames = [
-              "0001-canonical.patch"
-              "0002-canonical.patch"
-            ];
-          };
-        message = "patchedSrc should expose a content-sensitive SHA-256 identity for the selected series";
-      }
-      {
-        assertion = !patchedSrcSubsetNonCanonicalEval.success;
-        message = "patchedSrc should still assert canonical patch format on a selected subset";
-      }
-      {
-        assertion = !patchedSrcSubsetUnknownEval.success;
-        message = "patchedSrc should reject a patchNames entry naming no patch file in the series";
-      }
-      {
-        # The default (null) selection must keep discovering the WHOLE dir:
-        # the fixture dir contains a non-canonical patch, so full discovery
-        # can only succeed by skipping files, which would be the regression.
-        assertion = !patchedSrcDefaultEval.success;
-        message = "patchedSrc default discovery should still walk every patch file (and thus trip on the non-canonical fixture)";
-      }
-    ];
     wrap-package = [
       {
         assertion = !wrapPackageTypoEval.success;
@@ -3485,6 +3692,23 @@
           )
           googleOauthEnvVars;
         message = "Claude MCP config should forward the Google OAuth client environment variables";
+      }
+      {
+        assertion =
+          lib.all (
+            name: sampleClaudeMcpServers.index.env.${name} == "\${${name}:-}"
+          )
+          forgeVerdictsEnvVars;
+        message = "Claude MCP config should forward the forge verdict feed environment variables";
+      }
+      {
+        assertion = let
+          entry = sampleCodexMcpEntry "mcp_servers.index.env_vars";
+        in
+          entry
+          != null
+          && lib.all (name: lib.hasInfix (builtins.toJSON name) entry.value) forgeVerdictsEnvVars;
+        message = "Codex MCP config should forward the forge verdict feed environment variables";
       }
       {
         assertion =
@@ -5098,6 +5322,110 @@
         message = "agent policy should gate kernel/exa-superseded native tools on the baked MCP servers";
       }
       {
+        # `kernelOnly` yields EXACTLY the strict tool posture, checked as a
+        # whole-list equality rather than a spot check: the mode's entire value
+        # is that nothing survives it that was not meant to, and an `elem` test
+        # cannot see the tool somebody adds back.
+        assertion = let
+          policy = gates:
+            import (paths.packagesRoot + "/agent/policy/permissions.nix") ({inherit lib;} // gates);
+          gates = {
+            indexKernelBaked = true;
+            exaSearchBaked = true;
+          };
+          off = policy gates;
+          on = policy (gates // {kernelOnly = true;});
+        in
+          # Off is the old render, spelled out rather than compared to itself:
+          # a default that perturbs anything is a default nobody can adopt, and
+          # the only way to see a perturbation is to write down what it was.
+          off.claude.deniedToolPatterns
+          == [
+            "Bash(gh pr merge*--admin*)"
+            "Bash(gh pr merge*--force*)"
+            "Skill(artifact-design)"
+            "WebSearch"
+            "WebFetch"
+            # `lib.attrValues kernelSuperseded` order: fileEdit, fileRead,
+            # fileSearch, fileWrite.
+            "Edit"
+            "Read"
+            "Glob"
+            "Grep"
+            "Write"
+            "NotebookEdit"
+            "CronCreate"
+            "CronDelete"
+            "CronList"
+          ]
+          && off.claude.kernelOnly == false
+          && !(builtins.elem "Bash" off.claude.deniedToolPatterns)
+          # On: the exact list, deduped, in order. Strict mode adds exactly the
+          # native shell and the exa server to what the kernel gate already
+          # denied -- everything else it names was already gone.
+          && on.claude.deniedToolPatterns
+          == off.claude.deniedToolPatterns ++ ["Bash" "mcp__exa"]
+          # The native shell is the tool the non-strict kernel posture keeps on
+          # purpose (index#4080), so it is the one that proves the mode bit.
+          && builtins.elem "Bash" on.claude.deniedToolPatterns
+          # exa's TOOLSET goes, named explicitly. The capability does not: it
+          # comes back in-language as the kernel's `Web.search`/`Web.fetch`,
+          # which call the same API. One capability, one door.
+          && builtins.elem "mcp__exa" on.claude.deniedToolPatterns
+          # The flag reaches policy/hooks.nix, which is what arms the exhaustive
+          # PreToolUse guard; without it the deny list is only a list of names.
+          && on.claude.kernelOnly == true
+          && on.codex.kernelOnly == true
+          && on.codex.forcedSettings.features.shell_tool == false
+          && on.codex.forcedSettings.features.unified_exec == false
+          && builtins.elem "Shell(*)" on.cursor.deniedShellPatterns
+          && on.cursor.kernelOnlySupported == false;
+        message = "kernelOnly should deny every native tool and every non-index MCP server, and change nothing when off";
+      }
+      {
+        # Strict mode without a kernel is an agent with no tools at all. It has
+        # to fail at eval, because the shape of the bug downstream is a session
+        # that starts fine and can do nothing, with nothing to say why.
+        assertion = let
+          broken = builtins.tryEval (
+            import (paths.packagesRoot + "/agent/policy/permissions.nix") {
+              inherit lib;
+              kernelOnly = true;
+              indexKernelBaked = false;
+            }
+          );
+        in
+          !broken.success;
+        message = "kernelOnly without indexKernelBaked should throw, not build a toolless agent";
+      }
+      {
+        # The hook is the exhaustive half of the enforcement, so "armed when on,
+        # absent when off" is the assertion that the mode is real rather than
+        # advisory. Rendered hooks are opaque command strings, so match on the
+        # subcommand the runner is invoked with.
+        assertion = let
+          hooks = kernelOnly:
+            import (paths.packagesRoot + "/agent/policy/hooks.nix") {
+              inherit lib kernelOnly;
+              hookRunner = repoPackages.claude-hooks;
+            };
+          # Infix rather than suffix: `renderCommand` runs the argv through
+          # `lib.escapeShellArgs`, which may or may not quote a dash-only token
+          # depending on the pinned nixpkgs, and this assertion is about which
+          # hook is armed, not about quoting.
+          armed = name: rendered:
+            lib.any (
+              group: lib.any (hook: lib.hasInfix name hook.command) group.hooks
+            ) (rendered.claude.PreToolUse or []);
+        in
+          armed "kernel-only-guard" (hooks true)
+          && !(armed "kernel-only-guard" (hooks false))
+          # The mode changes nothing else about the hook set.
+          && armed "cargo-guard" (hooks false)
+          && armed "cargo-guard" (hooks true);
+        message = "the kernel-only PreToolUse guard should be armed exactly when kernelOnly is set";
+      }
+      {
         assertion = let
           forced = repoPackages.codex.passthru.specValue.forced;
         in
@@ -5217,8 +5545,9 @@
         # only move left is a second Agent call on the first one's files
         # (observed, ENG-10401); the Bash description names Monitor for waiting
         # on a condition. Pin both out of the deny list, and pin that the
-        # experimental agent-teams env var rides along with SendMessage: the
-        # tool stays hidden without it, so the permission row alone is a lie.
+        # SendMessage stays allowed WITHOUT the teams env var: subagent
+        # continuation is stock (sub-agents.md), denying the tool reopens
+        # ENG-10401, and agent teams (mesh sessions) default off upstream.
         assertion = let
           policy = homeAgentConfig.programs.claude-code.package.passthru.settingsPolicy;
         in
@@ -5227,8 +5556,8 @@
             "ReportFindings"
             "SendMessage"
           ]
-          && policy.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS == "1";
-        message = "claude-code must not deny tools its own tool descriptions tell the model to use, and SendMessage must bake the agent-teams env var it needs";
+          && !(policy.env ? CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS);
+        message = "claude-code must not deny tools its own tool descriptions tell the model to use, and the experimental agent-teams env must stay off by default (SendMessage no longer implies it)";
       }
       {
         assertion =
@@ -7186,8 +7515,10 @@
   ];
 
   cargoUnitPrebuiltScript = ''
-    # The injected unit's $out matches the unit contract: extern-path holds the
-    # absolute path to the rlib (render.rs:1386-1398).
+    # The injected unit's $out matches the unit contract: extern-path holds
+    # the absolute path to the rlib, and the sibling .rmeta is staged next to
+    # it so a consumer running with `policy.compiler.embedMetadata = false`
+    # can pass it as the second --extern (see mkPrebuiltLibraryUnit).
     test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rlib
     test -f ${cargoUnitPrebuiltLibUnit}/lib/libprebuilt_lib-${cargoUnitPrebuiltVariantLib.hash}.rmeta
     test -f ${cargoUnitPrebuiltLibUnit}/nix-support/extern-path
@@ -7270,6 +7601,25 @@
   cargoUnitDylibTest = import ./cargo-unit-dylib.nix {
     inherit lib pkgs ix;
   };
+
+  # Guard for `ix.dev.profiles.rust` being reachable from a consumer's module.
+  # Eval-only; forced by the `eval` aggregate below.
+  devProfilesRustTest = import ./dev-profiles-rust.nix {
+    inherit lib pkgs ix paths;
+  };
+
+  # Guard for every in-tree flake's `ix.default`: it has to be a NixOS
+  # configuration, not the fleet result `mkVm`/`mkDev`/`mkFleet` return.
+  # Eval-only; forced by the `eval` aggregate below.
+  ixDefaultIsAVmTest = import ./ix-default-is-a-vm.nix {
+    inherit
+      lib
+      nixpkgs
+      pkgs
+      ix
+      paths
+      ;
+  };
 in {
   inherit
     groupTests
@@ -7279,6 +7629,11 @@ in {
     ;
   cargoUnitRealWorkspaces = cargoUnitRealWorkspacesTest;
   cargoUnitPrebuiltLibrary = cargoUnitPrebuiltTest;
+  # Byte-parity gate for `-Zdump-test-names` discovery against the executed
+  # `--list` manifest, on the fork toolchain (packages/rustc-ix). Its own
+  # check, not part of `eval`: forcing it realizes the fork rustc.
+  cargoUnitForkDiscovery = cargoUnitForkDiscoveryTest;
+  cargoUnitRmetaCutoff = cargoUnitRmetaCutoffTest;
   # Validate the current R2 publication and local prebuilt-unit wrapper.
   sdkRustPrebuilt = sdkRust.artifactCheck;
   portableServices = portableServicesTest;
@@ -7286,6 +7641,9 @@ in {
   minecraftBlocksVm = minecraftBlocksVmTest;
   minestomSpleefVm = minestomSpleefVmTest;
   switchStopsAMountVm = switchStopsAMountVmTest;
+  ephemeralRootVm = ephemeralRootVmTest;
+  ephemeralRootLvmThinVm = ephemeralRootLvmThinVmTest;
+  hardenedStateDirectoryVm = hardenedStateDirectoryVmTest;
   inherit baseImageNixDb;
   imageRegistryPin = imageRegistryPinTest;
   dev-profile-fortify = devProfileFortifyTest.premiseStillHolds;
@@ -7302,6 +7660,8 @@ in {
       provenanceTest
       cargoUnitPrebuiltTest
       devProfileFortifyTest.wiringReachesUnits
+      devProfilesRustTest
+      ixDefaultIsAVmTest
     ]
   );
 }

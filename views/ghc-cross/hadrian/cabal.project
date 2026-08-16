@@ -1,0 +1,16 @@
+packages: ./
+          ../utils/ghc-toolchain/
+          ../libraries/ghc-platform/
+
+-- This essentially freezes the build plan for hadrian
+-- It would be wise to keep this up to date with the state set in ci.sh
+index-state: 2025-02-03T15:14:19Z
+
+-- unordered-containers-0.2.20-r1 requires template-haskell < 2.22
+-- ghc-9.10 has template-haskell-2.22.0.0
+allow-newer: unordered-containers:template-haskell
+
+-- N.B. Compile with -O0 since this is not a performance-critical executable
+-- and the Cabal takes nearly twice as long to build with -O1. See #16817.
+package Cabal
+  optimization: False

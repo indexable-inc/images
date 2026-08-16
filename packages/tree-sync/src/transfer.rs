@@ -134,7 +134,8 @@ fn collect_local(dir: &Path, prefix: &Path, manifest: &mut Manifest) -> Result<(
     let listing =
         std::fs::read_dir(dir).wrap_err_with(|| format!("could not read {}", dir.display()))?;
     for item in listing {
-        let item = item.wrap_err_with(|| format!("could not read an entry in {}", dir.display()))?;
+        let item =
+            item.wrap_err_with(|| format!("could not read an entry in {}", dir.display()))?;
         let metadata = item
             .path()
             .symlink_metadata()
@@ -599,13 +600,7 @@ mod tests {
     fn deletions_are_the_destination_minus_the_source() {
         let mut present = Manifest::new();
         for path in ["keep.rs", "stale.rs", "sub/gone.rs"] {
-            present.insert(
-                PathBuf::from(path),
-                Stat {
-                    size: 1,
-                    mtime: 0,
-                },
-            );
+            present.insert(PathBuf::from(path), Stat { size: 1, mtime: 0 });
         }
         let keep: HashSet<PathBuf> = std::iter::once(PathBuf::from("keep.rs")).collect();
 

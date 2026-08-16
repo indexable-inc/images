@@ -1,0 +1,2 @@
+extra-libraries: @EXTRA_LIBS@
+install-includes: HsUnixConfig.h

@@ -9,10 +9,8 @@
 
 How does one crate in a monorepo get its own GitHub repo that a stranger can clone and `cargo build`, without the repo drifting from the source? mirror generates opt-in standalone repos from this monorepo and keeps them equal to it in CI: a package under `packages/` opts in via its `package.nix` and gets a self-contained, read-only GitHub repo that a visitor can clone and `cargo build` without ever seeing the monorepo. The monorepo stays the single source of truth; CI keeps the mirror equal to it.
 
-De-forked packages are a different product with a different owner: since the
-jj megamerge migration their patch series live natively as commits in each
-fork repo (lib/fork-packages.nix), rebased and pushed by
-`.github/workflows/fork-sync.yml`; this tool does not touch them.
+Maintained forks are jj views in this repository. This tool does not publish
+or update them.
 
 Rust packages are what the generator understands today, but the interface
 (the `mirror` manifest attr, `.#lib.mirrorPackages`, the sync workflow) is
@@ -124,10 +122,9 @@ org with
 
 - Administration: **write** (create the mirror repos on first publish),
 - Contents: **write** (push `main`),
-- Workflows: **write** (fork-sync pushes megamerge rebases whose range
-  carries upstream changes to `.github/workflows/*`; GitHub rejects any
-  app push that alters workflow files without this permission -- btop's
-  2026-07-22 rebase was bounced exactly this way),
+- Workflows: **write** (a mirrored source can carry upstream changes to
+  `.github/workflows/*`; GitHub rejects an app push that changes workflow
+  files without this permission),
 - Metadata: **read** (implicit baseline).
 
 The app's client id lives in the `MIRROR_APP_CLIENT_ID` repository variable

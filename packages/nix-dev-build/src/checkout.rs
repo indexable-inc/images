@@ -46,8 +46,10 @@ impl Checkout {
         let short = git_probe::output(&self.root, &["rev-parse", "--short", "HEAD"])?;
         // --untracked-files=no keeps this from walking the build directory,
         // which holds tens of thousands of untracked object files.
-        let status =
-            git_probe::output(&self.root, &["status", "--porcelain", "--untracked-files=no"])?;
+        let status = git_probe::output(
+            &self.root,
+            &["status", "--porcelain", "--untracked-files=no"],
+        )?;
         Some(Revision {
             short,
             dirty: !status.is_empty(),
@@ -144,8 +146,14 @@ mod tests {
         fs::write(dir.path().join("meson.build"), "project('something-else')").unwrap();
         let error = validate(dir.path()).unwrap_err().to_string();
         assert!(error.contains("is not a nix source checkout"), "{error}");
-        assert!(error.contains(&format!("project('{ROOT_PROJECT}'): missing")), "{error}");
-        assert!(error.contains("src/libexpr/meson.build: missing"), "{error}");
+        assert!(
+            error.contains(&format!("project('{ROOT_PROJECT}'): missing")),
+            "{error}"
+        );
+        assert!(
+            error.contains("src/libexpr/meson.build: missing"),
+            "{error}"
+        );
     }
 
     #[test]

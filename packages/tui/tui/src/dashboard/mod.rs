@@ -68,8 +68,10 @@ pub async fn serve(
 
     let manager = manager.clone();
     let poller = runtime.spawn(async move {
+        // Stateful across ticks: status inference and transcript tails.
+        let mut collector = crate::frame::PaneCollector::new();
         loop {
-            let panes = crate::frame::collect_panes(&manager).await;
+            let panes = collector.collect(&manager).await;
             hub.apply_scope(LOCAL_SCOPE, &panes);
             tokio::select! {
                 () = tokio::time::sleep(poll) => {}

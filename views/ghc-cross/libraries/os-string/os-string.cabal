@@ -1,0 +1,130 @@
+cabal-version:      2.2
+name:               os-string
+version:            2.0.7
+
+-- NOTE: Don't forget to update ./changelog.md
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Julian Ospald <hasufell@posteo.de>
+maintainer:         Julian Ospald <hasufell@posteo.de>
+copyright:          Julain Ospald 2021-2023
+bug-reports:        https://github.com/haskell/os-string/issues
+homepage:
+  https://github.com/haskell/os-string/blob/master/README.md
+
+category:           System
+build-type:         Simple
+synopsis:           Library for manipulating Operating system strings.
+tested-with:
+  GHC ==8.6.5
+   || ==8.8.4
+   || ==8.10.7
+   || ==9.0.2
+   || ==9.2.8
+   || ==9.4.8
+   || ==9.6.3
+   || ==9.8.1
+
+description:
+  This package provides functionality for manipulating @OsString@ values, and is shipped with <https://www.haskell.org/ghc/ GHC>.
+
+extra-source-files:
+  System/OsString/Common.hs
+  tests/bytestring-tests/Properties/Common.hs
+  bench/Common.hs
+
+extra-doc-files:
+  changelog.md
+  README.md
+
+source-repository head
+  type:     git
+  location: https://github.com/haskell/os-string
+
+library
+  exposed-modules:
+    System.OsString.Data.ByteString.Short
+    System.OsString.Data.ByteString.Short.Internal
+    System.OsString.Data.ByteString.Short.Word16
+    System.OsString.Encoding
+    System.OsString.Encoding.Internal
+    System.OsString
+    System.OsString.Internal
+    System.OsString.Internal.Exception
+    System.OsString.Internal.Types
+    System.OsString.Posix
+    System.OsString.Windows
+
+  other-extensions:
+    CPP
+    PatternGuards
+
+  if impl(ghc >=7.2)
+    other-extensions: Safe
+
+  default-language: Haskell2010
+  build-depends:
+    , base              >=4.12.0.0      && <4.22
+    , bytestring        >=0.11.3.0
+    , deepseq
+    , exceptions
+    , template-haskell
+
+  ghc-options:      -Wall
+
+test-suite bytestring-tests
+  default-language: Haskell2010
+  ghc-options:      -Wall
+  type:             exitcode-stdio-1.0
+  main-is:          Main.hs
+  hs-source-dirs:   tests tests/bytestring-tests
+  other-modules:
+    Properties.ShortByteString
+    Properties.WindowsString
+    Properties.PosixString
+    Properties.OsString
+    Properties.ShortByteString.Word16
+    TestUtil
+
+  build-depends:
+    , base
+    , bytestring  >=0.11.3.0
+    , os-string
+    , QuickCheck  >=2.7      && <2.16
+
+test-suite encoding-tests
+  default-language: Haskell2010
+  ghc-options:      -Wall
+  type:             exitcode-stdio-1.0
+  main-is:          Main.hs
+  hs-source-dirs:   tests tests/encoding
+  other-modules:
+    Arbitrary
+    EncodingSpec
+    TestUtil
+
+  build-depends:
+    , base
+    , bytestring  >=0.11.3.0
+    , deepseq
+    , os-string
+    , QuickCheck  >=2.7      && <2.16
+    , quickcheck-classes-base ^>=0.6.2
+
+benchmark bench
+  main-is:          Bench.hs
+  other-modules:    BenchOsString
+                    BenchPosixString
+                    BenchWindowsString
+  type:             exitcode-stdio-1.0
+  hs-source-dirs:   bench
+  default-language: Haskell2010
+  ghc-options:      -O2 "-with-rtsopts=-A32m"
+  if impl(ghc >= 8.6)
+    ghc-options:    -fproc-alignment=64
+  build-depends:    base,
+                    bytestring,
+                    os-string,
+                    deepseq,
+                    tasty-bench,
+                    random

@@ -1,0 +1,11 @@
+error:
+       … while calling the 'filterSource' builtin
+         at /pwd/lang/eval-fail-filterSource-missing-ancestor.nix:6:1:
+            5| # sends the reader to the wrong line of their expression.
+            6| builtins.filterSource (path: type: true) /eng13123-no-such-root/sub
+             | ^
+            7|
+
+       … while adding path '/eng13123-no-such-root/sub'
+
+       error: path '/eng13123-no-such-root/sub' does not exist

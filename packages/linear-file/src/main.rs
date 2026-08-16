@@ -196,7 +196,10 @@ fn run() -> Result<()> {
     }
 
     let data = post(&client, &key, &args.url, CREATE, &json!({ "input": input }))?;
-    let created = data.pointer("/issueCreate/issue").cloned().unwrap_or_default();
+    let created = data
+        .pointer("/issueCreate/issue")
+        .cloned()
+        .unwrap_or_default();
     let issue: Issue = serde_json::from_value(created)
         .context("issueCreate returned no issue; the input was rejected")?;
     println!(
@@ -432,12 +435,7 @@ fn post(
 
 /// The team's id. A value that already looks like an id is passed through, so
 /// `--team <uuid>` works without a lookup round-trip.
-fn team_id(
-    client: &reqwest::blocking::Client,
-    key: &str,
-    url: &str,
-    team: &str,
-) -> Result<String> {
+fn team_id(client: &reqwest::blocking::Client, key: &str, url: &str, team: &str) -> Result<String> {
     if looks_like_an_id(team) {
         return Ok(team.to_owned());
     }
@@ -524,7 +522,10 @@ mod tests {
             merge_labels(&ids(&["a", "b"]), &[], &ids(&["a"])),
             ids(&["b"])
         );
-        assert_eq!(merge_labels(&ids(&["a"]), &ids(&["b"]), &ids(&["b"])), ids(&["a"]));
+        assert_eq!(
+            merge_labels(&ids(&["a"]), &ids(&["b"]), &ids(&["b"])),
+            ids(&["a"])
+        );
         // Removing something absent is not an error and changes nothing.
         assert_eq!(merge_labels(&ids(&["a"]), &[], &ids(&["z"])), ids(&["a"]));
         // No flags, no change.

@@ -1,98 +1,30 @@
+# A node that can fetch and push a private GitHub repository using a token
+# from the ix account secret store, and nothing else.
 {
+  config,
   lib,
   pkgs,
   ...
 }: let
   # The fleet maps the account store key `github_token` to this runtime file.
   # Only the path is known at eval time. The token bytes live in the file ix
-  # writes when creating the VM.
+  # writes when creating the VM, and are read per git request.
   tokenPath = "/run/secrets/github/token";
 
-  # A git credential helper that answers `get` for github.com with the token
-  # read from `tokenPath` on demand. Three properties carry the design:
-  #   1. The token never enters the store or any process environment. git
-  #      reads it from the helper's stdout only when it actually needs a
-  #      credential for a push or an authenticated fetch.
-  #   2. If the file is absent (token not delivered yet) the helper exits 0
-  #      with no output, so git falls through instead of failing. Boot and
-  #      anonymous git operations never depend on the secret being present.
-  #   3. It emits the token only for an `https`/`github.com` request. git
-  #      already scopes this helper to that host via the
-  #      `[credential "https://github.com"]` section, but re-checking the
-  #      request git feeds on stdin means the token can never be handed to
-  #      another host even if some non-git caller invokes the helper out of
-  #      scope.
-  # No external binaries: `[`, `printf`, `read`, `case`, and `$(<file)` are all
-  # bash builtins, so the helper has no runtime PATH requirement.
-  #
-  # Kept as raw bash, not migrated to a checked writer: this is a perf-sensitive
-  # git credential helper invoked per git operation, deliberately NOT `set -e`
-  # (its control flow is built on intentional nonzero `|| exit 0` fall-throughs),
-  # builtins-only with no PATH. A nushell rewrite adds startup latency and the
-  # bash writer's `set -euo pipefail` would change its semantics.
-  # astlog-ignore: no-write-shell-script
-  credentialHelper = pkgs.writeShellScript "github-token-credential-helper" ''
-    [ "$1" = get ] || exit 0
-    [ -r ${lib.escapeShellArg tokenPath} ] || exit 0
-
-    # git feeds the request as `key=value` lines on stdin. The `|| [ -n "$key" ]`
-    # guard processes a final line that lacks a trailing newline.
-    proto= host=
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-      case "$key" in
-        protocol) proto=$value ;;
-        host) host=$value ;;
-      esac
-    done
-    [ "$proto" = https ] && [ "$host" = github.com ] || exit 0
-
-    token=$(<${lib.escapeShellArg tokenPath})
-    [ -n "$token" ] || exit 0
-    printf 'username=x-access-token\n'
-    printf 'password=%s\n' "$token"
-  '';
-
-  # Secret-independent health probe: assert THIS example's wiring, not a
-  # returned token. Credential helpers are additive across scopes, so `--get`
-  # would return whatever helper has highest priority (a user's global config
-  # could shadow it); `--get-all` plus an exact match is the honest check that
-  # the system config registered our helper for github.com. Then run that exact
-  # helper and require exit 0 with no output for the empty request fed here
-  # (which never matches the host guard, so no token is read even once one is
-  # delivered; the stdout redirect is belt-and-suspenders against a token
-  # reaching the health-check log). Passes in CI and on a fresh boot with no
-  # token.
-  #
-  # Kept as raw bash: the `git config --get-all | grep -qxF` probe relies on
-  # `grep -q` exiting early, which under the bash writer's `set -o pipefail`
-  # would surface git's SIGPIPE as a failure on a successful match. Pairs with
-  # the credential helper above.
-  # astlog-ignore: no-write-shell-script
-  credentialHelperCheck = pkgs.writeShellScript "check-github-credential-helper" ''
-    set -eu
-    ${lib.getExe pkgs.git} config --get-all 'credential.https://github.com.helper' \
-      | ${lib.getExe pkgs.gnugrep} -qxF ${credentialHelper}
-    test -x ${credentialHelper}
-    ${credentialHelper} get </dev/null >/dev/null
-  '';
+  inherit (config.programs.git-token-auth) helperCommand;
 in {
-  # System git config in `/etc/gitconfig`. Credential helpers are additive
-  # across scopes, so a user's `~/.config/git/config` can add its own helper but
-  # does not replace this one; no user here defines a github helper, so this is
-  # the one that answers. git execs the helper directly because the value is an
-  # absolute path.
-  environment.etc.gitconfig.text = ''
-    [credential "https://github.com"]
-    	helper = ${credentialHelper}
-
-    # Route SSH-style remotes through HTTPS so the same token authenticates
-    # `git@github.com:` and `ssh://git@github.com/` clones. This applies to
-    # every user on the node. Drop this block if a node should keep using SSH
-    # keys for GitHub instead.
-    [url "https://github.com/"]
-    	insteadOf = git@github.com:
-    	insteadOf = ssh://git@github.com/
-  '';
+  # One option is the whole wiring: a credential helper registered in the
+  # system git config for github.com, plus `insteadOf` rules so an SSH-form
+  # remote reaches the same token. Helpers are additive across scopes, so a
+  # user's `~/.config/git/config` can add its own without replacing this one.
+  #
+  # The helper is `ix-credential token-helper`, which speaks git's wire
+  # protocol directly and never renders `https://user:token@host` into a
+  # file. That matters because `@ : / %` are structural in a URL and ordinary
+  # bytes in git's format, so a token containing one would otherwise produce
+  # a credentials file matching nothing, and the failure would surface as a
+  # 404 rather than as an authentication error.
+  programs.git-token-auth.tokenFile = tokenPath;
 
   # `gh` does not use git's credential helper; it reads `GH_TOKEN` (or
   # `GITHUB_TOKEN`). It is left out of the global environment on purpose: an
@@ -102,8 +34,22 @@ in {
   #   export GH_TOKEN="$(cat /run/secrets/github/token)"
   # See the README for why this is not baked in.
 
+  # Secret-independent: this asserts THIS example's wiring, not a returned
+  # token, so it passes in CI and on a fresh boot with no token delivered.
+  #
+  # `--get <name> <value-pattern>` rather than reading the value back and
+  # comparing, because helpers are additive: a user's global config could
+  # shadow ours, and a plain read would return whichever has priority. An
+  # anchored pattern over the exact string nix rendered is the honest check
+  # that our helper is the registered one.
   ix.healthChecks.github-credential-helper = {
     description = "git is wired to the synced-token credential helper";
-    command = ["${credentialHelperCheck}"];
+    command = [
+      (lib.getExe pkgs.git)
+      "config"
+      "--get"
+      "credential.https://github.com.helper"
+      "^${lib.escapeRegex helperCommand}$"
+    ];
   };
 }

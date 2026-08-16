@@ -37,9 +37,10 @@
   inherit (claude-code) nativeBinary;
 
   # Shared equal-length byte-patch layer primitive, owned by the canonical
-  # claude-code package (which bakes its own dev-channels gate patch through the
-  # same primitive); reached via the threaded packages root rather than a `../`
-  # climb. One cacheable layer per mapping, so the fold below is a DAG.
+  # claude-code package (whose own dev-channels gate patch is currently
+  # commented out, so this is the only live consumer); reached via the threaded
+  # packages root rather than a `../` climb. One cacheable layer per mapping, so
+  # the fold below is a DAG.
   applyBytePatch =
     import (ix.paths.packagesRoot + "/claude-code/byte-patch.nix")
     {inherit runCommand python3;};
@@ -126,6 +127,9 @@ in
     # Stripping corrupts the Bun trailer; keep the patched bytes verbatim.
     dontStrip = true;
     strictDeps = true;
+
+    # Byte-patched upstream binary repack; nothing to test at build time.
+    doCheck = false;
 
     # Any byte change invalidates the upstream Developer-ID signature, and
     # Apple Silicon SIGKILLs a Mach-O whose CodeDirectory hashes no longer

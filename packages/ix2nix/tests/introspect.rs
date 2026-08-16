@@ -64,8 +64,8 @@ fn a_module_with_no_annotated_parameter_gets_an_unconstrained_root() {
 
 #[test]
 fn drv_and_function_fields_validate_against_nothing() {
-    let document = schema("export default (p: { d: drv; f: (a: int) => int }) => p;\n")
-        .expect("converts");
+    let document =
+        schema("export default (p: { d: drv; f: (a: int) => int }) => p;\n").expect("converts");
     assert_eq!(document.matches("\"not\": {}").count(), 2, "{document}");
     assert!(
         document.contains("a derivation exists only during evaluation"),

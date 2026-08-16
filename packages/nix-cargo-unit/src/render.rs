@@ -10,6 +10,9 @@ use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use serde::Deserialize;
 use url::Url;
 
+// An options bag mirroring independent CLI switches, so the bool count is
+// the CLI surface, not a state machine (same precedent as model.rs).
+#[allow(clippy::struct_excessive_bools)]
 pub struct RenderOptions {
     pub workspace_root: PathBuf,
     pub vendor_root: Option<PathBuf>,
@@ -18,6 +21,26 @@ pub struct RenderOptions {
     pub toolchain_id: Option<String>,
     pub deny_unused_crate_dependencies: bool,
     pub deny_panics: bool,
+    /// When false, lib-only units compile with `-Zembed-metadata=no`: the
+    /// rlib carries a metadata stub and dependents compile against the
+    /// sibling .rmeta (extern-path points there), while links still resolve
+    /// the rlib through the `-L dependency=` search paths every consumer
+    /// already passes. See policy.nix `compiler.embedMetadata` for the
+    /// measurements that justify exposing this.
+    pub embed_metadata: bool,
+    /// Extra rustc flags for metadata-emitting lib compiles, under the Rustc
+    /// driver only. The clippy driver is a different binary (the pinned
+    /// llm-clippy toolchain) that may not know fork-only flags, and no other
+    /// driver emits metadata dependents consume, so this scope is exactly the
+    /// compiles whose .rmeta the flags exist to stabilize. Order-preserving
+    /// into argv. The policy layer owns toolchain-compatibility validation
+    /// (lib/rust/resolve.nix pairs these with the fork toolchain); the
+    /// renderer transcribes them into the template's `rmetaStabilityArgs`
+    /// binding, which additionally keys them on the IMPORTING toolchain's
+    /// fork marker: cargo-unit re-imports one rendered file for the clippy
+    /// graph with the pinned llm-clippy toolchain, and that import's
+    /// parallel Rustc dependency units must compile without fork-only flags.
+    pub rmeta_stability_flags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -169,7 +192,11 @@ impl CargoLockSources {
         let mut seen = BTreeSet::new();
         let mut universe = Vec::new();
         let mut queue: VecDeque<&CargoLockPackage> = VecDeque::from([root]);
-        seen.insert((root.source.as_str(), root.name.as_str(), root.version.as_str()));
+        seen.insert((
+            root.source.as_str(),
+            root.name.as_str(),
+            root.version.as_str(),
+        ));
 
         while let Some(package) = queue.pop_front() {
             for dependency in &package.dependencies {
@@ -425,8 +452,16 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
             render_test_target_entries(graph, &prepared),
         ),
         (
+            "test_name_unit_entries",
+            render_test_name_unit_entries(graph, options, &prepared)?,
+        ),
+        (
+            "rmeta_stability_args",
+            render_rmeta_stability_args(options),
+        ),
+        (
             "doctest_target_entries",
-            render_doctest_target_entries(graph, &prepared)?,
+            render_doctest_target_entries(graph, &prepared, options)?,
         ),
         (
             "benchmark_target_entries",
@@ -437,6 +472,26 @@ pub fn render_units_nix(graph: &UnitGraph, options: &RenderOptions) -> Result<St
     ];
 
     Ok(fill_template(UNITS_TEMPLATE, &slots))
+}
+
+/// The rmeta-stability flags as nix string literals for the template's
+/// `rmetaStabilityArgs` list. The flags are fixed `-Z...` spellings from
+/// resolve.nix (no quotes or backslashes to escape), asserted rather than
+/// escaped so a future flag with metacharacters fails the render loudly
+/// instead of producing a subtly wrong nix literal.
+fn render_rmeta_stability_args(options: &RenderOptions) -> String {
+    options
+        .rmeta_stability_flags
+        .iter()
+        .map(|flag| {
+            assert!(
+                !flag.contains('"') && !flag.contains('\\') && !flag.contains('$'),
+                "rmeta stability flag {flag:?} needs escaping the renderer does not implement"
+            );
+            format!("\"{flag}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // The template's only syntax is `{{ slot }}` substitution -- no loops or
@@ -866,12 +921,18 @@ enum Driver {
     Rustc,
     Clippy,
     ObjectEmit,
+    // Compiles a `--test` unit with `-Zdump-test-names` (the ix rustc fork's
+    // flag for rust-lang/rust#50297): rustc serializes the #[test]/#[bench]
+    // descriptors the harness collected as JSON and stops before analysis,
+    // codegen, and linking, so discovery never pays for the test binary's
+    // codegen or link.
+    TestNames,
 }
 
 impl Driver {
     const fn binary(self) -> &'static str {
         match self {
-            Self::Rustc | Self::ObjectEmit => "rustc",
+            Self::Rustc | Self::ObjectEmit | Self::TestNames => "rustc",
             Self::Clippy => "clippy-driver",
         }
     }
@@ -894,13 +955,34 @@ impl Driver {
 // input-addressed in render_build_script_run_derivation: their OUT_DIR can hold
 // arbitrary non-reproducible content, which floating CA cannot tolerate without
 // wedging the store — see the note there, briansmith/ring#715 + NixOS/nix#15649.)
+//
+// The CA hash is blake3, per ADR 0003 (docs/adr/0003-content-identity-two-families.md):
+// a nix CA output is family-1 content, so it carries the same flat 32-byte
+// unkeyed blake3 address as CAS objects, jj `FileId`s and NARs. Family 1 has an
+// outside referee, which is the property being bought here: `nix hash file
+// --type blake3` and `b3sum` agree byte for byte, so a disagreement is an ix bug
+// rather than a question about our own pipeline.
+//
+// The constraint boundary. Only the address ix computes for content it produces
+// itself moves. Everything an outside format fixes stays sha256: narinfo
+// `NarHash` (the signing fingerprint embeds it, so changing the algorithm voids
+// every existing signature), fixed-output `outputHash` pins that quote an
+// upstream digest, and nix's own text-hashed store objects (`store-dir-config.cc`
+// asserts SHA256 there).
+//
+// This was blocked until the fork taught the reference-bearing `source:` store
+// path scheme to accept blake3 (`makeFixedOutputPath`,
+// index/views/nix/src/libstore/store-dir-config.cc): a CA output naming other
+// store paths, which every rust unit does, previously threw for any algorithm
+// but sha256. Needs the `blake3-hashes` experimental feature, which is why the
+// flake requests it.
 fn append_content_addressing(attrs: &mut Attrs, content_addressed: bool) {
     if !content_addressed {
         return;
     }
     attrs.bool("__contentAddressed", true);
     attrs.string("outputHashMode", "recursive");
-    attrs.string("outputHashAlgo", "sha256");
+    attrs.string("outputHashAlgo", "blake3");
 }
 
 // The per-unit derivation fields that vary by role; everything else (version,
@@ -962,8 +1044,8 @@ fn render_unit_derivation(
     let unit = &graph.units[index];
     let content_addressed = options.content_addressed && !unit.is_test() && !unit.is_benchmark();
     append_content_addressing(&mut attrs, content_addressed);
-    attrs.multiline(
-        "buildPhase",
+    emit_build_phase(
+        &mut attrs,
         &render_driver_build_phase(graph, options, prepared, index, driver)?,
     );
     attrs.multiline("installPhase", &install_phase);
@@ -1190,7 +1272,7 @@ fn render_driver_build_phase(
         push_arg(&mut script, "unused-crate-dependencies");
     }
 
-    append_extern_args(&mut script, graph, prepared, index)?;
+    append_dependency_externs(&mut script, graph, prepared, unit, options)?;
     append_dylib_rpath_args(&mut script, graph, prepared, index, driver)?;
 
     let source_path = source_path_expr(source, Path::new(&unit.target.src_path))?;
@@ -1214,6 +1296,18 @@ fn render_driver_build_phase(
                     script.push_str("rustc_args+=( --emit dep-info,link )\n");
                 } else {
                     script.push_str("rustc_args+=( --emit dep-info,metadata,link )\n");
+                    if !options.embed_metadata && thin_metadata_eligible(unit) {
+                        script.push_str("rustc_args+=( -Zembed-metadata=no )\n");
+                    }
+                    if !options.rmeta_stability_flags.is_empty() {
+                        // Via the template binding, not literal argv: the
+                        // binding empties itself under a non-fork importing
+                        // toolchain (the clippy graph), where these flags
+                        // would hard-error.
+                        script.push_str(
+                            "rustc_args+=( ${pkgs.lib.escapeShellArgs rmetaStabilityArgs} )\n",
+                        );
+                    }
                 }
             }
         }
@@ -1229,6 +1323,16 @@ fn render_driver_build_phase(
             script.push_str("rustc_args+=( --out-dir build )\n");
             script.push_str("rustc_args+=( --emit obj )\n");
         }
+        Driver::TestNames => {
+            // The dump is the unit's only product: rustc writes the JSON and
+            // stops before codegen, so there is no artifact and no `-o`. The
+            // flag exists only in the ix rustc fork; a toolchain without it
+            // fails loudly here ("unknown unstable option"), which is the
+            // guard against selecting `testDiscovery = "dump-test-names"`
+            // with an upstream toolchain.
+            script.push_str("rustc_args+=( --out-dir build )\n");
+            script.push_str("rustc_args+=( -Zdump-test-names=build/test-names.json )\n");
+        }
     }
 
     script.push_str("rustc_args+=( \"''${build_script_flags[@]}\" )\n");
@@ -1242,48 +1346,79 @@ fn render_driver_build_phase(
     Ok(script)
 }
 
-// Name each direct dependency's compiled artifacts to rustc.
+// One `--extern` per dependency normally; two when the workspace compiles
+// with `-Zembed-metadata=no` (policy.compiler.embedMetadata = false). Under
+// that flag a dependency rlib carries only a metadata stub, and rustc does
+// not fall back to `-L` search for a crate pinned by `--extern`. Cargo's
+// -Zno-embed-metadata scheme passes the same crate name twice, once for the
+// rlib (link input) and once for the sibling .rmeta (full metadata); mirror
+// that whenever the sibling exists. A dependency whose extern-path is not an
+// rlib (proc-macro .so, rmeta-only fallback) has no sibling to add and keeps
+// a single --extern.
 //
-// One `--extern` per artifact, not per dependency. A `dylib` unit emits a
-// shared library and (usually) an rlib from one rustc invocation, and only
-// rustc can decide which of them a given consumer links: that follows from the
+// A `dylib` dependency is the third shape, and it is one `--extern` per
+// published artifact rather than per dependency. A dylib unit emits a shared
+// library and (usually) an rlib from one rustc invocation, and only rustc can
+// decide which of them a given consumer links: that follows from the
 // consumer's own crate type and `-C prefer-dynamic`, not from anything visible
 // here. Cargo does the same -- `cargo build -v` over a
 // `crate-type = ["rlib", "dylib"]` dependency emits two `--extern` flags for
-// the one crate name, `libfoo.rlib` and `libfoo.so`.
+// the one crate name, `libfoo.rlib` and `libfoo.so`. Naming only the rlib (all
+// a single `extern-path` can express) silently absorbs the dependency into
+// every consumer statically, which for a crate holding process-global state
+// means one process carrying several copies of it. That is the whole reason a
+// dylib is being built at all.
 //
-// Naming only the rlib (all a single `extern-path` can express) silently
-// absorbs the dependency into every consumer statically, which for a crate
-// holding process-global state means one process carrying several copies of it.
-// That is the whole reason a dylib is being built at all.
+// The dylib branch ignores `embed_metadata` because `thin_metadata_eligible`
+// refuses a dylib unit outright: its rlib always carries full metadata, so
+// there is no stub to repair with a sibling .rmeta.
 //
-// A dependency without a dylib crate type keeps the exact single-`--extern`
-// line it had before this existed, so a graph with no dylib in it renders
-// byte-for-byte what it used to. The `extern-path` fallback inside the dylib
-// branch covers hand-built `extraUnits` injections: only units this renderer
-// installs are guaranteed to publish `extern-paths`.
-fn append_extern_args(
+// A dependency without a dylib crate type keeps the exact `--extern` lines it
+// had before this existed, so a graph with no dylib in it renders byte-for-byte
+// what it used to. The `extern-path` fallback inside the dylib branch covers
+// hand-built `extraUnits` injections: only units this renderer installs are
+// guaranteed to publish `extern-paths`.
+fn append_dependency_externs(
     script: &mut String,
     graph: &UnitGraph,
     prepared: &PreparedGraph,
-    index: usize,
+    unit: &Unit,
+    options: &RenderOptions,
 ) -> Result<()> {
-    for dependency in &graph.units[index].dependencies {
+    for dependency in &unit.dependencies {
         let dep_unit = &graph.units[dependency.index];
         if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
             continue;
         }
-        let dep_name = nix_attr(&prepared.names[dependency.index]);
-        let crate_name = &dependency.extern_crate_name;
         if dep_unit.target.has_crate_type("dylib") {
+            let dep_name = nix_attr(&prepared.names[dependency.index]);
+            let crate_name = &dependency.extern_crate_name;
             writeln!(
                 script,
                 "if [ -f \"${{units.{dep_name}}}/nix-support/extern-paths\" ]; then\n  while IFS= read -r extern_artifact; do\n    rustc_args+=( --extern \"{crate_name}=$extern_artifact\" )\n  done < \"${{units.{dep_name}}}/nix-support/extern-paths\"\nelse\n  rustc_args+=( --extern \"{crate_name}=$(cat ${{units.{dep_name}}}/nix-support/extern-path)\" )\nfi",
             )?;
+        } else if options.embed_metadata {
+            writeln!(
+                script,
+                "rustc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
+                dependency.extern_crate_name,
+                nix_attr(&prepared.names[dependency.index])
+            )?;
         } else {
             writeln!(
                 script,
-                "rustc_args+=( --extern \"{crate_name}=$(cat ${{units.{dep_name}}}/nix-support/extern-path)\" )",
+                "extern_path=\"$(cat ${{units.{}}}/nix-support/extern-path)\"",
+                nix_attr(&prepared.names[dependency.index])
+            )?;
+            writeln!(
+                script,
+                "rustc_args+=( --extern \"{}=$extern_path\" )",
+                dependency.extern_crate_name
+            )?;
+            writeln!(
+                script,
+                "if [ \"''${{extern_path%.rlib}}\" != \"$extern_path\" ] && [ -f \"''${{extern_path%.rlib}}.rmeta\" ]; then\n  rustc_args+=( --extern \"{}=''${{extern_path%.rlib}}.rmeta\" )\nfi",
+                dependency.extern_crate_name
             )?;
         }
     }
@@ -1323,9 +1458,10 @@ fn append_dylib_rpath_args(
     index: usize,
     driver: Driver,
 ) -> Result<()> {
-    // Only the rustc driver links. Clippy stops at metadata and the panic scan
-    // emits bare objects, so an rpath in either would be a flag that changes a
-    // unit's script and nothing else.
+    // Only the rustc driver links. Clippy stops at metadata, the panic scan
+    // emits bare objects, and the test-name dump stops before codegen, so an
+    // rpath in any of them would be a flag that changes a unit's script and
+    // nothing else.
     if driver != Driver::Rustc || !unit_links(&graph.units[index]) {
         return Ok(());
     }
@@ -1513,6 +1649,23 @@ fn push_rustc_args(script: &mut String, unit: &Unit, hash: &str, driver: Driver)
         push_arg(script, "--cap-lints");
         push_arg(script, "warn");
     }
+}
+
+// `-Zembed-metadata=no` is only sound for a unit that both emits a separate
+// full .rmeta (so dependents keep complete metadata to compile against) and is
+// consumed as an rlib. A proc-macro's dylib IS its metadata carrier and emits
+// no .rmeta in this engine; a `dylib` crate type is consumed directly by
+// dependents, so stripping its metadata would break them. Restricting the flag
+// to pure lib/rlib units keeps every other consumer contract intact. Bin,
+// test, and benchmark units fall out automatically via their `bin` crate type.
+fn thin_metadata_eligible(unit: &Unit) -> bool {
+    !unit.is_proc_macro()
+        && !unit.target.crate_types.is_empty()
+        && unit
+            .target
+            .crate_types
+            .iter()
+            .all(|crate_type| matches!(crate_type.as_str(), "lib" | "rlib"))
 }
 
 fn lto_for_unit(unit: &Unit) -> Option<&'static str> {
@@ -1740,9 +1893,29 @@ fi
         )
     } else {
         let lib_name = unit.target.name.replace('-', "_");
+        // Build byproducts are excluded from $out/lib because each one either
+        // breaks content-addressed early cutoff or bloats the closure, and
+        // none has a consumer there:
+        //
+        // - `*.d` (dep-info): rustc does NOT apply `--remap-path-prefix` to
+        //   dep-info, so the .d names every source file by its raw
+        //   /nix/store/...-cargo-unit-source-* path. Measured on
+        //   vcfs-0.1.0 (nightly-2026-05-27): the rlib and rmeta contain zero
+        //   store-path strings and the installed .d was the output's only
+        //   external reference, pinning the whole scoped source into the
+        //   unit's runtime closure. Worse, any source byte edit changes $src
+        //   and therefore the .d bytes, so a CA rebuild could never converge
+        //   to the same output even when the compiled artifacts are
+        //   byte-identical, which defeats early cutoff for every dependent.
+        // - `rustc-diagnostics.jsonl`: rendered warnings carry line numbers,
+        //   so unrelated line shifts churn the bytes. It exists for the jq
+        //   unused-extern extraction inside this build only.
+        // - `unused-crate-dependencies`: consumed from $out/nix-support
+        //   (installed below); the lib copy was incidental duplication.
+        //
         // A dylib unit publishes every linkable artifact it produced, one per
         // line, because a consumer has to pass all of them to rustc (see
-        // `render_driver_build_phase`). `extern-path` above stays the single
+        // `append_dependency_externs`). `extern-path` below stays the single
         // preferred artifact so existing readers are unaffected.
         //
         // The missing-shared-library check is not paranoia: this file is what
@@ -1783,6 +1956,7 @@ fi
 for build_artifact in build/*; do
   case \"$build_artifact\" in
     *.dwo|*.dwp) continue ;;
+    *.d|*/rustc-diagnostics.jsonl|*/unused-crate-dependencies) continue ;;
   esac
   cp -R \"$build_artifact\" \"$out/lib/\"
 done
@@ -1867,7 +2041,10 @@ fn parse_git_lock_source(source: &str) -> Result<(String, Option<(String, String
             if !matches!(kind, "rev" | "tag" | "branch") {
                 return Err(eyre!("git source string `{source}` has selector `{kind}`"));
             }
-            Ok((url.to_string(), Some((kind.to_string(), reference.to_string()))))
+            Ok((
+                url.to_string(),
+                Some((kind.to_string(), reference.to_string())),
+            ))
         }
     }
 }
@@ -1877,10 +2054,7 @@ fn parse_git_lock_source(source: &str) -> Result<(String, Option<(String, String
 // `linkFarm` holding exactly the package's lockfile dependency closure. The
 // linkFarm is scoped to that closure -- not the whole-workspace vendor dir --
 // so the run derivation only rebuilds when its own dependencies change.
-fn render_metadata_cargo_config(
-    run_unit: &Unit,
-    universe: &[&CargoLockPackage],
-) -> Result<String> {
+fn render_metadata_cargo_config(run_unit: &Unit, universe: &[&CargoLockPackage]) -> Result<String> {
     let mut farm_entries = String::new();
     for package in universe {
         write!(
@@ -1913,8 +2087,7 @@ fn render_metadata_cargo_config(
                 writeln!(git_blocks, "    {kind} = {}", nix_attr(&reference))?;
             }
             git_blocks.push_str("    replace-with = \"vendored-sources\"\n");
-        } else if !package.source.starts_with("registry+")
-            && !package.source.starts_with("sparse+")
+        } else if !package.source.starts_with("registry+") && !package.source.starts_with("sparse+")
         {
             return Err(eyre!(
                 "cannot vendor {} {} from `{}` for the {} build script's cargo metadata run",
@@ -1968,7 +2141,9 @@ fn render_build_script_run(
     let offline_cargo_metadata =
         run_unit.is_external() && build_script_invokes_cargo(graph, build_script_run.compile_index);
     if offline_cargo_metadata {
-        let universe = options.cargo_lock_sources.metadata_universe_for_unit(run_unit)?;
+        let universe = options
+            .cargo_lock_sources
+            .metadata_universe_for_unit(run_unit)?;
         attrs.expr(
             "cargoOfflineConfig",
             &render_metadata_cargo_config(run_unit, &universe)?,
@@ -3030,7 +3205,8 @@ fn collect_source_closure_roots(
 
 /// Extend `included_roots` / `queue` with any directories reached through
 /// `include!`, `include_bytes!`, or `include_str!` macros in `file` whose
-/// argument is a plain or `r"…"` string literal. Paths are resolved
+/// argument is a plain or `r"…"` string literal, and through the wrapper
+/// macros described on [`extract_include_macro_paths`]. Paths are resolved
 /// relative to the source file's directory and normalized; matches outside
 /// `source_boundary` are dropped on the assumption they come from build
 /// scripts via `OUT_DIR` or similar (rustc will surface a clear error if
@@ -3048,9 +3224,14 @@ fn scan_rust_includes_into_closure(
     };
 
     let file_dir = file.parent().unwrap_or(file);
-    for include_arg in extract_include_macro_paths(&source) {
-        let resolved = normalize_path(&file_dir.join(&include_arg));
+    for candidate in extract_include_macro_paths(&source) {
+        let resolved = normalize_path(&file_dir.join(&candidate.path));
         if !resolved.starts_with(source_boundary) {
+            continue;
+        }
+        // A wrapper-macro literal is only evidence of a source input once it
+        // names a file that is really there; see `ScannedIncludePath`.
+        if candidate.require_existing_file && !resolved.is_file() {
             continue;
         }
         let Some(include_root) = include_closure_root(&resolved, source_boundary) else {
@@ -3082,61 +3263,116 @@ fn include_closure_root(resolved: &Path, source_boundary: &Path) -> Option<PathB
     Some(include_root.to_path_buf())
 }
 
-/// Lift path arguments out of `include!`, `include_bytes!`, and
-/// `include_str!` macro calls. The scan is intentionally textual: it does
-/// not parse Rust, so false positives inside comments and string literals
-/// are possible but harmless (an extra non-existent directory in the
-/// closure is filtered out at the Nix layer). Plain `"…"` and `r"…"`
-/// literals are resolved as files. `concat!` arguments with a leading
-/// literal directory are resolved to that directory; the computed filename
-/// stays dynamic, but the source closure still contains the data tree.
-/// Other computed arguments such as `env!`, identifiers, and raw strings
-/// with `#` delimiters are skipped.
-fn extract_include_macro_paths(source: &str) -> Vec<String> {
-    const MARKERS: &[&str] = &["include!", "include_bytes!", "include_str!"];
-    let mut paths = Vec::new();
-    for marker in MARKERS {
-        let mut cursor = 0;
-        while let Some(found) = source[cursor..].find(marker) {
-            let start = cursor + found;
-            let after = start + marker.len();
-            cursor = after;
-            // Word-boundary check: `my_include_bytes!` should not match.
-            if start > 0
-                && source[..start]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                continue;
-            }
-            let tail = source[after..].trim_start();
-            let Some(tail) = tail.strip_prefix('(') else {
-                continue;
-            };
-            let tail = tail.trim_start();
-            if let Some(literal) = parse_rust_string_literal(tail) {
-                if !literal.is_empty() {
-                    paths.push(literal);
-                }
-                continue;
-            }
+/// A path lifted out of a macro invocation by
+/// [`extract_include_macro_paths`], with how much the caller may trust it.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ScannedIncludePath {
+    /// The literal as written, to be resolved against the scanned file's
+    /// directory.
+    path: String,
+    /// Whether the path must name a file that is really on disk before it
+    /// widens the source closure. An `include*!` argument does not: it is a
+    /// path by construction, and a missing one is rustc's error to report.
+    /// A path lifted out of any other macro does, because its existence is
+    /// the only evidence that the literal is a path at all.
+    require_existing_file: bool,
+}
 
-            let Some(concat_tail) = tail.strip_prefix("concat!") else {
+/// Lift path arguments out of macro calls. The scan is intentionally
+/// textual: it does not parse Rust, so false positives inside comments and
+/// string literals are possible but harmless (an extra non-existent
+/// directory in the closure is filtered out at the Nix layer).
+///
+/// For `include!`, `include_bytes!`, and `include_str!`, plain `"…"` and
+/// `r"…"` literals are resolved as files. `concat!` arguments with a
+/// leading literal directory are resolved to that directory; the computed
+/// filename stays dynamic, but the source closure still contains the data
+/// tree. Other computed arguments such as `env!`, identifiers, and raw
+/// strings with `#` delimiters are skipped.
+///
+/// Any OTHER macro contributes its leading string literal too, but only
+/// when that literal names a file (so not a `concat!` directory prefix,
+/// which this scan meets again as a nested call) that climbs out of the
+/// package with `../`, and then only if that file exists
+/// (`require_existing_file`). This is what
+/// carries a WRAPPER macro - a `macro_rules!` that forwards a literal path
+/// into `include_str!`, so the include marker never appears at the call
+/// site. Marker-anchored scanning cannot see those, and the failure is
+/// silent at render time and loud only inside the build sandbox, as a
+/// missing file rustc blames on the crate. The two bounds are what keep the
+/// widening honest: a non-escaping literal is already inside the package
+/// root, so following it would gain nothing, and requiring the file to
+/// exist is what stops a plain string such as `"../"` or `format!("../{}")`
+/// from dragging a parent directory into a unit's source input.
+fn extract_include_macro_paths(source: &str) -> Vec<ScannedIncludePath> {
+    const INCLUDE_MACROS: &[&str] = &["include", "include_bytes", "include_str"];
+    let mut paths = Vec::new();
+    let mut cursor = 0;
+    while let Some(found) = source[cursor..].find('!') {
+        let bang = cursor + found;
+        cursor = bang + 1;
+        // The macro's name, which also rules out `!=` and unary `!`.
+        let Some(name) = macro_name_ending_at(source, bang) else {
+            continue;
+        };
+        let Some(tail) = source[cursor..].trim_start().strip_prefix('(') else {
+            continue;
+        };
+        let tail = tail.trim_start();
+        let is_include_macro = INCLUDE_MACROS.contains(&name);
+        if let Some(literal) = parse_rust_string_literal(tail) {
+            if literal.is_empty() {
                 continue;
-            };
-            let Some(concat_body) = concat_tail.trim_start().strip_prefix('(') else {
-                continue;
-            };
-            if let Some(literal) = parse_rust_string_literal(concat_body.trim_start())
-                && let Some(directory) = literal.strip_suffix('/')
-                && !directory.is_empty()
-            {
-                paths.push(directory.to_string());
             }
+            if is_include_macro {
+                paths.push(ScannedIncludePath {
+                    path: literal,
+                    require_existing_file: false,
+                });
+            } else if literal.starts_with("../") && !literal.ends_with('/') {
+                paths.push(ScannedIncludePath {
+                    path: literal,
+                    require_existing_file: true,
+                });
+            }
+            continue;
+        }
+
+        if !is_include_macro {
+            continue;
+        }
+        let Some(concat_tail) = tail.strip_prefix("concat!") else {
+            continue;
+        };
+        let Some(concat_body) = concat_tail.trim_start().strip_prefix('(') else {
+            continue;
+        };
+        if let Some(literal) = parse_rust_string_literal(concat_body.trim_start())
+            && let Some(directory) = literal.strip_suffix('/')
+            && !directory.is_empty()
+        {
+            paths.push(ScannedIncludePath {
+                path: directory.to_string(),
+                require_existing_file: false,
+            });
         }
     }
     paths
+}
+
+/// The macro name immediately before the `!` at `bang`, or `None` when no
+/// identifier is there (unary `!`, `!=`). A qualified call such as
+/// `crate::cite!` yields the last segment, which is the name the match
+/// against the include macros needs.
+fn macro_name_ending_at(source: &str, bang: usize) -> Option<&str> {
+    let head = &source[..bang];
+    let start = head
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_alphanumeric() || *c == '_')
+        .last()
+        .map(|(index, _)| index)?;
+    Some(&head[start..])
 }
 
 fn parse_rust_string_literal(source: &str) -> Option<String> {
@@ -3345,9 +3581,53 @@ fn test_binary_expr(unit: &Unit, prepared: &PreparedGraph, index: usize) -> Stri
     format!("{unit_ref}/bin/{}", unit.target.name)
 }
 
+fn append_doctest_case_filter(script: &mut String) {
+    // rustdoc splits each --test-args value on whitespace before it reaches
+    // libtest. TEST_NAME contains spaces, so the Nix template derives a
+    // whitespace-free substring unique across this target's manifest. The
+    // one-test assertion remains the fail-closed backstop for format changes.
+    script.push_str(
+        "rustdoc_args+=( --test-args \"$DOCTEST_FILTER --include-ignored --nocapture\" )\n",
+    );
+}
+
+// The rustdoc/doctest mirror of the dual-extern rule in the compile phase:
+// under `-Zembed-metadata=no` the crate's rlib is a metadata stub, so the
+// sibling .rmeta is passed as a second `--extern` for the same name (cargo's
+// -Zno-embed-metadata scheme). See the compile-phase comment for why `-L`
+// search cannot substitute for this.
+fn append_rustdoc_extern(
+    script: &mut String,
+    options: &RenderOptions,
+    extern_name: &str,
+    unit_ref: &str,
+) -> Result<()> {
+    if options.embed_metadata {
+        writeln!(
+            script,
+            "rustdoc_args+=( --extern \"{extern_name}=$(cat {unit_ref}/nix-support/extern-path)\" )",
+        )?;
+    } else {
+        writeln!(
+            script,
+            "extern_path=\"$(cat {unit_ref}/nix-support/extern-path)\"",
+        )?;
+        writeln!(
+            script,
+            "rustdoc_args+=( --extern \"{extern_name}=$extern_path\" )",
+        )?;
+        writeln!(
+            script,
+            "if [ \"''${{extern_path%.rlib}}\" != \"$extern_path\" ] && [ -f \"''${{extern_path%.rlib}}.rmeta\" ]; then\n  rustdoc_args+=( --extern \"{extern_name}=''${{extern_path%.rlib}}.rmeta\" )\nfi",
+        )?;
+    }
+    Ok(())
+}
+
 fn render_doctest_command(
     graph: &UnitGraph,
     prepared: &PreparedGraph,
+    options: &RenderOptions,
     index: usize,
     mode: DoctestCommandMode,
 ) -> Result<String> {
@@ -3376,9 +3656,7 @@ fn render_doctest_command(
             script.push_str("rustdoc_args+=( -Z unstable-options --output-format doctest )\n");
         }
         DoctestCommandMode::RunAll => {}
-        DoctestCommandMode::RunCase => {
-            script.push_str("rustdoc_args+=( --test-args \"$TEST_NAME\" --test-args --include-ignored --test-args --nocapture )\n");
-        }
+        DoctestCommandMode::RunCase => append_doctest_case_filter(&mut script),
     }
     push_rustdoc_arg(&mut script, "--crate-name");
     push_rustdoc_arg(&mut script, &unit.target.name.replace('-', "_"));
@@ -3398,6 +3676,7 @@ fn render_doctest_command(
         push_rustdoc_arg(&mut script, "--target");
         push_rustdoc_arg(&mut script, platform);
     }
+    append_doctest_link_args(&mut script, unit, mode);
     append_doctest_builder_args(&mut script, graph, prepared, index, mode);
     for dep_index in &prepared.transitive_unit_deps[index] {
         let dep = &graph.units[*dep_index];
@@ -3411,21 +3690,22 @@ fn render_doctest_command(
         )?;
     }
     writeln!(script, "rustdoc_args+=( -L \"dependency={unit_ref}/lib\" )")?;
-    writeln!(
-        script,
-        "rustdoc_args+=( --extern \"{}=$(cat {unit_ref}/nix-support/extern-path)\" )",
-        unit.target.name.replace('-', "_")
+    append_rustdoc_extern(
+        &mut script,
+        options,
+        &unit.target.name.replace('-', "_"),
+        &unit_ref,
     )?;
     for dependency in &unit.dependencies {
         let dep_unit = &graph.units[dependency.index];
         if dep_unit.is_run_custom_build() || dep_unit.is_bin() {
             continue;
         }
-        writeln!(
-            script,
-            "rustdoc_args+=( --extern \"{}=$(cat ${{units.{}}}/nix-support/extern-path)\" )",
-            dependency.extern_crate_name,
-            nix_attr(&prepared.names[dependency.index])
+        append_rustdoc_extern(
+            &mut script,
+            options,
+            &dependency.extern_crate_name,
+            &format!("${{units.{}}}", nix_attr(&prepared.names[dependency.index])),
         )?;
     }
     writeln!(
@@ -3460,6 +3740,33 @@ enum DoctestCommandMode {
     List,
     RunAll,
     RunCase,
+}
+
+/// The run modes LINK each doctest binary, exactly like a test unit's final
+/// link, so they carry the same explicit linker surface: the per-platform
+/// link args (mold, native search paths, rpaths) via the template's
+/// `renderDoctestLinkArgs`, and the cargo target-linker environment override
+/// when the unit has an explicit `--target`. List mode never links and stays
+/// argv-identical, so the shared doctest manifest does not re-key when only
+/// link policy moves. Explicit rather than toolchain-conditional: the
+/// doctest link used to succeed only because the upstream rust-overlay
+/// aggregate satisfied it implicitly, and that implicit environment
+/// dependency was the defect regardless of which toolchain hides it.
+fn append_doctest_link_args(script: &mut String, unit: &Unit, mode: DoctestCommandMode) {
+    if matches!(mode, DoctestCommandMode::List) {
+        return;
+    }
+    let platform = unit
+        .platform
+        .as_ref()
+        .map_or_else(|| "null".to_string(), |platform| nix_attr(platform));
+    let _ = writeln!(script, "${{renderDoctestLinkArgs {platform}}}");
+    if let Some(platform) = &unit.platform {
+        let env_name = cargo_target_linker_env_name(platform);
+        let _ = writeln!(script, "if [ \"''${{{env_name}+x}}\" = x ]; then");
+        let _ = writeln!(script, "  rustdoc_args+=( -C \"linker=''${{{env_name}}}\" )");
+        script.push_str("fi\n");
+    }
 }
 
 fn push_rustdoc_arg(script: &mut String, value: &str) {
@@ -3693,6 +4000,7 @@ fn render_runnable_target_entries(
     graph: &UnitGraph,
     prepared: &PreparedGraph,
     keys: &BTreeMap<usize, String>,
+    with_test_names: bool,
 ) -> String {
     let mut by_key: BTreeMap<String, String> = BTreeMap::new();
     for (&index, key) in keys {
@@ -3703,10 +4011,25 @@ fn render_runnable_target_entries(
         let source = prepared
             .source_entry(index)
             .expect("prepared graph has source entries for every runnable target");
+        // `names` points at the target's `-Zdump-test-names` JSON, rendered
+        // only for test targets that use the libtest harness: a
+        // `harness = false` target has no #[test] collection to dump, so the
+        // manifest's dump mode falls back to executing that one binary,
+        // exactly like the "binary" mode. Benchmarks never carry it (the
+        // benchmark plan runs binaries by design). The attribute is lazy;
+        // graphs that never select the dump mode never build the unit.
+        let names = if with_test_names && unit.uses_test_harness() {
+            format!(
+                " names = \"${{testNameUnits.{}}}/test-names.json\";",
+                nix_attr(key)
+            )
+        } else {
+            String::new()
+        };
         by_key.insert(
             key.clone(),
             format!(
-                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; }}",
+                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {};{names} }}",
                 nix_attr(key),
                 test_binary_expr(unit, prepared, index),
                 nix_attr(&unit.package_name()),
@@ -3720,10 +4043,58 @@ fn render_runnable_target_entries(
 }
 
 fn render_test_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
-    render_runnable_target_entries(graph, prepared, &compute_test_keys(graph, prepared))
+    render_runnable_target_entries(graph, prepared, &compute_test_keys(graph, prepared), true)
 }
 
-fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> Result<String> {
+/// One `-Zdump-test-names` unit per harness test target, keyed by the same
+/// target key `testTargets` uses. Each is the test unit's exact compile
+/// (same source, deps, features, env, per-package build env — env matters,
+/// `env!()` reads happen during expansion) with the dump flag appended and no
+/// codegen, link, or binary install: `$out/test-names.json` is the product.
+/// Rendered unconditionally (the text is cheap and the attrset lazy); only
+/// `testDiscovery = "dump-test-names"` ever builds one.
+fn render_test_name_unit_entries(
+    graph: &UnitGraph,
+    options: &RenderOptions,
+    prepared: &PreparedGraph,
+) -> Result<String> {
+    let keys = compute_test_keys(graph, prepared);
+    let mut by_key: BTreeMap<String, String> = BTreeMap::new();
+    for (&index, key) in &keys {
+        if by_key.contains_key(key) {
+            continue;
+        }
+        let unit = &graph.units[index];
+        if !unit.uses_test_harness() {
+            continue;
+        }
+        let rendered = render_unit_derivation(
+            graph,
+            options,
+            prepared,
+            index,
+            UnitDerivation {
+                pname: format!("{}-test-names", unit.target.name),
+                native_build_inputs: "[ rustToolchain ] ++ extraNativeBuildInputs",
+                driver: Driver::TestNames,
+                install_phase: "mkdir -p $out\ncp build/test-names.json \"$out/test-names.json\"\n"
+                    .to_string(),
+                package_name: Some(unit.package_name().into_owned()),
+            },
+        )?;
+        by_key.insert(
+            key.clone(),
+            format!("{} = mkUnit {rendered};", nix_attr(key)),
+        );
+    }
+    Ok(join_target_entries(by_key))
+}
+
+fn render_doctest_target_entries(
+    graph: &UnitGraph,
+    prepared: &PreparedGraph,
+    options: &RenderOptions,
+) -> Result<String> {
     let keys = compute_doctest_keys(graph, prepared);
     let mut by_key: BTreeMap<String, String> = BTreeMap::new();
     for (&index, key) in &keys {
@@ -3746,18 +4117,21 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
                 nix_indented_string(&render_doctest_command(
                     graph,
                     prepared,
+                    options,
                     index,
                     DoctestCommandMode::List,
                 )?),
                 nix_indented_string(&render_doctest_command(
                     graph,
                     prepared,
+                    options,
                     index,
                     DoctestCommandMode::RunAll,
                 )?),
                 nix_indented_string(&render_doctest_command(
                     graph,
                     prepared,
+                    options,
                     index,
                     DoctestCommandMode::RunCase,
                 )?),
@@ -3771,7 +4145,76 @@ fn render_doctest_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) ->
 /// template feeds these into benchmark plans and previous-vs-next Tango
 /// comparisons without another Cargo metadata pass.
 fn render_benchmark_target_entries(graph: &UnitGraph, prepared: &PreparedGraph) -> String {
-    render_runnable_target_entries(graph, prepared, &compute_benchmark_keys(graph, prepared))
+    render_runnable_target_entries(
+        graph,
+        prepared,
+        &compute_benchmark_keys(graph, prepared),
+        false,
+    )
+}
+
+/// The kernel's per-string ceiling on anything passed through `execve`:
+/// `MAX_ARG_STRLEN` is a fixed `32 * PAGE_SIZE`, i.e. 131072 bytes on every
+/// platform this builds on. It is not `ARG_MAX` (the much larger total budget)
+/// and it is not tunable -- `ulimit` does not move it.
+///
+/// A derivation attribute becomes an environment variable, so a unit whose
+/// build script exceeds this cannot be built AT ALL: `execve` of the builder
+/// returns `E2BIG` and Nix reports "executing '...bash': Argument list too
+/// long" with no build log, because the build never started.
+const MAX_ARG_STRLEN: usize = 32 * 4096;
+
+/// Where a unit's build script stops travelling as an environment variable and
+/// starts travelling as a file. Deliberately below [`MAX_ARG_STRLEN`]: a script
+/// that renders just under the ceiling today would otherwise become
+/// unbuildable on the next flag added to it, and that failure arrives as an
+/// unexplained `E2BIG` in a deploy rather than as a test failure.
+const BUILD_PHASE_INLINE_LIMIT: usize = 100 * 1024;
+
+// The invariant the whole mechanism rests on, enforced where it cannot rot: a
+// threshold at or above the ceiling would reintroduce the E2BIG deploy failure
+// this module exists to prevent.
+const _: () = assert!(
+    BUILD_PHASE_INLINE_LIMIT < MAX_ARG_STRLEN,
+    "the inline limit must leave headroom under the execve per-string ceiling"
+);
+
+/// The attribute the oversized build script is parked in. Nix writes any
+/// attribute named in `passAsFile` into a file inside the build and exports
+/// `<name>Path` instead, so the script itself never reaches `execve`.
+const BUILD_SCRIPT_ATTR: &str = "cargoUnitBuildScript";
+
+/// Emit a unit's build script, via a file when it is too large to be an
+/// environment variable.
+///
+/// # Why this is size-gated rather than unconditional
+///
+/// `buildPhase` feeds every unit's derivation hash. Routing every unit through
+/// `passAsFile` would move every hash in the Rust world at once, discarding the
+/// entire build cache to fix a problem that a handful of units have. The
+/// oversized units change shape (and hash) either way, since they cannot build
+/// in their current shape at all.
+///
+/// The cost of the gate is that a unit changes shape when it crosses the
+/// threshold. That is deterministic and asserted by the tests below, and the
+/// alternative -- a silent `E2BIG` at deploy time -- is strictly worse.
+fn emit_build_phase(attrs: &mut Attrs, script: &str) {
+    if script.len() <= BUILD_PHASE_INLINE_LIMIT {
+        attrs.multiline("buildPhase", script);
+        return;
+    }
+
+    attrs.multiline(BUILD_SCRIPT_ATTR, script);
+    attrs.expr(
+        "passAsFile",
+        &nix_string_list(&[BUILD_SCRIPT_ATTR.to_string()]),
+    );
+    // No `${...}` here: inside a Nix `''` string that would be interpolation,
+    // and the exported variable is a plain shell name.
+    attrs.multiline(
+        "buildPhase",
+        &format!("    source \"${BUILD_SCRIPT_ATTR}Path\"\n"),
+    );
 }
 
 fn nix_attr(value: &str) -> String {
@@ -3831,6 +4274,113 @@ impl Attrs {
 }
 
 #[cfg(test)]
+mod build_phase_size_tests {
+    use super::{
+        Attrs, BUILD_PHASE_INLINE_LIMIT, BUILD_SCRIPT_ATTR, MAX_ARG_STRLEN, emit_build_phase,
+    };
+
+    // The threshold-below-ceiling invariant is a `const` assertion beside the
+    // constants themselves, so it cannot compile in a broken state and needs
+    // no runtime test here.
+
+    /// An ordinary unit keeps its script inline, so its derivation hash is
+    /// unchanged by this mechanism existing. That is what keeps the cached
+    /// world from rebuilding.
+    #[test]
+    fn a_small_script_stays_an_ordinary_inline_build_phase() {
+        let mut attrs = Attrs::new();
+        emit_build_phase(&mut attrs, "  cargo build\n");
+        let rendered = attrs.render();
+
+        assert!(rendered.contains("buildPhase"));
+        assert!(rendered.contains("cargo build"));
+        assert!(
+            !rendered.contains("passAsFile"),
+            "a small script must not be routed through a file: {rendered}"
+        );
+        assert!(
+            !rendered.contains(BUILD_SCRIPT_ATTR),
+            "a small script must not be parked in the script attribute"
+        );
+    }
+
+    /// The real defect, reproduced: `codex_core` rendered a 135899-byte script,
+    /// which `execve` refuses with E2BIG before the builder starts. Over the
+    /// threshold the script must travel as a FILE, and the surviving
+    /// `buildPhase` must be short enough that it can never trip the limit.
+    #[test]
+    fn an_oversized_script_travels_as_a_file_and_leaves_a_short_build_phase() {
+        let script = format!("  {}\n", "x".repeat(135_899));
+        assert!(script.len() > BUILD_PHASE_INLINE_LIMIT);
+
+        let mut attrs = Attrs::new();
+        emit_build_phase(&mut attrs, &script);
+
+        // Assert on the attribute VALUES, not on the rendered blob: the blob
+        // necessarily contains the script once, and what the kernel limits is
+        // each individual value.
+        let by_name: std::collections::HashMap<&str, &str> = attrs
+            .values
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+
+        assert!(
+            by_name.contains_key(BUILD_SCRIPT_ATTR),
+            "the script must be parked in its own attribute"
+        );
+        assert_eq!(
+            by_name.get("passAsFile").copied(),
+            Some(format!("[ \"{BUILD_SCRIPT_ATTR}\" ];").as_str()),
+            "the parked attribute must be named in passAsFile or Nix will still \
+             export it as an environment variable"
+        );
+
+        let build_phase = by_name.get("buildPhase").expect("buildPhase is emitted");
+        assert!(
+            build_phase.contains(&format!("${BUILD_SCRIPT_ATTR}Path")),
+            "buildPhase must source the file Nix wrote: {build_phase}"
+        );
+        assert!(
+            build_phase.len() < 200,
+            "the surviving buildPhase must be constant-sized, got {} bytes",
+            build_phase.len()
+        );
+        // No `${` anywhere in it: inside a Nix `''` string that is
+        // interpolation, and the variable is a plain shell name.
+        assert!(
+            !build_phase.contains("${"),
+            "buildPhase must not contain Nix interpolation: {build_phase}"
+        );
+    }
+
+    /// The invariant the deploy actually needs: after emission, NO single
+    /// attribute value can exceed the kernel's per-string ceiling. This is the
+    /// assertion that would have caught `codex_core` before it reached a deploy.
+    #[test]
+    fn no_emitted_attribute_can_exceed_the_kernel_ceiling() {
+        for size in [1_usize, BUILD_PHASE_INLINE_LIMIT, 135_899, 512 * 1024] {
+            let mut attrs = Attrs::new();
+            emit_build_phase(&mut attrs, &"y".repeat(size));
+
+            for (name, value) in &attrs.values {
+                if name == BUILD_SCRIPT_ATTR {
+                    // Parked attributes are written to a file by Nix and never
+                    // reach execve, which is the entire mechanism.
+                    continue;
+                }
+                assert!(
+                    value.len() < MAX_ARG_STRLEN,
+                    "attribute {name} is {} bytes at script size {size}, over the \
+                     {MAX_ARG_STRLEN}-byte execve ceiling",
+                    value.len()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -3880,6 +4430,8 @@ mod tests {
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap_err()
@@ -3940,6 +4492,8 @@ mod tests {
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap()
@@ -3996,9 +4550,7 @@ mod tests {
         let rendered = render_for_test(&bin_over_library_graph(r#"["lib"]"#));
 
         assert!(
-            rendered.contains(
-                r#"rustc_args+=( --extern "engine=$(cat ${units."engine-0.1.0-"#
-            ),
+            rendered.contains(r#"rustc_args+=( --extern "engine=$(cat ${units."engine-0.1.0-"#),
             "a plain rlib dependency must keep the single extern-path form:\n{rendered}"
         );
         assert!(
@@ -4047,6 +4599,8 @@ mod tests {
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: true,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4138,6 +4692,8 @@ mod tests {
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4152,6 +4708,13 @@ mod tests {
         assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/bin/\""));
         assert!(rendered.contains("cp \"$split_debuginfo_sidecar\" \"$out/lib/\""));
         assert!(rendered.contains("case \"$build_artifact\" in\n    *.dwo|*.dwp) continue ;;"));
+        // The unremapped dep-info .d (raw $src store paths; would pin the
+        // source into the closure and defeat CA early cutoff) and the two
+        // in-build report files never reach $out/lib.
+        assert!(
+            rendered
+                .contains("*.d|*/rustc-diagnostics.jsonl|*/unused-crate-dependencies) continue ;;")
+        );
         assert!(!rendered.contains("cp -R build/* $out/lib/"));
     }
 
@@ -4211,6 +4774,8 @@ mod tests {
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4291,6 +4856,8 @@ mod tests {
                 toolchain_id: Some("rustc-test".to_string()),
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4367,6 +4934,8 @@ mod tests {
             toolchain_id: None,
             deny_unused_crate_dependencies: false,
             deny_panics,
+            embed_metadata: true,
+                rmeta_stability_flags: vec![],
         };
 
         let rendered = render_units_nix(&graph, &options(true)).unwrap();
@@ -4445,6 +5014,8 @@ mod tests {
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: true,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4497,6 +5068,8 @@ mod tests {
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4546,6 +5119,8 @@ mod tests {
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4595,6 +5170,95 @@ mod tests {
     }
 
     #[test]
+    fn dump_test_names_discovery_renders_parallel_units() {
+        // Two root test units: one on the libtest harness, one `harness =
+        // false` (target.test = false). Only the harness unit gets a
+        // `-Zdump-test-names` twin and a `names` pointer; the harness-less
+        // one must fall back to executing its binary even in dump mode.
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "hello",
+                    "src_path": "/workspace/src/lib.rs",
+                    "edition": "2024",
+                    "test": true
+                  },
+                  "profile": { "name": "test", "opt_level": "0" },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace#hello@0.1.0",
+                  "target": {
+                    "kind": ["test"],
+                    "crate_types": ["bin"],
+                    "name": "nohar",
+                    "src_path": "/workspace/tests/nohar.rs",
+                    "edition": "2024",
+                    "test": false
+                  },
+                  "profile": { "name": "test", "opt_level": "0" },
+                  "features": [],
+                  "mode": "test",
+                  "dependencies": []
+                }
+              ],
+              "roots": [0, 1]
+            }"#,
+        )
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: PathBuf::from("/workspace"),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
+            },
+        )
+        .unwrap();
+
+        // The template gate and both manifest builders are present.
+        assert!(rendered.contains("testDiscovery ? \"binary\""));
+        assert!(rendered.contains("binaryTestManifestDrv ="));
+        assert!(rendered.contains("dumpTestNamesManifestDrv ="));
+        assert!(rendered.contains("testManifestDrv ="));
+
+        // The harness target gets a dump twin: same compile, dump flag, JSON
+        // install, no codegen output, and its target record points at it.
+        assert!(rendered.contains("testNameUnits = {"));
+        assert!(rendered.contains("\"hello\" = mkUnit {"));
+        assert!(rendered.contains("pname = \"hello-test-names\";"));
+        assert!(rendered.contains("rustc_args+=( -Zdump-test-names=build/test-names.json )"));
+        assert!(rendered.contains("cp build/test-names.json \"$out/test-names.json\""));
+        assert!(rendered.contains(" names = \"${testNameUnits.\"hello\"}/test-names.json\"; }"));
+
+        // The harness-less target gets neither.
+        assert!(!rendered.contains("\"nohar\" = mkUnit"));
+        assert!(!rendered.contains("pname = \"nohar-test-names\";"));
+        assert!(!rendered.contains("testNameUnits.\"nohar\""));
+
+        // The jq projection reproduces terse `--list` bytes: name, kind, and
+        // the ignored filter.
+        assert!(rendered.contains("jq -r '.tests[] | \"\\(.name): \\(.kind)\"'"));
+        assert!(rendered.contains("jq -r '.tests[] | select(.ignore) | \"\\(.name): \\(.kind)\"'"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn bin_exe_env_uses_build_bins_for_integration_tests() {
         let workspace = tempfile::tempdir().unwrap();
         fs::create_dir_all(workspace.path().join("src")).unwrap();
@@ -4689,15 +5353,20 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
 
-        // The build unit (rustc) and its sibling clippy unit each set
-        // CARGO_BIN_EXE_<name> for integration tests because clippy needs the
-        // same compilation env as rustc. The count rises with the number of
-        // unit kinds that lint the integration test target.
-        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 2);
+        // The build unit (rustc), its sibling clippy unit, and the
+        // `-Zdump-test-names` discovery twin each set CARGO_BIN_EXE_<name>
+        // for integration tests: clippy needs the same compilation env as
+        // rustc, and the dump unit is the same compile up to its early stop,
+        // so `env!("CARGO_BIN_EXE_...")` must resolve during its expansion
+        // too. The count rises with the number of unit kinds that compile
+        // the integration test target.
+        assert_eq!(rendered.matches("CARGO_BIN_EXE_dag-runner=").count(), 3);
         assert!(rendered.contains("rustc_env+=( 'CARGO_BIN_EXE_dag-runner=${units."));
         assert!(!rendered.contains("export CARGO_BIN_EXE_dag-runner"));
         assert!(rendered.contains("env \"''${rustc_env[@]}\" rustc \"''${rustc_args[@]}\""));
@@ -4759,6 +5428,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4831,6 +5502,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -4891,6 +5564,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5020,21 +5695,36 @@ version = "0.1.0"
         let workspace = tempfile::tempdir().unwrap();
         let graph = doctest_contract_graph(workspace.path());
 
-        let rendered = render_units_nix(
+        let options = RenderOptions {
+            workspace_root: workspace.path().to_path_buf(),
+            vendor_root: None,
+            cargo_lock_sources: CargoLockSources::default(),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+            embed_metadata: true,
+                rmeta_stability_flags: vec![],
+        };
+        let rendered = render_units_nix(&graph, &options).unwrap();
+        let prepared = prepare_graph(&graph, &options).unwrap();
+        let doctest_index = *compute_doctest_keys(&graph, &prepared)
+            .keys()
+            .next()
+            .unwrap();
+        let run_case = render_doctest_command(
             &graph,
-            &RenderOptions {
-                workspace_root: workspace.path().to_path_buf(),
-                vendor_root: None,
-                cargo_lock_sources: CargoLockSources::default(),
-                content_addressed: false,
-                toolchain_id: None,
-                deny_unused_crate_dependencies: false,
-                deny_panics: false,
-            },
+            &prepared,
+            &options,
+            doctest_index,
+            DoctestCommandMode::RunCase,
         )
         .unwrap();
 
         assert_doctest_rendered_contract(&rendered);
+        assert_eq!(run_case.matches("--test-args").count(), 1);
+        assert!(run_case.contains("--test-args \"$DOCTEST_FILTER --include-ignored --nocapture\""));
+        assert!(!run_case.contains("--test-args \"$TEST_NAME\""));
     }
 
     fn assert_doctest_rendered_contract(rendered: &str) {
@@ -5083,22 +5773,15 @@ version = "0.1.0"
         assert!(!rendered.contains("rustdoc_args+=( \"''${build_script_flags[@]}\" )"));
         assert!(rendered.contains("done < \"${units."));
         assert!(rendered.contains("/rustc-env"));
-        assert!(
-            rendered.contains("compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out")
-        );
+        assert!(rendered.contains("compile_out_dir=$NIX_BUILD_TOP/cargo-unit-build-script-out"));
         assert!(rendered.contains(
             "rustc_args+=( --remap-path-prefix \"$compile_out_dir=/cargo-unit-build-script-out\" )"
         ));
-        assert!(rendered.contains(
-            "rustdoc_args+=( -L \"dependency=${units.\"middle-0.1.0-"
-        ));
-        assert!(rendered.contains(
-            "rustdoc_args+=( -L \"dependency=${units.\"leaf-0.1.0-"
-        ));
+        assert!(rendered.contains("rustdoc_args+=( -L \"dependency=${units.\"middle-0.1.0-"));
+        assert!(rendered.contains("rustdoc_args+=( -L \"dependency=${units.\"leaf-0.1.0-"));
         assert!(rendered.contains("/out-dir/. \"$compile_out_dir\"/"));
         assert!(rendered.contains("rustc_env+=( OUT_DIR=\"$compile_out_dir\" )"));
-        assert!(!rendered.contains("--test-args --exact"));
-        assert!(rendered.contains("--test-args --include-ignored"));
+        assert!(!rendered.contains("--test-args \"$TEST_NAME\""));
         assert!(rendered.contains("^running 1 test$"));
     }
 
@@ -5171,6 +5854,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: true,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5253,6 +5938,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5340,6 +6027,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5362,6 +6051,206 @@ version = "0.1.0"
         );
         assert!(rendered.contains("remapPrefix = \"/build/itoa-1.0.15\";"));
         assert!(rendered.contains("remapPrefix = \"/build/scope-cli-0.1.0\";"));
+    }
+
+    #[test]
+    fn no_embed_metadata_thins_lib_rlibs_and_adds_the_rmeta_extern() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace/crates/lib#scope-lib@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "scope_lib",
+                    "src_path": "/workspace/crates/lib/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#demo-macro@1.0.0",
+                  "target": {
+                    "kind": ["proc-macro"],
+                    "crate_types": ["proc-macro"],
+                    "name": "demo_macro",
+                    "src_path": "/vendor/demo-macro-1.0.0/src/lib.rs",
+                    "edition": "2021"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/crates/cli#scope-cli@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "scope_cli",
+                    "src_path": "/workspace/crates/cli/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": [
+                    { "index": 0, "extern_crate_name": "scope_lib" },
+                    { "index": 1, "extern_crate_name": "demo_macro" }
+                  ]
+                }
+              ],
+              "roots": [2]
+            }"#,
+        )
+        .unwrap();
+
+        let options = |embed_metadata| RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: Some(PathBuf::from("/vendor")),
+            cargo_lock_sources: cargo_lock_sources(&[(
+                "demo-macro",
+                "1.0.0",
+                "registry+https://github.com/rust-lang/crates.io-index",
+            )]),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+            embed_metadata,
+                rmeta_stability_flags: vec![],
+        };
+
+        let thinned = render_units_nix(&graph, &options(false)).unwrap();
+        // Exactly the lib unit compiles thin: the proc-macro's dylib is its
+        // metadata carrier and the bin emits no metadata at all.
+        assert_eq!(thinned.matches("-Zembed-metadata=no").count(), 1);
+        // Every dependent passes the dependency twice, rlib (from
+        // extern-path) plus sibling .rmeta when one exists: rustc does not
+        // fall back to -L search for an --extern-pinned crate, and the thin
+        // rlib alone is a metadata stub. The sibling guard is generated for
+        // both consumers of the bin unit (scope_lib and demo_macro; the
+        // proc-macro's .so has no .rmeta sibling so the guard is a no-op).
+        assert!(thinned.contains("rustc_args+=( --extern \"scope_lib=$extern_path\" )"));
+        assert!(
+            thinned.contains("rustc_args+=( --extern \"scope_lib=''${extern_path%.rlib}.rmeta\" )")
+        );
+        assert!(thinned.contains("rustc_args+=( --extern \"demo_macro=$extern_path\" )"));
+        // extern-path priority is unchanged: the rlib stays the recorded
+        // artifact, thin or not.
+        assert!(thinned.contains(".rlib\" \\"));
+
+        let embedded = render_units_nix(&graph, &options(true)).unwrap();
+        assert!(!embedded.contains("-Zembed-metadata=no"));
+        assert!(!embedded.contains(".rmeta\" )"));
+    }
+
+    #[test]
+    fn rmeta_stability_flags_reach_exactly_the_metadata_emitting_rustc_compiles() {
+        let graph: UnitGraph = serde_json::from_str(
+            r#"{
+              "version": 1,
+              "units": [
+                {
+                  "pkg_id": "path+file:///workspace/crates/lib#scope-lib@0.1.0",
+                  "target": {
+                    "kind": ["lib"],
+                    "crate_types": ["lib"],
+                    "name": "scope_lib",
+                    "src_path": "/workspace/crates/lib/src/lib.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "registry+https://github.com/rust-lang/crates.io-index#demo-macro@1.0.0",
+                  "target": {
+                    "kind": ["proc-macro"],
+                    "crate_types": ["proc-macro"],
+                    "name": "demo_macro",
+                    "src_path": "/vendor/demo-macro-1.0.0/src/lib.rs",
+                    "edition": "2021"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": []
+                },
+                {
+                  "pkg_id": "path+file:///workspace/crates/cli#scope-cli@0.1.0",
+                  "target": {
+                    "kind": ["bin"],
+                    "crate_types": ["bin"],
+                    "name": "scope_cli",
+                    "src_path": "/workspace/crates/cli/src/main.rs",
+                    "edition": "2024"
+                  },
+                  "profile": { "name": "release", "opt_level": "3" },
+                  "mode": "build",
+                  "dependencies": [
+                    { "index": 0, "extern_crate_name": "scope_lib" },
+                    { "index": 1, "extern_crate_name": "demo_macro" }
+                  ]
+                }
+              ],
+              "roots": [2]
+            }"#,
+        )
+        .unwrap();
+
+        let options = |flags: &[&str]| RenderOptions {
+            workspace_root: PathBuf::from("/workspace"),
+            vendor_root: Some(PathBuf::from("/vendor")),
+            cargo_lock_sources: cargo_lock_sources(&[(
+                "demo-macro",
+                "1.0.0",
+                "registry+https://github.com/rust-lang/crates.io-index",
+            )]),
+            content_addressed: false,
+            toolchain_id: None,
+            deny_unused_crate_dependencies: false,
+            deny_panics: false,
+            embed_metadata: false,
+            rmeta_stability_flags: flags.iter().map(|flag| (*flag).to_string()).collect(),
+        };
+
+        let rendered = render_units_nix(
+            &graph,
+            &options(&["-Zrmeta-content-svh", "-Zrmeta-strip-spans=all"]),
+        )
+        .unwrap();
+        // The flags land once, in the import-gated template binding: applied
+        // only when the IMPORTING toolchain records a fork rev, so the
+        // clippy-graph import (pinned llm-clippy toolchain, no fork rev)
+        // compiles its parallel dependency units without them. Argv order
+        // inside the binding is the policy layer's order.
+        assert!(rendered.contains(
+            "rmetaStabilityArgs = pkgs.lib.optionals (rustToolchain ? forkRev) [ \"-Zrmeta-content-svh\" \"-Zrmeta-strip-spans=all\" ];"
+        ));
+        assert_eq!(rendered.matches("-Zrmeta-content-svh").count(), 1);
+        assert_eq!(rendered.matches("-Zrmeta-strip-spans=all").count(), 1);
+        // Exactly one unit in this graph emits consumable metadata under the
+        // Rustc driver: the lib. The proc-macro (dylib is its metadata
+        // carrier, no separate .rmeta here) and the bin (no metadata at all)
+        // must not reference the binding, and neither must any clippy
+        // invocation, whose driver never receives the flags at all.
+        assert_eq!(
+            rendered
+                .matches("rustc_args+=( ${pkgs.lib.escapeShellArgs rmetaStabilityArgs} )")
+                .count(),
+            1
+        );
+
+        let bare = render_units_nix(&graph, &options(&[])).unwrap();
+        // `-Zrmeta`, not `rmeta-`: the template's rmetaStabilityArgs binding
+        // and its comment exist in every render (empty list when no flags);
+        // what must not exist without flags is any actual flag or any unit
+        // referencing the binding.
+        assert!(!bare.contains("-Zrmeta"));
+        assert!(!bare.contains("escapeShellArgs rmetaStabilityArgs"));
     }
 
     #[test]
@@ -5419,6 +6308,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5469,6 +6360,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5517,6 +6410,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5583,6 +6478,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5668,6 +6565,8 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5678,6 +6577,111 @@ const CRLF: &str = include_str!("../../testdata/crlf.toml");
         assert!(rendered.contains("test_package_relative="));
         assert!(rendered.contains("test_cwd=\"$test_root/$test_package_relative\""));
         assert!(rendered.contains("cp -R \"$test_source_root\"/. \"$test_root\"/"));
+        fs::remove_dir_all(workspace).unwrap();
+    }
+
+    /// The cas-gc-eval shape (ix#10171): a crate whose build-time citations
+    /// read files out of OTHER workspace crates through a `macro_rules!`
+    /// wrapper around `include_str!`. The include marker never appears at
+    /// the call site, so before this the cited crate's directory was absent
+    /// from the unit's source and the build failed inside the sandbox with
+    /// "couldn't read .../ship.rs: No such file or directory".
+    #[test]
+    fn extends_source_closure_through_wrapper_macros_that_escape_the_package() {
+        let workspace = std::env::temp_dir().join(format!(
+            "nix-cargo-unit-wrapper-include-source-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        fs::create_dir_all(workspace.join("evaluator/src")).unwrap();
+        fs::create_dir_all(workspace.join("cited/src")).unwrap();
+        // A real directory holding no cited file, so that following the
+        // citation below would be visible in the rendered closure.
+        fs::create_dir_all(workspace.join("uncited/src")).unwrap();
+        fs::write(
+            workspace.join("evaluator/Cargo.toml"),
+            r#"[package]
+name = "evaluator"
+version = "0.1.0"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            workspace.join("cited/src/ship.rs"),
+            "// only the local sidecar did\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace.join("evaluator/src/lib.rs"),
+            r#"macro_rules! cite {
+    ($path:literal, $anchor:literal) => {{
+        const SOURCE: &str = include_str!($path);
+        SOURCE
+    }};
+}
+
+// The cited file is real, and its directory must reach the sandbox.
+pub const SHIP: &str = cite!("../../cited/src/ship.rs", "only the local sidecar did");
+// A literal that names no file must not widen anything, and it points at
+// its own directory so that following it would show up in the closure.
+pub const GONE: &str = cite!("../../uncited/src/absent.rs", "anchor");
+// A plain relative-path constant is not a macro argument, so the parent
+// directory it names must not be dragged into the source either.
+pub const UP: &str = "../../";
+"#,
+        )
+        .unwrap();
+        let src_path = workspace.join("evaluator/src/lib.rs");
+        let pkg_id = format!(
+            "path+file://{}#evaluator@0.1.0",
+            workspace.join("evaluator").display()
+        );
+        let graph: UnitGraph = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "units": [
+                {
+                    "pkg_id": pkg_id,
+                    "target": {
+                        "kind": ["lib"],
+                        "crate_types": ["lib"],
+                        "name": "evaluator",
+                        "src_path": src_path,
+                        "edition": "2024"
+                    },
+                    "profile": { "name": "release", "opt_level": "3", "test": false },
+                    "mode": "build",
+                    "dependencies": []
+                }
+            ],
+            "roots": [0]
+        }))
+        .unwrap();
+
+        let rendered = render_units_nix(
+            &graph,
+            &RenderOptions {
+                workspace_root: workspace.clone(),
+                vendor_root: None,
+                cargo_lock_sources: CargoLockSources::default(),
+                content_addressed: false,
+                toolchain_id: None,
+                deny_unused_crate_dependencies: false,
+                deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
+            },
+        )
+        .unwrap();
+
+        assert!(
+            rendered.contains("[ \"cited/src\" \"evaluator\" ]"),
+            "the cited crate's directory must join the unit source closure: {rendered}"
+        );
+        assert!(
+            !rendered.contains("uncited"),
+            "a wrapper-macro literal that names no file must not widen the closure: {rendered}"
+        );
         fs::remove_dir_all(workspace).unwrap();
     }
 
@@ -5752,6 +6756,8 @@ version = "4.6.1"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5761,18 +6767,31 @@ version = "4.6.1"
         fs::remove_dir_all(workspace).unwrap();
     }
 
+    /// The two ways a scanned path can be spelled, flattened so the
+    /// expectations below read as the source does.
+    fn scanned(path: &str, require_existing_file: bool) -> ScannedIncludePath {
+        ScannedIncludePath {
+            path: path.to_string(),
+            require_existing_file,
+        }
+    }
+
     #[test]
     fn extracts_literal_include_macro_paths_in_order() {
         let source = r#"
             const A: &[u8] = include_bytes!("data/anchored.toml");
             const B: &str = include_str!("../../shared/template.txt");
-            // The filename stays dynamic, but the directory is static:
+            // The filename stays dynamic, but the directory is static. The
+            // nested `concat!` is a macro call the scan meets again on its
+            // own; its literal is a directory prefix, so it contributes
+            // nothing a second time:
             include_bytes!(concat!("../../testdata/", CASE, ".toml"));
             // OUT_DIR paths are not source paths and are skipped:
             include!(concat!(env!("OUT_DIR"), "/generated.rs"));
             // Raw strings without `#` are still literals:
             const C: &[u8] = include_bytes!(r"raw/data.bin");
-            // Wrong macro name with the same suffix; the word boundary blocks it:
+            // Wrong macro name with the same suffix: not an include macro, and
+            // the literal does not escape the package, so nothing is lifted:
             let _ = my_include_bytes!("not_a_real_macro");
             // Comments and intra-string occurrences are over-matched but harmless:
             // include_str!("from_a_comment.txt")
@@ -5782,12 +6801,48 @@ version = "4.6.1"
         assert_eq!(
             paths,
             vec![
-                "../../shared/template.txt".to_string(),
-                "../../testdata".to_string(),
-                "data/anchored.toml".to_string(),
-                "from_a_comment.txt".to_string(),
-                "raw/data.bin".to_string(),
+                scanned("../../shared/template.txt", false),
+                scanned("../../testdata", false),
+                scanned("data/anchored.toml", false),
+                scanned("from_a_comment.txt", false),
+                scanned("raw/data.bin", false),
             ]
+        );
+    }
+
+    /// The cas-gc-eval shape: the include marker is inside a `macro_rules!`
+    /// body, so every call site spells only the wrapper's name and a path
+    /// that climbs out of the package.
+    #[test]
+    fn extracts_parent_escaping_paths_from_wrapper_macros() {
+        let source = r#"
+            citation: cite!(
+                "../../../control/postgres/backup/src/ship.rs",
+                "only the local sidecar did",
+            ),
+            // Qualified calls name the same macro:
+            let _ = crate::cite!("../../../storage/cas/src/lib.rs", "anchor");
+            // Inside the package already, so following it would gain nothing:
+            let _ = cite!("sibling.rs", "anchor");
+            // Not a path, and never resolves to a file, but the shape is the
+            // one that would drag a parent directory in if it were followed:
+            const UP_TO_CRATES: &str = "../../../";
+            let _ = assert!(!is_crate_relative("../../../"));
+            let _ = format!("../{name}/index.js");
+            // Unary `!` and `!=` are not macro calls:
+            if !(a != b) && c != d { }
+        "#;
+        let mut paths = extract_include_macro_paths(source);
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                scanned("../../../control/postgres/backup/src/ship.rs", true),
+                scanned("../../../storage/cas/src/lib.rs", true),
+                scanned("../{name}/index.js", true),
+            ],
+            "a wrapper-macro literal is lifted only when it escapes the package; \
+             `require_existing_file` is what then drops `../{{name}}/index.js`"
         );
     }
 
@@ -5852,12 +6907,21 @@ version = "4.6.1"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
 
         assert!(rendered.contains("__contentAddressed = true"));
         assert!(rendered.contains("outputHashMode = \"recursive\""));
+        // Pins the CA hash algorithm, which was previously unasserted. ADR 0003
+        // makes a nix CA output family-1 content, so this must stay blake3; a
+        // silent revert to sha256 would put the renderer back outside the ADR.
+        assert!(
+            rendered.contains("outputHashAlgo = \"blake3\""),
+            "content-addressed units must address their output with blake3"
+        );
     }
 
     #[test]
@@ -5900,6 +6964,8 @@ version = "4.6.1"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -5946,6 +7012,8 @@ version = "4.6.1"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6025,6 +7093,8 @@ version = "4.6.1"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6158,6 +7228,8 @@ links = "native_ffi"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6260,6 +7332,8 @@ links = "nested_native"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6425,6 +7499,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6503,6 +7579,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap();
@@ -6518,9 +7596,7 @@ version = "0.1.0"
         fs::remove_dir_all(workspace).unwrap();
     }
 
-    fn cargo_lock_sources_with_deps(
-        packages: &[(&str, &str, &str, &[&str])],
-    ) -> CargoLockSources {
+    fn cargo_lock_sources_with_deps(packages: &[(&str, &str, &str, &[&str])]) -> CargoLockSources {
         CargoLockSources {
             packages: packages
                 .iter()
@@ -6628,6 +7704,8 @@ version = "0.1.0"
                 toolchain_id: None,
                 deny_unused_crate_dependencies: false,
                 deny_panics: false,
+                embed_metadata: true,
+                rmeta_stability_flags: vec![],
             },
         )
         .unwrap()

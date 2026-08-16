@@ -92,7 +92,8 @@ pub fn resolve(name: &str) -> Result<Target> {
 /// Every Chromium app on this machine that has a cookie DB, by subdir name.
 pub fn discover() -> Result<Vec<Target>> {
     let base = app_support()?;
-    let entries = std::fs::read_dir(&base).map_err(|e| anyhow!("reading {}: {e}", base.display()))?;
+    let entries =
+        std::fs::read_dir(&base).map_err(|e| anyhow!("reading {}: {e}", base.display()))?;
 
     let mut out: Vec<Target> = entries
         .flatten()

@@ -258,7 +258,7 @@ defmodule IxMcp.JobsTest do
       })
 
     assert {:notify, _outbox} = ActionLog.finish_job(id, :done, "the result")
-    assert Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
+    assert Enum.any?(ActionLog.unacked_outbox(), &(&1.ref == id))
 
     # Registering a transport replays the unacked rows as one digest.
     :ok = Notifier.register(self())
@@ -269,7 +269,7 @@ defmodule IxMcp.JobsTest do
     assert Map.has_key?(meta, "replay")
 
     # And the replayed row is now acked, so it will not replay again.
-    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
+    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.ref == id))
   end
 
   test "a running job survives an ActionLog crash mid-flush (#3874)" do

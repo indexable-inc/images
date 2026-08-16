@@ -25,7 +25,10 @@ struct Declaration {
 #[derive(Debug)]
 struct ImplBlock {
     name: String,
+    /// Points a merge failure at the `impl` block's self type.
+    span: Span,
     constructor: Option<SpannedFn>,
+    associated: Vec<ir::Function>,
     methods: Vec<ir::Function>,
 }
 
@@ -43,9 +46,10 @@ impl Objects {
     pub(super) fn declare(&mut self, item: &syn::ItemStruct, found: &marker::Marker) -> Result<()> {
         reject_stray_meta(&item.attrs)?;
         found.meta.reject_default("an object")?;
+        found.meta.reject_rename_all("an object")?;
         found.meta.reject_py_base("an object")?;
         found.meta.reject_jvm_base("an object")?;
-        found.meta.reject_backends("an object")?;
+        found.meta.reject_export_options("an object")?;
         found.meta.reject_constructor("an object")?;
         found.meta.reject_blocking("an object")?;
         if !matches!(item.vis, syn::Visibility::Public(_)) {
@@ -67,6 +71,7 @@ impl Objects {
                 docs: marker::doc_lines(&item.attrs),
                 resource: found.meta.resource,
                 constructor: None,
+                associated: Vec::new(),
                 methods: Vec::new(),
             },
             span: item.ident.span(),
@@ -99,7 +104,9 @@ impl Objects {
         }
         let mut block = ImplBlock {
             name,
+            span: item.self_ty.span(),
             constructor: None,
+            associated: Vec::new(),
             methods: Vec::new(),
         };
         for impl_item in &item.items {
@@ -123,11 +130,26 @@ impl Objects {
             impls,
         } = self;
         for block in impls {
-            let declaration = declarations
+            // lower_impl already refused any block whose target is not a
+            // declared object, so this only fires if the pre-scan that fills
+            // `Declared` and the struct pass that fills `declarations` ever
+            // disagree. A proc macro must answer that with a diagnostic: an
+            // unwrap here surfaces to the user as a macro panic with no span.
+            let Some(declaration) = declarations
                 .iter_mut()
                 .find(|declaration| declaration.object.name == block.name)
-                .expect("impl targets were validated against declared objects");
+            else {
+                return Err(LowerError::new(
+                    block.span,
+                    format!(
+                        "`{}` has an impl block but no #[unibind::object] \
+                         declaration in this module",
+                        block.name
+                    ),
+                ));
+            };
             declaration.object.methods.extend(block.methods);
+            declaration.object.associated.extend(block.associated);
             if let Some(constructor) = block.constructor {
                 if declaration.object.constructor.is_some() {
                     return Err(LowerError::new(
@@ -159,20 +181,30 @@ impl ImplBlock {
     fn lower_method(&mut self, method: &syn::ImplItemFn, declared: &Declared) -> Result<()> {
         if let Some(receiver) = method.sig.receiver() {
             validate_receiver(receiver)?;
-            self.methods.push(func::lower_callable(
-                &method.attrs,
-                &method.sig,
+            self.methods.push(func::lower_callable(func::Callable {
+                attributes: &method.attrs,
+                signature: &method.sig,
                 declared,
-                func::Kind::Method,
-            )?);
+                kind: func::Kind::Method,
+            })?);
             return Ok(());
         }
         let meta = attrs::UnibindMeta::from_attrs(&method.attrs)?;
+        if meta.associated {
+            self.associated.push(func::lower_callable(func::Callable {
+                attributes: &method.attrs,
+                signature: &method.sig,
+                declared,
+                kind: func::Kind::Associated { object: &self.name },
+            })?);
+            return Ok(());
+        }
         if !meta.constructor {
             return Err(LowerError::new(
                 method.sig.ident.span(),
-                "associated functions do not cross the boundary; mark the \
-                 constructor with #[unibind(constructor)] or take &self",
+                "associated functions do not cross the boundary; mark a \
+                 constructor with #[unibind(constructor)], a named one on \
+                 the type with #[unibind(associated)], or take &self",
             ));
         }
         if self.constructor.is_some() {
@@ -181,12 +213,12 @@ impl ImplBlock {
                 "an object takes one constructor",
             ));
         }
-        let function = func::lower_callable(
-            &method.attrs,
-            &method.sig,
+        let function = func::lower_callable(func::Callable {
+            attributes: &method.attrs,
+            signature: &method.sig,
             declared,
-            func::Kind::Constructor { object: &self.name },
-        )?;
+            kind: func::Kind::Constructor { object: &self.name },
+        })?;
         self.constructor = Some(SpannedFn {
             function,
             span: method.sig.ident.span(),

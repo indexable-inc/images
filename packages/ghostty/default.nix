@@ -13,8 +13,7 @@
   pkgs,
   ...
 }: let
-  # The indexable-inc/ghostty jj megamerge (ghostty-src input); the tree is
-  # already patched, so no baseSource cache-warm split remains.
+  # The Ghostty view already carries the fork commits.
   package = ix.buildLibghosttyVt pkgs {
     ghosttySource = ix.ghosttySrc;
   };

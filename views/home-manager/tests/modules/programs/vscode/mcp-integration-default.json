@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "context7": {
+      "headers": {
+        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      },
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "disabled-server": {
+      "command": "echo",
+      "enabled": false,
+      "type": "stdio"
+    },
+    "everything": {
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-everything"
+      ],
+      "command": "npx",
+      "type": "stdio"
+    }
+  }
+}

@@ -1,0 +1,115 @@
+Before release:
+
+1. Check milestone is complete
+
+    https://github.com/haskell/time/milestones
+
+2. Pull upstream changes
+
+    git switch master
+    git pull
+
+3. Update version numbers
+
+    https://pvp.haskell.org/
+    time.cabal
+    configure.ac
+
+4. Update changelog, add current UTC date
+
+    date -u
+    changelog.md
+
+5. Use latest LTS resolver
+
+    https://www.stackage.org/lts
+    stack.yaml
+
+6. Use correct & latest GHC versions
+
+    https://www.haskell.org/ghc/download.html
+    fullcheck
+    fullcheck.ps1
+    time.cabal
+        - tested-with
+        - base dependency lower bound
+    .github/workflows/ci.yml
+
+7. Use latest stack
+
+    stack upgrade
+    stack --version
+
+8. Format source
+
+    ./format-all -b
+
+9. Build & test
+
+    ./fullcheck
+
+10. Run benchmarks
+
+    stack bench
+
+11. Inspect generated haddock, if necessary
+
+    dist/doc/html/time/index.html
+
+12. Commit and push changes to repo
+
+    git commit -a
+    git push
+
+13. Check builds (these can be done in parallel)
+
+13a. Check GitHub build
+
+    https://github.com/haskell/time/actions
+
+13b. Build and test on 32-bit Linux machine
+
+    git switch master
+    ./fullcheck
+
+13c. Build and test on FreeBSD machine
+
+    git switch master
+    ./fullcheck
+
+13d. Build and test on Windows
+
+    (in PowerShell)
+    Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+    git switch master
+    .\fullcheck
+
+14.  Upload to Hackage
+
+    git clean -dXf
+    autoreconf -i
+    stack upload .
+    http://hackage.haskell.org/package/time
+
+15.  Tag commit
+
+    git tag -a -s VERSION -m "Version VERSION"
+    git push --tags
+
+16.  Update ghc branch
+
+    git switch ghc
+    git merge master
+    git push
+
+17.  Restore local branch for next development
+
+    git switch master
+
+18.  Close completed milestone
+
+    https://github.com/haskell/time/milestones
+
+19.  Inform GHC team
+
+    https://gitlab.haskell.org/ghc/ghc/-/issues

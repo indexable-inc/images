@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<coverage name="Recip.tix">
+  <summary>
+    <exprs boxes="97" count="94"/>
+    <booleans boxes="8" true="3" false="0" count="7"/>
+    <guards boxes="7" true="3" false="0" count="6"/>
+    <conditionals boxes="1" true="0" false="0" count="1"/>
+    <qualifiers boxes="0" true="0" false="0" count="0"/>
+    <alts boxes="9" count="8"/>
+    <local boxes="1" count="1"/>
+    <toplevel boxes="5" count="5"/>
+  </summary>
+</coverage>

@@ -6,7 +6,8 @@ use ix_vt::{RowLocation, RowSemanticPrompt, Terminal, scrollback_bytes_for_lines
 
 #[test]
 fn osc_133_marks_prompt_rows_across_scrollback() {
-    let mut term = Terminal::new(5, 40, scrollback_bytes_for_lines(1000, 40)).expect("create terminal");
+    let mut term =
+        Terminal::new(5, 40, scrollback_bytes_for_lines(1000, 40)).expect("create terminal");
 
     // Two shell round-trips overflowing the 5-row grid into scrollback. The
     // marks are what real shell integration emits: `133;A` opens the prompt,
@@ -59,7 +60,8 @@ fn out_of_range_row_is_an_error_not_a_default() {
 
 #[test]
 fn dump_text_covers_scrollback_and_active_screen() {
-    let mut term = Terminal::new(5, 40, scrollback_bytes_for_lines(1000, 40)).expect("create terminal");
+    let mut term =
+        Terminal::new(5, 40, scrollback_bytes_for_lines(1000, 40)).expect("create terminal");
     for i in 0..20 {
         term.vt_write(format!("line-{i}\r\n").as_bytes());
     }
@@ -81,7 +83,8 @@ fn dump_text_covers_scrollback_and_active_screen() {
 
 #[test]
 fn dump_text_joins_soft_wrapped_lines() {
-    let mut term = Terminal::new(5, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
+    let mut term =
+        Terminal::new(5, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     // 25 columns of text through a 10-column grid: soft-wraps twice.
     term.vt_write(b"abcdefghijklmnopqrstuvwxy");
     let text = term.dump_text().expect("dump");

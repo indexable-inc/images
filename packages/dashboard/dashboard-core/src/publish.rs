@@ -8,21 +8,28 @@
 //! snapshot, so the latest line fully describes this process and a late-joining
 //! aggregator needs no backlog.
 //!
-//! The producer holds no HTTP or CRDT dependency: it serializes panes and writes
-//! bytes. The aggregator owns the Loro document and the browser-facing server.
-//! This keeps every process that only *publishes* lightweight, and any
+//! The socket is bidirectional: the aggregator writes viewer inputs back as
+//! [`InputLine`] NDJSON rows, surfaced in order through [`Publisher::inputs`],
+//! so a producer can act on what a browser typed without ever seeing the
+//! document those inputs merged in.
+//!
+//! The producer holds no HTTP or CRDT dependency: it serializes panes, writes
+//! bytes, and parses exactly one JSON line type back. The aggregator owns the
+//! Loro document and the browser-facing server. This keeps every process that
+//! only *publishes* lightweight, and any
 //! producer — a terminal manager, a VM controller, a future resource — drives
 //! the same socket with its own [`Pane`](crate::Pane) list.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::AsyncWriteExt as _;
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::net::UnixListener;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
-use crate::pane::{Pane, ProducerSnapshot};
+use crate::pane::{InputLine, Pane, ProducerSnapshot};
 use crate::{Error, Result};
 
 fn publish_err(message: impl Into<String>) -> Error {
@@ -30,6 +37,13 @@ fn publish_err(message: impl Into<String>) -> Error {
         message: format!("publish: {}", message.into()),
     }
 }
+
+/// Channel depth for inbound [`InputLine`]s. Inputs are human-scale (an
+/// answer, a send), so this mostly absorbs the aggregator replaying a scope's
+/// inputs on (re)connect. A producer that stops draining fills it and stalls
+/// only its own connections' read loops; the aggregator gives up on routing
+/// to it rather than blocking anyone else (see `InputRouter::route`).
+const INPUT_DEPTH: usize = 256;
 
 /// A short, unique per-process producer id: `"<pid>-<short-uuid>"`.
 fn new_producer_id() -> Arc<str> {
@@ -87,6 +101,9 @@ pub struct Publisher {
     sink: PaneSink,
     shutdown: Option<watch::Sender<bool>>,
     tasks: Vec<JoinHandle<()>>,
+    /// The read end of the return channel, present until a caller takes it
+    /// with [`inputs`](Self::inputs).
+    inputs: Option<mpsc::Receiver<InputLine>>,
 }
 
 impl Publisher {
@@ -137,6 +154,7 @@ impl Publisher {
 
         let initial = encode(&producer, &[]);
         let (snapshot_tx, snapshot_rx) = watch::channel(initial);
+        let (inputs_tx, inputs_rx) = mpsc::channel(INPUT_DEPTH);
         let (shutdown, _) = watch::channel(false);
 
         let accepter = {
@@ -150,9 +168,14 @@ impl Publisher {
                     tokio::select! {
                         accepted = listener.accept() => {
                             if let Ok((stream, _)) = accepted {
+                                let (reader, writer) = stream.into_split();
                                 let rx = snapshot_rx.clone();
-                                let stop = child_stop.clone();
-                                tokio::spawn(write_loop(stream, rx, stop));
+                                tokio::spawn(write_loop(writer, rx, child_stop.clone()));
+                                tokio::spawn(read_loop(
+                                    reader,
+                                    inputs_tx.clone(),
+                                    child_stop.clone(),
+                                ));
                             }
                         }
                         _ = stop_rx.wait_for(|stop| *stop) => break,
@@ -169,6 +192,7 @@ impl Publisher {
             },
             shutdown: Some(shutdown),
             tasks: vec![accepter],
+            inputs: Some(inputs_rx),
         })
     }
 
@@ -190,6 +214,20 @@ impl Publisher {
     /// accept loop.
     pub fn push_task(&mut self, task: JoinHandle<()>) {
         self.tasks.push(task);
+    }
+
+    /// The viewer inputs routed back to this producer, one [`InputLine`] per
+    /// aggregator write, across every connection including reconnects.
+    ///
+    /// Takeable once; a second call returns `None` rather than a second
+    /// stream, because one consumer owning the channel is the model (fan-out
+    /// to panes belongs to the producer, which knows them). The aggregator
+    /// replays a producer's scoped inputs when it (re)connects, and a replay
+    /// can repeat a value already routed live, so a consumer acting on a
+    /// value deduplicates on the id the value carries (see
+    /// [`InputLine`](crate::InputLine)).
+    pub const fn inputs(&mut self) -> Option<mpsc::Receiver<InputLine>> {
+        self.inputs.take()
     }
 
     /// This process's producer id, the scope its panes appear under in the
@@ -252,7 +290,7 @@ fn encode(producer: &str, panes: &[Pane]) -> Arc<str> {
 /// Feed one connected reader: write the current snapshot, then each new one as
 /// it lands, until the reader hangs up or the producer shuts down.
 async fn write_loop(
-    mut stream: UnixStream,
+    mut stream: OwnedWriteHalf,
     mut rx: watch::Receiver<Arc<str>>,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -268,6 +306,40 @@ async fn write_loop(
                 }
             }
             _ = stop.wait_for(|s| *s) => break,
+        }
+    }
+}
+
+/// Drain one connection's return channel: each NDJSON [`InputLine`] the
+/// aggregator routes back is forwarded to the producer's inputs channel.
+///
+/// A malformed line is skipped rather than dropping the connection, matching
+/// how the aggregator treats a snapshot it cannot parse: a future wire
+/// version should degrade, not disconnect. Ends when the peer hangs up, the
+/// producer stops, or the inputs receiver is gone.
+async fn read_loop(
+    reader: OwnedReadHalf,
+    inputs: mpsc::Sender<InputLine>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let mut lines = BufReader::new(reader).lines();
+    loop {
+        // The send happens outside the select: an await inside a select arm
+        // keeps the select's result temporary (which includes the stop watch
+        // guard in its type) alive across it, and that guard is not `Send`.
+        let line = tokio::select! {
+            line = lines.next_line() => line,
+            _ = stop.wait_for(|s| *s) => break,
+        };
+        let Ok(Some(line)) = line else { break };
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(input) = serde_json::from_str::<InputLine>(&line) else {
+            continue;
+        };
+        if inputs.send(input).await.is_err() {
+            break;
         }
     }
 }

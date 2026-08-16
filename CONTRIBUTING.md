@@ -184,17 +184,15 @@ nix build .#ciChecks.x86_64-linux.rust-git-log-pretty.clippy
 ```
 
 But it is the unit's `passthruTests.prefix`, not the crate name, and a package
-may set that to something else. `upstream-sync` and `unibind-gen` both do, so
-theirs are `.upstream-sync.clippy` and `.unibind-gen.clippy`. Guessing
-`rust-upstream-sync` gets you `does not provide attribute`, and pointing
+may set that to something else. `unibind-gen` does, so its unit is
+`.unibind-gen.clippy`. Guessing the prefix gets you `does not provide
+attribute`, and pointing
 `nix build` at the bare unit gets you `expected ... to be a derivation or path
 but found a set`, because the unit is an attrset carrying `.clippy` alongside a
 `.<test-name>` per test case.
 
 To list every available clippy derivation, look one level in. Do not filter the
-top-level names on `clippy`: no unit is NAMED that, so the only hit is
-`patched-src-clippy`, which is the clippy fork's patched-source check and not a
-clippy derivation at all. One confident false positive and 134 misses.
+top-level names on `clippy`: no unit is named that.
 
 ```sh
 nix eval --json .#ciChecks.x86_64-linux \

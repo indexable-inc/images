@@ -16,8 +16,10 @@
   self ? null,
 }: let
   # The `nix.registry.index.to` construction, shared with the
-  # `image-registry-pin` check (tests/default.nix). See its doc comment.
-  registryPin = import ./registry-pin.nix {inherit lib;};
+  # `image-registry-pin` check (tests/default.nix). See its doc comment; the
+  # module exposes its exclusion list alongside `pin` so that check can assert
+  # against the same list this consumer builds with.
+  registryPin = (import ./registry-pin.nix {inherit lib;}).pin;
   /**
   One nixpkgs instance shared by every image evaluation. `lib.nixosSystem`
   otherwise instantiates a fresh nixpkgs PER node, and a consumer that
@@ -43,6 +45,11 @@
       `examples/nomad/cluster` fleet runs it as a demo scheduler, squarely
       inside the license's non-competing production grant.
       Refs: https://www.hashicorp.com/license-faq
+    - `minecraft-server`: Mojang's EULA-bound server jar. The SDK's
+      declarative example (ix packages/sdk/examples/nixos) boots it via
+      `services.minecraft-server` with `eula = true` in the same config,
+      so acceptance is explicit where the exception is used.
+      Refs: https://www.minecraft.net/eula
   The predicate keeps every other unfree (Oracle JDK, Adobe runtimes,
   NVIDIA blobs) failing at eval until the platform allows it explicitly.
   */
@@ -53,6 +60,7 @@
         builtins.elem (lib.getName pkg) [
           "yourkit-java"
           "claude-code"
+          "minecraft-server"
           "nomad"
         ];
     };
@@ -235,8 +243,15 @@
   is a single VM, so this is the seam `default.ix` configs call). A thin
   one-node wrapper over the same evaluator `mkFleet` uses -- the result
   keeps the exact shape tooling already consumes (`nixosConfigurations.<name>`,
-  `planValue`, the lifecycle wrappers), so a flake exposes it as
-  `ix.default` and inherits `nixosConfigurations` from it.
+  `planValue`, the lifecycle wrappers), so a flake inherits
+  `nixosConfigurations` from it and a bare `ix apply` converges those nodes.
+
+  The result is NOT a NixOS configuration and must not be bound to a flake's
+  `ix.default`: that output is the single-VM seam `ix init` scaffolds, and
+  `ix apply` builds `ix.default.config.system.build.toplevel` from it. A fleet
+  result has no `config`, so the binding fails the apply on a missing
+  attribute. Bind `(mkVm { ... }).nixosConfigurations.<name>` if you want the
+  single-VM path; `tests/ix-default-is-a-vm.nix` refuses the other spelling.
 
   Arguments:
   - `modules`: list of NixOS modules defining the VM.

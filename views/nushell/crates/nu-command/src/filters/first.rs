@@ -1,0 +1,368 @@
+#[cfg(feature = "sqlite")]
+use crate::database::QueryPlan;
+use nu_engine::command_prelude::*;
+use nu_protocol::{Signals, shell_error::io::IoError};
+use std::io::Read;
+
+#[derive(Clone)]
+pub struct First;
+
+impl Command for First {
+    fn name(&self) -> &str {
+        "first"
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::build("first")
+            .input_output_types(vec![
+                (
+                    // TODO: This is too permissive; if we could express this
+                    // using a type parameter it would be List<T> -> T.
+                    Type::List(Box::new(Type::Any)),
+                    Type::Any,
+                ),
+                (Type::Binary, Type::Binary),
+                (Type::Range, Type::Any),
+            ])
+            .optional(
+                "rows",
+                SyntaxShape::OneOf(vec![SyntaxShape::Int, SyntaxShape::Filesize]),
+                "Starting from the front, the number of rows to return.",
+            )
+            .switch("strict", "Throw an error if input is empty.", Some('s'))
+            .allow_variants_without_examples(true)
+            .category(Category::Filters)
+    }
+
+    fn search_terms(&self) -> Vec<&str> {
+        vec!["head"]
+    }
+
+    fn description(&self) -> &str {
+        "Return only the first several rows of the input. Counterpart of `last`. Opposite of `skip`. For binary input, rows can also be specified as a filesize."
+    }
+
+    fn run(
+        &self,
+        engine_state: &EngineState,
+        stack: &mut Stack,
+        call: &Call,
+        input: PipelineData,
+    ) -> Result<PipelineData, ShellError> {
+        first_helper(engine_state, stack, call, input)
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                description: "Return the first item of a list/table.",
+                example: "[1 2 3] | first",
+                result: Some(Value::test_int(1)),
+            },
+            Example {
+                description: "Return the first 2 items of a list/table.",
+                example: "[1 2 3] | first 2",
+                result: Some(Value::list(
+                    vec![Value::test_int(1), Value::test_int(2)],
+                    Span::test_data(),
+                )),
+            },
+            Example {
+                description: "Return the first 2 bytes of a binary value.",
+                example: "0x[01 23 45] | first 2",
+                result: Some(Value::binary(vec![0x01, 0x23], Span::test_data())),
+            },
+            Example {
+                description: "Return the first item of a range.",
+                example: "1..3 | first",
+                result: Some(Value::test_int(1)),
+            },
+            Example {
+                description: "Return the first 2 bytes of a binary value, using a filesize argument.",
+                example: "0x[01 23 45] | first 2b",
+                result: Some(Value::test_binary(vec![0x01, 0x23])),
+            },
+        ]
+    }
+}
+
+fn first_helper(
+    engine_state: &EngineState,
+    stack: &mut Stack,
+    call: &Call,
+    input: PipelineData,
+) -> Result<PipelineData, ShellError> {
+    let head = call.head;
+    let rows_val: Option<Value> = call.opt(engine_state, stack, 0)?;
+    let is_filesize = rows_val
+        .as_ref()
+        .is_some_and(|v| matches!(v, Value::Filesize { .. }));
+    let strict_mode = call.has_flag(engine_state, stack, "strict")?;
+
+    let rows: Option<usize> = match rows_val {
+        Some(v) => {
+            let span = v.span();
+            match v {
+                Value::Int { val, .. } => Some(
+                    usize::try_from(val).map_err(|_| ShellError::NeedsPositiveValue { span })?,
+                ),
+                Value::Filesize { val, .. } => Some(
+                    usize::try_from(val).map_err(|_| ShellError::NeedsPositiveValue { span })?,
+                ),
+                ref val => {
+                    return Err(ShellError::RuntimeTypeMismatch {
+                        expected: Type::custom("int or filesize"),
+                        actual: val.get_type(),
+                        span: val.span(),
+                    });
+                }
+            }
+        }
+        None => None,
+    };
+
+    // FIXME: for backwards compatibility reasons, if `rows` is not specified we
+    // return a single element and otherwise we return a single list. We should probably
+    // remove `rows` so that `first` always returns a single element; getting a list of
+    // the first N elements is covered by `take`
+    let return_single_element = rows.is_none();
+    let rows = rows.unwrap_or(1);
+
+    let mut input = input;
+    let input_meta = input.take_metadata();
+
+    if is_filesize {
+        let is_binary = matches!(
+            &input,
+            PipelineData::Value(Value::Binary { .. }, _) | PipelineData::ByteStream(..)
+        );
+        if !is_binary {
+            return Err(ShellError::IncompatibleParametersSingle {
+                msg: "Filesize is only supported for binary/byte stream input".into(),
+                span: head,
+            });
+        }
+    }
+
+    // Count is 0: return empty data immediately.
+    //
+    // The main `match` below is not safe for this case-byte streams can still be read from the
+    // pipe, and sqlite lazy queries can still run. For "take nothing" we only produce an empty
+    // value: empty binary (and clear pipeline `content_type` for binary) or an empty list, with
+    // other metadata unchanged.
+    if rows == 0 {
+        return match input {
+            PipelineData::Value(val, _) if matches!(&val, Value::Binary { .. }) => Ok(
+                Value::binary(Vec::new(), val.span()).into_pipeline_data_with_metadata(
+                    input_meta.map(|m| m.with_content_type(None)),
+                ),
+            ),
+            PipelineData::ByteStream(stream, _) => {
+                if stream.type_().is_binary_coercible() {
+                    let span = stream.span();
+                    Ok(
+                        Value::binary(Vec::new(), span).into_pipeline_data_with_metadata(
+                            input_meta.map(|m| m.with_content_type(None)),
+                        ),
+                    )
+                } else {
+                    Ok(Value::list(Vec::new(), head).into_pipeline_data_with_metadata(input_meta))
+                }
+            }
+            _ => Ok(Value::list(Vec::new(), head).into_pipeline_data_with_metadata(input_meta)),
+        };
+    }
+
+    match input {
+        PipelineData::Value(val, _) => {
+            let span = val.span();
+            match val {
+                Value::List { vals, .. } => {
+                    if return_single_element {
+                        if let Some(val) = vals.first() {
+                            Ok(val.clone().into_pipeline_data_with_metadata(input_meta))
+                        } else if strict_mode {
+                            Err(ShellError::AccessEmptyContent { span: head })
+                        } else {
+                            // There are no values, so return nothing instead of an error so
+                            // that users can pipe this through 'default' if they want to.
+                            Ok(Value::nothing(head).into_pipeline_data_with_metadata(input_meta))
+                        }
+                    } else {
+                        let value = if rows >= vals.len() {
+                            Value::list_shared(vals, span)
+                        } else {
+                            Value::list(vals.iter().take(rows).cloned().collect(), span)
+                        };
+                        Ok(value.into_pipeline_data_with_metadata(input_meta))
+                    }
+                }
+                Value::Binary { val, .. } => {
+                    // A slice (or single byte as int) is not the whole file/stream; drop MIME.
+                    let binary_meta = input_meta.map(|m| m.with_content_type(None));
+                    if return_single_element {
+                        if let Some(&val) = val.first() {
+                            Ok(Value::int(val.into(), span)
+                                .into_pipeline_data_with_metadata(binary_meta))
+                        } else if strict_mode {
+                            Err(ShellError::AccessEmptyContent { span: head })
+                        } else {
+                            // There are no values, so return nothing instead of an error so
+                            // that users can pipe this through 'default' if they want to.
+                            Ok(Value::nothing(head).into_pipeline_data_with_metadata(binary_meta))
+                        }
+                    } else {
+                        let mut val = val.into_owned();
+                        val.truncate(rows);
+                        Ok(Value::binary(val, span).into_pipeline_data_with_metadata(binary_meta))
+                    }
+                }
+                Value::Range { val, .. } => {
+                    let mut iter = val.into_range_iter(span, Signals::empty());
+                    if return_single_element {
+                        if let Some(v) = iter.next() {
+                            Ok(v.into_pipeline_data_with_metadata(input_meta))
+                        } else if strict_mode {
+                            Err(ShellError::AccessEmptyContent { span: head })
+                        } else {
+                            // There are no values, so return nothing instead of an error so
+                            // that users can pipe this through 'default' if they want to.
+                            Ok(Value::nothing(head).into_pipeline_data_with_metadata(input_meta))
+                        }
+                    } else {
+                        Ok(iter.take(rows).into_pipeline_data_with_metadata(
+                            span,
+                            engine_state.signals().clone(),
+                            input_meta,
+                        ))
+                    }
+                }
+                // Propagate errors by explicitly matching them before the final case.
+                Value::Error { error, .. } => Err(*error),
+                #[cfg(feature = "sqlite")]
+                // Pushdown optimization: handle 'first' via QueryPlan for lazy SQL execution
+                Value::Custom {
+                    val: custom_val,
+                    internal_span,
+                    ..
+                } => {
+                    if let Some(plan) = QueryPlan::try_from_any(custom_val.as_any()) {
+                        if return_single_element {
+                            // For single element, limit 1
+                            let plan = plan.with_limit(1);
+                            let result = plan.execute(head)?;
+                            let value = result.into_value(head)?;
+                            if let Value::List { vals, .. } = value {
+                                if let Some(val) = vals.into_iter().next() {
+                                    Ok(val.into_pipeline_data_with_metadata(input_meta))
+                                } else if strict_mode {
+                                    Err(ShellError::AccessEmptyContent { span: head })
+                                } else {
+                                    // There are no values, so return nothing instead of an error so
+                                    // that users can pipe this through 'default' if they want to.
+                                    Ok(Value::nothing(head)
+                                        .into_pipeline_data_with_metadata(input_meta))
+                                }
+                            } else {
+                                Err(ShellError::NushellFailed {
+                                    msg: "Expected list from query plan".into(),
+                                })
+                            }
+                        } else {
+                            // For multiple, limit rows
+                            let plan = plan.with_limit(rows as i64);
+                            plan.execute(head).map(|data| data.set_metadata(input_meta))
+                        }
+                    } else {
+                        Err(ShellError::OnlySupportsThisInputType {
+                            exp_input_type: "list, binary or range".into(),
+                            wrong_type: custom_val.type_name(),
+                            dst_span: head,
+                            src_span: internal_span,
+                        })
+                    }
+                }
+                other => Err(ShellError::OnlySupportsThisInputType {
+                    exp_input_type: "list, binary or range".into(),
+                    wrong_type: other.get_type().to_string(),
+                    dst_span: head,
+                    src_span: other.span(),
+                }),
+            }
+        }
+        PipelineData::ListStream(stream, _) => {
+            if return_single_element {
+                if let Some(v) = stream.into_iter().next() {
+                    Ok(v.into_pipeline_data_with_metadata(input_meta))
+                } else if strict_mode {
+                    Err(ShellError::AccessEmptyContent { span: head })
+                } else {
+                    // There are no values, so return nothing instead of an error so
+                    // that users can pipe this through 'default' if they want to.
+                    Ok(Value::nothing(head).into_pipeline_data_with_metadata(input_meta))
+                }
+            } else {
+                Ok(PipelineData::list_stream(
+                    stream.modify(|iter| iter.take(rows)),
+                    input_meta,
+                ))
+            }
+        }
+        PipelineData::ByteStream(stream, _) => {
+            if stream.type_().is_binary_coercible() {
+                let span = stream.span();
+                let metadata = input_meta.map(|m| m.with_content_type(None));
+                if let Some(mut reader) = stream.reader() {
+                    if return_single_element {
+                        // Take a single byte
+                        let mut byte = [0u8];
+                        if reader
+                            .read(&mut byte)
+                            .map_err(|err| IoError::new(err, span, None))?
+                            > 0
+                        {
+                            Ok(Value::int(byte[0] as i64, head)
+                                .into_pipeline_data_with_metadata(metadata))
+                        } else {
+                            Err(ShellError::AccessEmptyContent { span: head })
+                        }
+                    } else {
+                        // Just take 'rows' bytes off the stream, mimicking the binary behavior
+                        Ok(PipelineData::byte_stream(
+                            ByteStream::read(
+                                reader.take(rows as u64),
+                                head,
+                                Signals::empty(),
+                                ByteStreamType::Binary,
+                            ),
+                            metadata,
+                        ))
+                    }
+                } else {
+                    Ok(Value::nothing(head).into_pipeline_data_with_metadata(metadata))
+                }
+            } else {
+                Err(ShellError::OnlySupportsThisInputType {
+                    exp_input_type: "list, binary or range".into(),
+                    wrong_type: stream.type_().describe().into(),
+                    dst_span: head,
+                    src_span: stream.span(),
+                })
+            }
+        }
+        PipelineData::Empty => Err(ShellError::OnlySupportsThisInputType {
+            exp_input_type: "list, binary or range".into(),
+            wrong_type: "null".into(),
+            dst_span: call.head,
+            src_span: call.head,
+        }),
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_examples() -> nu_test_support::Result {
+        nu_test_support::test().examples(First)
+    }
+}

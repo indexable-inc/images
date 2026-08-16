@@ -1,0 +1,68 @@
+const builtin = @import("builtin");
+
+pub fn exportAll(c: anytype, terminal: anytype) void {
+    @export(&c.key_event_new, .{ .name = "ghostty_key_event_new" });
+    @export(&c.key_event_free, .{ .name = "ghostty_key_event_free" });
+    @export(&c.key_event_set_action, .{ .name = "ghostty_key_event_set_action" });
+    @export(&c.key_event_get_action, .{ .name = "ghostty_key_event_get_action" });
+    @export(&c.key_event_set_key, .{ .name = "ghostty_key_event_set_key" });
+    @export(&c.key_event_get_key, .{ .name = "ghostty_key_event_get_key" });
+    @export(&c.key_event_set_mods, .{ .name = "ghostty_key_event_set_mods" });
+    @export(&c.key_event_get_mods, .{ .name = "ghostty_key_event_get_mods" });
+    @export(&c.key_event_set_consumed_mods, .{ .name = "ghostty_key_event_set_consumed_mods" });
+    @export(&c.key_event_get_consumed_mods, .{ .name = "ghostty_key_event_get_consumed_mods" });
+    @export(&c.key_event_set_composing, .{ .name = "ghostty_key_event_set_composing" });
+    @export(&c.key_event_get_composing, .{ .name = "ghostty_key_event_get_composing" });
+    @export(&c.key_event_set_utf8, .{ .name = "ghostty_key_event_set_utf8" });
+    @export(&c.key_event_get_utf8, .{ .name = "ghostty_key_event_get_utf8" });
+    @export(&c.key_event_set_unshifted_codepoint, .{ .name = "ghostty_key_event_set_unshifted_codepoint" });
+    @export(&c.key_event_get_unshifted_codepoint, .{ .name = "ghostty_key_event_get_unshifted_codepoint" });
+    @export(&c.key_encoder_new, .{ .name = "ghostty_key_encoder_new" });
+    @export(&c.key_encoder_free, .{ .name = "ghostty_key_encoder_free" });
+    @export(&c.key_encoder_setopt, .{ .name = "ghostty_key_encoder_setopt" });
+    @export(&c.key_encoder_encode, .{ .name = "ghostty_key_encoder_encode" });
+    @export(&terminal.terminal_new, .{ .name = "ghostty_terminal_new" });
+    @export(&terminal.terminal_free, .{ .name = "ghostty_terminal_free" });
+    @export(&terminal.terminal_feed, .{ .name = "ghostty_terminal_feed" });
+    @export(&terminal.terminal_resize, .{ .name = "ghostty_terminal_resize" });
+    @export(&terminal.terminal_set_pixel_size, .{ .name = "ghostty_terminal_set_pixel_size" });
+    @export(&terminal.terminal_total_rows, .{ .name = "ghostty_terminal_total_rows" });
+    @export(&terminal.terminal_screen, .{ .name = "ghostty_terminal_screen" });
+    @export(&terminal.terminal_cursor, .{ .name = "ghostty_terminal_cursor" });
+    @export(&terminal.terminal_image_placements, .{ .name = "ghostty_terminal_image_placements" });
+    @export(&terminal.terminal_image_rgba, .{ .name = "ghostty_terminal_image_rgba" });
+    @export(&c.osc_new, .{ .name = "ghostty_osc_new" });
+    @export(&c.osc_free, .{ .name = "ghostty_osc_free" });
+    @export(&c.osc_next, .{ .name = "ghostty_osc_next" });
+    @export(&c.osc_reset, .{ .name = "ghostty_osc_reset" });
+    @export(&c.osc_end, .{ .name = "ghostty_osc_end" });
+    @export(&c.osc_command_type, .{ .name = "ghostty_osc_command_type" });
+    @export(&c.osc_command_data, .{ .name = "ghostty_osc_command_data" });
+    @export(&c.paste_is_safe, .{ .name = "ghostty_paste_is_safe" });
+    @export(&c.color_rgb_get, .{ .name = "ghostty_color_rgb_get" });
+    @export(&c.sgr_new, .{ .name = "ghostty_sgr_new" });
+    @export(&c.sgr_free, .{ .name = "ghostty_sgr_free" });
+    @export(&c.sgr_reset, .{ .name = "ghostty_sgr_reset" });
+    @export(&c.sgr_set_params, .{ .name = "ghostty_sgr_set_params" });
+    @export(&c.sgr_next, .{ .name = "ghostty_sgr_next" });
+    @export(&c.sgr_unknown_full, .{ .name = "ghostty_sgr_unknown_full" });
+    @export(&c.sgr_unknown_partial, .{ .name = "ghostty_sgr_unknown_partial" });
+    @export(&c.sgr_attribute_tag, .{ .name = "ghostty_sgr_attribute_tag" });
+    @export(&c.sgr_attribute_value, .{ .name = "ghostty_sgr_attribute_value" });
+
+    if (!builtin.target.cpu.arch.isWasm()) return;
+
+    const alloc = @import("lib/allocator/convenience.zig");
+    @export(&alloc.allocOpaque, .{ .name = "ghostty_wasm_alloc_opaque" });
+    @export(&alloc.freeOpaque, .{ .name = "ghostty_wasm_free_opaque" });
+    @export(&alloc.allocU8Array, .{ .name = "ghostty_wasm_alloc_u8_array" });
+    @export(&alloc.freeU8Array, .{ .name = "ghostty_wasm_free_u8_array" });
+    @export(&alloc.allocU16Array, .{ .name = "ghostty_wasm_alloc_u16_array" });
+    @export(&alloc.freeU16Array, .{ .name = "ghostty_wasm_free_u16_array" });
+    @export(&alloc.allocU8, .{ .name = "ghostty_wasm_alloc_u8" });
+    @export(&alloc.freeU8, .{ .name = "ghostty_wasm_free_u8" });
+    @export(&alloc.allocUsize, .{ .name = "ghostty_wasm_alloc_usize" });
+    @export(&alloc.freeUsize, .{ .name = "ghostty_wasm_free_usize" });
+    @export(&c.wasm_alloc_sgr_attribute, .{ .name = "ghostty_wasm_alloc_sgr_attribute" });
+    @export(&c.wasm_free_sgr_attribute, .{ .name = "ghostty_wasm_free_sgr_attribute" });
+}

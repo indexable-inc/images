@@ -45,6 +45,25 @@
     "FLEET_CLICKHOUSE_USER"
   ];
 
+  # The forge CI verdict feed (IxMcp.Forge.Verdicts). Same split again, and for
+  # a sharper reason than the two above: this tree is PUBLIC and a forge is one
+  # specific machine, so the runs directory it polls
+  # (`[user@host:]<absolute-path>`) can only come from the operator's config
+  # repo. Unset is the ordinary case and means the feed never starts and says
+  # nothing; `IX_MCP_FORGE_WATCH=0` is the off switch for a machine that has the
+  # forge but does not want the announcements. The two cadence knobs are here
+  # for the same mechanical reason as the target: a documented override that is
+  # not on this list cannot reach the process, so it would read as a knob that
+  # silently does nothing. Unset arrives as the empty string rather than as
+  # absent (the renderer emits `${NAME:-}`), which `Integer.parse` on the
+  # Elixir side already reads as "take the default".
+  forgeVerdictsEnvVars = [
+    "IX_MCP_FORGE_CI"
+    "IX_MCP_FORGE_WATCH"
+    "IX_MCP_FORGE_WATCH_BACKFILL_S"
+    "IX_MCP_FORGE_WATCH_INTERVAL_MS"
+  ];
+
   defaultServers = {
     indexCommand ? null,
     # The Python kernel's entrypoint needs its `serve` subcommand; the Elixir
@@ -57,7 +76,8 @@
         transport = "stdio";
         command = indexCommand;
         args = indexArgs;
-        envVars = indexApiEnvVars ++ fleetBeamEnvVars ++ fleetLogStoreEnvVars;
+        envVars =
+          indexApiEnvVars ++ fleetBeamEnvVars ++ fleetLogStoreEnvVars ++ forgeVerdictsEnvVars;
         env = {
           # New-issue channel broadcasting (IssueWatch, #3877) off for now:
           # every kernel hears every filed issue, so unrelated agents pick

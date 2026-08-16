@@ -44,6 +44,9 @@ in
     dontConfigure = true;
     dontBuild = true;
 
+    # Upstream server binary repack; nothing to test at build time.
+    doCheck = false;
+
     installPhase = ''
       # shell
       runHook preInstall

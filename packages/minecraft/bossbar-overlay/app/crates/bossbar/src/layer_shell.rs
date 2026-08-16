@@ -383,17 +383,9 @@ impl App {
     fn sync_layers(&mut self, ev: &WindowState<i64>) {
         let active = self.active_panel_bar();
         for (id, win) in &mut self.wins {
-            let target = if active.is_some() && active != Some(*id) {
-                Layer::Top
-            } else {
-                Layer::Overlay
-            };
-            if win.layer != target {
-                win.layer = target;
-                if let Some(unit) = ev.get_unit_with_id(win.shell_id) {
-                    unit.set_layer(target);
-                }
-            }
+            let demoted = active.is_some() && active != Some(*id);
+            let target = if demoted { Layer::Top } else { Layer::Overlay };
+            retarget_layer(win, target, ev);
         }
     }
 
@@ -1103,4 +1095,13 @@ pub fn run(db: PathBuf, base_scale: f32) -> Result<(), Box<dyn std::error::Error
         app.handle_event(event, ev, shell_id)
     })?;
     Ok(())
+}
+/// Move `win` to `target`, telling the compositor only on a real change.
+fn retarget_layer(win: &mut BarWin, target: Layer, ev: &WindowState<i64>) {
+    if win.layer != target {
+        win.layer = target;
+        if let Some(unit) = ev.get_unit_with_id(win.shell_id) {
+            unit.set_layer(target);
+        }
+    }
 }

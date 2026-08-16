@@ -1,0 +1,42 @@
+---
+id: ix-default-must-be-a-vm
+postedAt: "2026-08-03T16:30:00-07:00"
+title: "a bare `ix apply` works in every example again"
+links:
+  - label: "ENG-12208"
+    href: "https://linear.app/indexable/issue/ENG-12208"
+  - label: "tests/ix-default-is-a-vm.nix"
+    href: "https://github.com/indexable-inc/index/blob/main/tests/ix-default-is-a-vm.nix"
+tags:
+  - examples
+  - ix
+---
+
+Running `ix apply` with no arguments in fifteen of this repo's example
+directories did not converge anything. It failed on
+
+```
+flake '...' does not provide attribute 'packages.x86_64-linux.ix.default.config',
+'legacyPackages.x86_64-linux.ix.default.config' or 'ix.default.config'
+```
+
+naming an attribute path nobody typed. `ix apply` picks between two paths by
+looking for an `ix.default` binding in your flake: where it finds one it builds
+`ix.default.config.system.build.toplevel` from it, and where it does not it
+converges every `nixosConfigurations` entry that sets `ix.networking`. It reads
+whether the binding exists, never what it is bound to — and `index.lib.mkVm`,
+`mkDev` and `mkFleet` all return a fleet result, which has no `config`. Every
+example that bound `ix.default` bound one of those.
+
+The binding is gone from all fifteen, so a bare `ix apply` in any of them now
+converges the nodes the flake declares. If you copied one of these flakes into
+your own repo, delete the `ix.default = vm;` line and keep
+`inherit (vm) nixosConfigurations;`. If you want the single-VM path instead,
+bind the configuration rather than the fleet:
+`ix.default = vm.nixosConfigurations.<name>;`, which is what `ix init`
+scaffolds.
+
+`tests/ix-default-is-a-vm.nix` now walks the repo for flakes, calls each one's
+real `outputs`, and fails the eval naming any file whose `ix.default` has no
+`config`. The CLI error itself is unchanged and still illegible; ENG-12208
+carries that.

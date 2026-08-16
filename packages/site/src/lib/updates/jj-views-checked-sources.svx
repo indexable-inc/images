@@ -1,0 +1,20 @@
+---
+id: jj-views-checked-sources
+postedAt: 2026-08-04T11:05:44Z
+title: "ix now stores patched sources as jj views"
+links:
+  - label: View manifest
+    href: https://github.com/indexable-inc/ix/blob/main/.jj-views.toml
+  - label: jj view commands
+    href: https://github.com/indexable-inc/jj/commits/main/
+tags:
+  - infrastructure
+  - nix
+  - jj
+---
+
+ix now keeps 39 patched and vendored source trees as checked jj views. Nix reads each tree from its repository path, so evaluation needs no source flake URL or patch application step.
+
+The view manifest owns each upstream anchor and writable history. `jj views status` checks the materialized tree against that history. `jj views patch export` derives the seven Linux patches and archive used by Antithesis from the same Linux view.
+
+CI reads the manifest before Nix evaluation and omits 37 unrelated view trees from its sparse checkout. The check proved that 37 of 37 sampled blobs stayed absent through `nix flake metadata`; the Git object store remained 305,988 KiB before and after evaluation.

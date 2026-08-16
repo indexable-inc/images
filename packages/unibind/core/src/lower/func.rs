@@ -19,6 +19,20 @@ pub(super) enum Kind<'a> {
         /// The object type the constructor must return.
         object: &'a str,
     },
+    /// A named function on the object rather than on an instance: no
+    /// receiver, may be async, and there may be several. Two shapes share
+    /// this kind because they differ only in what they return. One
+    /// constructs the object, which is what a constructor cannot do when it
+    /// has to await first, since Python's `__new__` and napi's
+    /// `constructor` are both synchronous. The other answers something
+    /// else about the type, `Machine.list()` being the case that forced it.
+    /// Which one a given function is falls out of its return type, so the
+    /// author never says it twice.
+    Associated {
+        /// The object it belongs to, which resolves a `Self` return and
+        /// scopes per-export stream classes.
+        object: &'a str,
+    },
 }
 
 impl Kind<'_> {
@@ -27,12 +41,18 @@ impl Kind<'_> {
             Self::Free => "a function",
             Self::Method => "a method",
             Self::Constructor { .. } => "a constructor",
+            Self::Associated { .. } => "an associated function",
         }
     }
 }
 
 pub(super) fn lower_fn(func: &syn::ItemFn, declared: &Declared) -> Result<ir::Function> {
-    lower_callable(&func.attrs, &func.sig, declared, Kind::Free)
+    lower_callable(Callable {
+        attributes: &func.attrs,
+        signature: &func.sig,
+        declared,
+        kind: Kind::Free,
+    })
 }
 
 /// Reject signature shapes that never cross the binding boundary (unsafe,
@@ -61,20 +81,36 @@ fn reject_unsupported(signature: &syn::Signature) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn lower_callable(
-    attributes: &[syn::Attribute],
-    signature: &syn::Signature,
-    declared: &Declared,
-    kind: Kind<'_>,
-) -> Result<ir::Function> {
+/// One callable to lower: its attributes, signature, the module's declared
+/// types, and which callable position it sits in.
+/// `Copy` because every field is a shared reference and `lower_callable` only
+/// reads them: without it `clippy::needless_pass_by_value` reads the by-value
+/// parameter as a move that never happens. No `Debug`, because `syn` is pinned
+/// without `extra-traits` and its nodes have none to derive from.
+#[derive(Clone, Copy)]
+pub(super) struct Callable<'a> {
+    pub(super) attributes: &'a [syn::Attribute],
+    pub(super) signature: &'a syn::Signature,
+    pub(super) declared: &'a Declared,
+    pub(super) kind: Kind<'a>,
+}
+
+pub(super) fn lower_callable(callable: Callable<'_>) -> Result<ir::Function> {
+    let Callable {
+        attributes,
+        signature,
+        declared,
+        kind,
+    } = callable;
     reject_unsupported(signature)?;
     let asyncness = match signature.asyncness {
         Some(token) => {
             if matches!(kind, Kind::Constructor { .. }) {
                 return Err(LowerError::new(
                     token.span(),
-                    "Python constructors are synchronous; expose an async \
-                     factory function instead",
+                    "Python constructors are synchronous; mark this \
+                     #[unibind(associated)] instead, which may be async and \
+                     keeps its own name",
                 ));
             }
             ir::Asyncness::Async
@@ -83,16 +119,22 @@ pub(super) fn lower_callable(
     };
 
     let meta = attrs::UnibindMeta::from_attrs(attributes)?;
-    meta.reject_default(kind.context())?;
-    meta.reject_py_base(kind.context())?;
-    meta.reject_jvm_base(kind.context())?;
-    meta.reject_backends(kind.context())?;
-    meta.reject_resource(kind.context())?;
+    meta.reject_non_callable_options(kind.context())?;
     match kind {
-        // A `constructor` flag routed the signature here already, so only
-        // the other kinds can carry it by mistake.
-        Kind::Free | Kind::Method => meta.reject_constructor(kind.context())?,
-        Kind::Constructor { .. } => meta.reject_blocking(kind.context())?,
+        // A `constructor` or `associated` flag routed the signature here
+        // already, so only the other kinds can carry one by mistake.
+        Kind::Free | Kind::Method => {
+            meta.reject_constructor(kind.context())?;
+            meta.reject_associated(kind.context())?;
+        }
+        Kind::Constructor { .. } => {
+            meta.reject_associated(kind.context())?;
+            meta.reject_blocking(kind.context())?;
+        }
+        // An associated function is an ordinary callable that happens to
+        // hang off the type, so `blocking` applies to it exactly as it
+        // does to a method.
+        Kind::Associated { .. } => meta.reject_constructor(kind.context())?,
     }
     let blocking = meta.blocking;
     if blocking && matches!(asyncness, ir::Asyncness::Async) {
@@ -143,6 +185,13 @@ pub(super) fn lower_callable(
         Kind::Constructor { object } => {
             ret::lower_ctor_return(&signature.output, object, declared)?
         }
+        // `Self` resolves here, where the enclosing impl is known; the
+        // shared type lowering has no notion of one. Everything else falls
+        // through to the ordinary path, so an associated function may
+        // return the object, a record, a list, or nothing at all.
+        Kind::Associated { object } => {
+            ret::lower_associated_return(&signature.output, object, declared)?
+        }
         Kind::Free | Kind::Method => ret::lower_return(&signature.output, declared)?,
     };
     Ok(ir::Function {
@@ -179,14 +228,37 @@ fn lower_arg(arg: &syn::PatType, declared: &Declared) -> Result<ir::Arg> {
     let meta = attrs::UnibindMeta::from_attrs(&arg.attrs)?;
     meta.reject_py_base("an argument")?;
     meta.reject_jvm_base("an argument")?;
-    meta.reject_backends("an argument")?;
+    meta.reject_export_options("an argument")?;
     meta.reject_resource("an argument")?;
     meta.reject_constructor("an argument")?;
     meta.reject_blocking("an argument")?;
+    meta.reject_rename_all("an argument")?;
+    let ty = lower_type(&arg.ty, declared, Position::Arg)?;
+    // Refused here rather than in each backend: a default is a `Literal`,
+    // and no backend can spell an enum variant as one. The ts glue would
+    // substitute a wire string where the user's function takes the enum, and
+    // the pyo3 signature would put a `&str` where the parameter is the enum
+    // -- two different compile errors pointing at generated code, for one
+    // shape that is easy to name here.
+    if meta.default.is_some()
+        && let ir::Type::Named(name) = &ty
+        && declared.enums.iter().any(|declared| declared == name)
+    {
+        return Err(LowerError::new(
+            pattern.ident.span(),
+            format!(
+                "argument `{}` cannot carry a default: `{name}` is a \
+                 #[unibind::enumeration], and a default is a literal no \
+                 backend can spell as a variant. Take `Option<{name}>` and \
+                 pick the fallback in the body.",
+                pattern.ident,
+            ),
+        ));
+    }
     Ok(ir::Arg {
         name: pattern.ident.to_string(),
         names: meta.names(),
-        ty: lower_type(&arg.ty, declared, Position::Arg)?,
+        ty,
         default: meta.default,
     })
 }

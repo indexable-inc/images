@@ -5,8 +5,8 @@
 use snafu::Snafu;
 
 use crate::ast::{
-    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, PathSeg, Pipeline, Program,
-    RedirOp, Redirect, Span, Word,
+    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, PathSeg, Pipeline, Program, RedirOp,
+    Redirect, Span, Word,
 };
 
 /// Parse failure: an unsupported construct or malformed input, with the byte
@@ -276,8 +276,10 @@ impl<'src> Parser<'src> {
             match (self.peek(), self.peek_at(1)) {
                 (Some('|'), Some('|')) => break,
                 (Some('|'), Some('&')) => {
-                    return self
-                        .fail_at(self.byte_pos(), "unsupported: `|&`; use `2>&1 |`".to_owned());
+                    return self.fail_at(
+                        self.byte_pos(),
+                        "unsupported: `|&`; use `2>&1 |`".to_owned(),
+                    );
                 }
                 (Some('|'), _) => {
                     self.pos += 1;
@@ -356,7 +358,12 @@ impl Parser<'_> {
     /// plus a stdout redirect, same as bash.
     fn try_redirect(&mut self) -> Result<Option<Redirect>, ParseError> {
         let start = self.byte_pos();
-        let (op, len) = match (self.peek(), self.peek_at(1), self.peek_at(2), self.peek_at(3)) {
+        let (op, len) = match (
+            self.peek(),
+            self.peek_at(1),
+            self.peek_at(2),
+            self.peek_at(3),
+        ) {
             (Some('2'), Some('>'), Some('&'), Some('1')) => (RedirOp::ErrToOut, 4),
             (Some('1'), Some('>'), Some('&'), Some('2')) => (RedirOp::OutToErr, 4),
             (Some('>'), Some('&'), Some('2'), _) => (RedirOp::OutToErr, 3),
@@ -419,7 +426,10 @@ impl Parser<'_> {
             return Ok(None);
         }
         self.pos += 1;
-        let value = if matches!(self.peek(), None | Some(' ' | '\t' | '\n' | ';' | '|' | '&')) {
+        let value = if matches!(
+            self.peek(),
+            None | Some(' ' | '\t' | '\n' | ';' | '|' | '&')
+        ) {
             Word {
                 parts: Vec::new(),
                 span: self.span_from(self.byte_pos()),
@@ -462,8 +472,7 @@ impl Parser<'_> {
                         Some('\n') => {}
                         Some(escaped) => acc.push(escaped, true),
                         None => {
-                            return self
-                                .fail_at(self.byte_pos(), "trailing backslash".to_owned());
+                            return self.fail_at(self.byte_pos(), "trailing backslash".to_owned());
                         }
                     }
                 }
@@ -580,8 +589,7 @@ impl Parser<'_> {
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return self.fail_at(
                 start,
-                "unsupported parameter expansion: only a plain variable name in braces"
-                    .to_owned(),
+                "unsupported parameter expansion: only a plain variable name in braces".to_owned(),
             );
         }
         let mut path = Vec::new();
@@ -602,16 +610,18 @@ impl Parser<'_> {
                             break;
                         }
                     }
-                    let (Ok(magnitude), Some(']')) = (digits.parse::<i64>(), self.peek())
-                    else {
+                    let (Ok(magnitude), Some(']')) = (digits.parse::<i64>(), self.peek()) else {
                         return self.fail_at(
                             start,
-                            "run reference indexes are integers: ${o[7]} or ${o[-1]}"
-                                .to_owned(),
+                            "run reference indexes are integers: ${o[7]} or ${o[-1]}".to_owned(),
                         );
                     };
                     self.pos += 1;
-                    path.push(PathSeg::Index(if negative { -magnitude } else { magnitude }));
+                    path.push(PathSeg::Index(if negative {
+                        -magnitude
+                    } else {
+                        magnitude
+                    }));
                 }
                 Some('.') => {
                     self.pos += 1;
@@ -630,8 +640,7 @@ impl Parser<'_> {
         if self.peek() != Some('}') {
             return self.fail_at(
                 start,
-                "unsupported parameter expansion: only a plain variable name in braces"
-                    .to_owned(),
+                "unsupported parameter expansion: only a plain variable name in braces".to_owned(),
             );
         }
         self.pos += 1;
@@ -674,8 +683,7 @@ impl Parser<'_> {
                 self.pos += 2;
                 let program = self.program(Some(')'))?;
                 if self.bump() != Some(')') {
-                    return self
-                        .fail_at(start, "unterminated $( command substitution".to_owned());
+                    return self.fail_at(start, "unterminated $( command substitution".to_owned());
                 }
                 acc.push_part(Part::CommandSub {
                     program,
@@ -729,14 +737,19 @@ impl Parser<'_> {
 /// The word's text when it is a single unquoted literal (keyword detection).
 fn unquoted_literal(word: &Word) -> Option<String> {
     match word.parts.as_slice() {
-        [Part::Text { text, quoted: false }] => Some(text.clone()),
+        [
+            Part::Text {
+                text,
+                quoted: false,
+            },
+        ] => Some(text.clone()),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Command, Connector, Part, PathSeg, RedirOp};
+    use super::{Command, Connector, Part, PathSeg, RedirOp, parse};
 
     fn one_command(src: &str) -> Command {
         let program = parse(src).expect("should parse");
@@ -947,7 +960,10 @@ mod tests {
             one_command("cmd &> all.log").redirects[0].op,
             RedirOp::BothTrunc
         );
-        assert_eq!(one_command("echo oops >&2").redirects[0].op, RedirOp::OutToErr);
+        assert_eq!(
+            one_command("echo oops >&2").redirects[0].op,
+            RedirOp::OutToErr
+        );
     }
 
     #[test]
@@ -1008,6 +1024,11 @@ mod tests {
     #[test]
     fn empty_input_is_empty_program() {
         assert!(parse("").expect("empty ok").items.is_empty());
-        assert!(parse("  \n # comment\n").expect("blank ok").items.is_empty());
+        assert!(
+            parse("  \n # comment\n")
+                .expect("blank ok")
+                .items
+                .is_empty()
+        );
     }
 }

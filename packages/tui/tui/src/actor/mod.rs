@@ -57,6 +57,11 @@ pub enum PtyCommand {
 /// in `exit_tx` and a [`PtyCommand::Kill`] has something to signal. After the
 /// child exits the actor keeps serving reads (the final screen stays
 /// inspectable) and stays alive until every handle is dropped.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one linear PTY event loop; splitting it would scatter the shared \
+              select state across helpers that each need most of it"
+)]
 pub async fn pty_actor(
     id: Uuid,
     mut pty: pty_process::Pty,

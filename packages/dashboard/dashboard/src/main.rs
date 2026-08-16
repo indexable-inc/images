@@ -14,6 +14,7 @@
 //! `dashboard demo` runs a self-contained producer that publishes one pane of
 //! each kind, so the canvas can be exercised with no other process running.
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,9 +22,11 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use dashboard_core::{
-    ExecTraceLine, ExecView, Hub, Pane, ProducerEvent, Publisher, RecordingStore, TerminalView,
-    discovery_dir, serve_hub, socket_path, subscribe,
+    Actor, ExecTraceLine, ExecView, Hub, InputEntry, InputLine, InputRouter, InputWatcher, Pane,
+    ProducerEvent, Publisher, RecordingStore, TerminalView, discovery_dir, serve_hub, socket_path,
+    subscribe_bidi,
 };
+use tokio::sync::mpsc;
 
 /// Aggregate every ix resource producer socket into one live web canvas.
 #[derive(Parser)]
@@ -87,6 +90,10 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
 
     let hub = Hub::new();
+    // Say who this writer is up front, so the aggregator's own commits (pane
+    // folds, auto-declared compose notes) are attributed in the history UI
+    // instead of arriving as an anonymous peer id.
+    hub.declare_identity(&Actor::agent("dashboard-aggregator"));
     let handle = tokio::runtime::Handle::current();
 
     // Persist the live board so a session survives a restart and can be shared.
@@ -130,22 +137,16 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             (store.clone(), recorder.id)
         });
 
-    // Discover producers and fold each event into the hub. The transport
-    // (directory scan, per-socket read, stale-socket reaping) lives in
-    // `dashboard_core::subscribe`, shared with the other consumer (`ix-windows`).
-    let mut events = subscribe(dir, Duration::from_millis(cli.rescan_ms), &handle);
-    let hub_for_events = hub.clone();
-    let discovery = tokio::spawn(async move {
-        while let Some(event) = events.recv().await {
-            match event {
-                ProducerEvent::Snapshot(snapshot) => {
-                    hub_for_events.apply_scope(&snapshot.producer, &snapshot.panes);
-                }
-                ProducerEvent::Gone { producer } => hub_for_events.remove_scope(&producer),
-            }
-        }
-    });
+    // Discover producers, fold each event into the hub, and route viewer
+    // inputs back the other way. The transport (directory scan, per-socket
+    // read, stale-socket reaping, the return channel) lives in
+    // `dashboard_core::subscribe`, shared with the other consumer
+    // (`ix-windows`, which uses the event half alone).
+    let feed = subscribe_bidi(dir, Duration::from_millis(cli.rescan_ms), &handle);
+    let discovery = tokio::spawn(fold_events(hub.clone(), feed.events, feed.inputs.clone()));
     dashboard.push_task(discovery);
+    let routing = tokio::spawn(route_inputs(hub.watch_inputs(), feed.inputs));
+    dashboard.push_task(routing);
 
     tokio::signal::ctrl_c().await?;
     println!("\ndashboard: shutting down");
@@ -157,6 +158,65 @@ async fn run_server(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         let _ = store.save(&id, &hub.export_snapshot());
     }
     Ok(())
+}
+
+/// Fold producer events into the hub, replaying a producer's scoped inputs
+/// back to it whenever it (re)appears.
+///
+/// Replay is what closes the offline gap: an answer written while a producer
+/// was down (or before this aggregator found it) sits in the document, and
+/// the producer receives it with its first snapshot. A value can therefore
+/// arrive twice -- once live through `route_inputs`, once replayed -- which
+/// is why an input value that triggers an action carries its own id for the
+/// producer to dedup on (the `send` convention, `{id, text}`).
+async fn fold_events(hub: Arc<Hub>, mut events: mpsc::Receiver<ProducerEvent>, router: InputRouter) {
+    let mut live: HashSet<String> = HashSet::new();
+    while let Some(event) = events.recv().await {
+        match event {
+            ProducerEvent::Snapshot(snapshot) => {
+                if live.insert(snapshot.producer.clone()) {
+                    replay_inputs(&hub, &router, &snapshot.producer);
+                }
+                hub.apply_scope(&snapshot.producer, &snapshot.panes);
+            }
+            ProducerEvent::Gone { producer } => {
+                live.remove(&producer);
+                hub.remove_scope(&producer);
+            }
+        }
+    }
+}
+
+/// Send every input under `producer`'s scope back to it.
+fn replay_inputs(hub: &Hub, router: &InputRouter, producer: &str) {
+    for entry in hub.inputs() {
+        if entry.scope == producer {
+            route_entry(router, entry);
+        }
+    }
+}
+
+/// Route each changed input to the producer whose scope owns it.
+async fn route_inputs(mut watcher: InputWatcher, router: InputRouter) {
+    while let Some(batch) = watcher.changed().await {
+        for entry in batch {
+            route_entry(&router, entry);
+        }
+    }
+}
+
+/// One entry to its producer: the scope half of the input key names the
+/// producer, and the rest is the wire line. A refused route is the
+/// disconnected-producer case `replay_inputs` exists for, not an error to
+/// surface per entry.
+fn route_entry(router: &InputRouter, entry: InputEntry) {
+    let InputEntry {
+        scope,
+        pane,
+        field,
+        value,
+    } = entry;
+    let _ = router.route(&scope, InputLine { pane, field, value });
 }
 
 /// Open the recordings store at the configured directory, or the default one.
@@ -217,6 +277,8 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
             cursor_visible: false,
             cursor_shape: "block".to_owned(),
             exit_code: None,
+            status: None,
+            agent: None,
         },
     );
     let html = Pane::html(
@@ -272,4 +334,94 @@ fn demo_panes(tick: u64) -> Vec<Pane> {
         },
     );
     vec![terminal, html, exec, data]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use dashboard_core::{Hub, Input, Pane, Publisher, subscribe_bidi};
+
+    use super::{fold_events, route_inputs};
+
+    /// The whole return path this binary wires: a viewer input lands in the
+    /// hub, `route_inputs` delivers it to the producer whose scope owns it,
+    /// and a producer found *after* the input exists gets it replayed on its
+    /// first snapshot.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inputs_route_live_and_replay_on_connect() {
+        let dir = std::env::temp_dir().join(format!("ix-dash-agg-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("p.sock");
+        let handle = tokio::runtime::Handle::current();
+
+        let mut publisher = Publisher::bind(path.clone(), &handle).expect("bind");
+        let mut inputs = publisher.inputs().expect("inputs taken once");
+        publisher.publish(&[Pane::html("agent-1", "t", "<b>hi</b>")]);
+        let producer = publisher.producer_id().to_owned();
+
+        let hub = Hub::new();
+        let feed = subscribe_bidi(dir.clone(), Duration::from_millis(20), &handle);
+        let fold = tokio::spawn(fold_events(hub.clone(), feed.events, feed.inputs.clone()));
+        let route = tokio::spawn(route_inputs(hub.watch_inputs(), feed.inputs.clone()));
+
+        // Wait until discovery folded the producer's snapshot into the hub;
+        // its write half was registered before that event was sent, so the
+        // input below cannot race the registration.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let seen = hub.history().iter().any(|change| {
+                change
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.contains(&producer))
+            });
+            if seen {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the producer never reached the hub"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // A viewer input under the producer's scope. `declare_note` is the
+        // one hub-side write that creates an input without standing up a
+        // browser document; the value fidelity of a browser write is covered
+        // by dashboard-core's own tests.
+        hub.declare_note(&producer, "agent-1", "compose")
+            .expect("declare");
+
+        let line = tokio::time::timeout(Duration::from_secs(5), inputs.recv())
+            .await
+            .expect("the routed input must arrive")
+            .expect("publisher alive");
+        assert_eq!(line.pane, "agent-1");
+        assert_eq!(line.field, "compose");
+        assert_eq!(
+            line.value,
+            Input::Note {
+                text: String::new()
+            }
+        );
+
+        // An aggregator restart: a fresh feed reconnects to the same living
+        // producer and must replay the scoped input it has never routed.
+        fold.abort();
+        route.abort();
+        let feed = subscribe_bidi(dir.clone(), Duration::from_millis(20), &handle);
+        let refold = tokio::spawn(fold_events(hub.clone(), feed.events, feed.inputs.clone()));
+
+        let replayed = tokio::time::timeout(Duration::from_secs(5), inputs.recv())
+            .await
+            .expect("the replayed input must arrive")
+            .expect("publisher alive");
+        assert_eq!(replayed.pane, "agent-1");
+        assert_eq!(replayed.field, "compose");
+
+        refold.abort();
+        publisher.stop().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

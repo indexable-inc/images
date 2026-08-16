@@ -1,0 +1,186 @@
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: 0 0 * * *
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-24.04, macOS-latest]
+        ghc: ['9.12', '9.10', '9.8', '9.6', '9.4', '9.2', '9.0', '8.10', '8.8', '8.6']
+        exclude:
+          - os: macos-latest
+            ghc: '9.0'
+          - os: macos-latest
+            ghc: '8.10'
+          - os: macos-latest
+            ghc: '8.8'
+          - os: macos-latest
+            ghc: '8.6'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install GHCup
+      uses: haskell/ghcup-setup@v1
+      with:
+        ghc: ${{ matrix.ghc }}
+        cabal: latest
+
+    - if: runner.os == 'macOS'
+      name: Install system deps via brew
+      run: brew install coreutils autoconf automake
+
+    - uses: actions/cache@v4
+      name: Cache cabal stuff
+      with:
+        path: |
+          ~/.cabal/store
+          dist-newstyle
+        key: ${{ runner.os }}-${{ matrix.ghc }}-${{ github.sha }}
+        restore-keys: ${{ runner.os }}-${{ matrix.ghc }}-
+    - name: Build
+      run: |
+        ghc --version
+        cabal --version
+        cabal update
+        autoreconf --version
+        autoreconf -i
+        cabal sdist -z -o .
+        cabal get unix-*.tar.gz
+        cd unix-*/
+        cabal test all --test-show-details=direct
+    - name: Haddock
+      run: |
+        cabal haddock --disable-documentation
+
+  redhat-ubi9:
+    runs-on: ubuntu-24.04
+    container:
+      image: redhat/ubi9:latest
+    steps:
+    - name: Install prerequisites
+      run: |
+        yum install -y gcc gmp gmp-devel make ncurses xz perl autoconf
+
+    - name: Install GHCup
+      uses: haskell/ghcup-setup@v1
+      with:
+        ghc: latest
+        cabal: latest
+
+    - uses: actions/checkout@v4
+
+    - name: Test
+      run: |
+        cabal --version
+        cabal update
+        autoreconf --version
+        autoreconf -i
+        cabal test all --test-show-details=direct
+
+  fedora37:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:37
+    steps:
+    - name: Install prerequisites
+      run: |
+        dnf install -y gcc gmp gmp-devel make ncurses ncurses-compat-libs xz perl autoconf
+
+    - name: Install GHCup
+      uses: haskell/ghcup-setup@v1
+      with:
+        ghc: latest
+        cabal: latest
+
+    - uses: actions/checkout@v4
+    - name: Test
+      run: |
+        cabal --version
+        cabal update
+        autoreconf --version
+        autoreconf -i
+        # test filepath >= 1.5
+        cabal test --constraint='filepath >= 1.5.0.0' all --test-show-details=direct
+
+  i386:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run build (32 bit linux)
+        uses: docker://hasufell/i386-alpine-haskell:3.12
+        with:
+          args: sh -c "apk update && apk add --no-cache autoconf automake make && cabal update && autoreconf --version && autoreconf -i && cabal v2-test --constraint 'optparse-applicative -process' --constraint 'QuickCheck +old-random' --constraint 'tasty -unix' all"
+
+  arm:
+    runs-on: [self-hosted, Linux, ARM64]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm32v7, arm64v8]
+    steps:
+      - uses: docker://hasufell/arm64v8-ubuntu-haskell:focal
+        name: Cleanup
+        with:
+          args: "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - if: matrix.arch == 'arm32v7'
+        uses: docker://hasufell/arm32v7-ubuntu-haskell:focal
+        name: Run build (arm32v7 linux)
+        with:
+          args: sh -c "cabal update && autoreconf -i && cabal test all --test-show-details=direct"
+
+      - if: matrix.arch == 'arm64v8'
+        uses: docker://hasufell/arm64v8-ubuntu-haskell:focal
+        name: Run build (arm64v8 linux)
+        with:
+          args: sh -c "cabal update && autoreconf -i && cabal test all --test-show-details=direct"
+
+  freebsd:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: [self-hosted, FreeBSD, X64]
+            ghc: 9.4
+          - os: [self-hosted, FreeBSD, X64]
+            ghc: 9.6
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo pkg install -y curl gcc gmp gmake ncurses perl5 libffi libiconv git bash misc/compat10x misc/compat11x misc/compat12x gmake autoconf
+
+      - name: Install GHCup
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ matrix.ghc }}
+          cabal: latest
+
+      - name: Run build
+        run: |
+          autoreconf --version
+          autoreconf -i
+          cabal update
+          cabal sdist -z -o .
+          cabal get unix-*.tar.gz
+          cd unix-*/
+          cabal test all --test-show-details=direct
+

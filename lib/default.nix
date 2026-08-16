@@ -9,27 +9,13 @@
   sdk-prebuilt-nixpkgs,
   sdk-prebuilt-rust-overlay,
   home-manager,
-  home-manager-src,
   hermes-agent,
-  btop-src,
-  nushell-src,
-  git-src,
-  jj-src,
   drgn-src,
   perftest-src,
   fff-src,
   nu-jupyter-kernel-src,
-  launchk-src,
   nix-ninja-src,
   snix-src,
-  clippy-src,
-  codex-src,
-  nix-src,
-  nix-fast-build-src,
-  rnix-0-12-src,
-  rnix-0-14-src,
-  ghostty-src,
-  mesa-src,
   # The flake's own source (`self`), carrying `.outPath` (a `-source` store
   # path with string context, so it roots into a closure like `nixpkgs`) and
   # `.narHash`. Only the flake scope sees these, so they are plumbed down to
@@ -40,6 +26,32 @@
   inherit (nixpkgs) lib;
 
   system = "x86_64-linux";
+  viewRoot =
+    if self == null
+    then paths.root
+    else self.outPath;
+
+  viewSource = name:
+    builtins.path {
+      path = viewRoot + "/views/${name}";
+      name = "${name}-source";
+    };
+  btop-src = viewSource "btop";
+  clippy-src = viewSource "clippy";
+  codex-src = viewSource "codex";
+  curl-src = viewSource "curl";
+  ghosttySource = viewSource "ghostty";
+  git-src = viewSource "git";
+  home-manager-src = viewSource "home-manager";
+  jj-src = viewSource "jj";
+  launchkSource = viewSource "launchk";
+  mesa-src = viewSource "mesa";
+  nix-src = viewSource "nix";
+  nix-fast-build-src = viewSource "nix-fast-build";
+  nushell-src = viewSource "nushell";
+  rnix-0-12-src = viewSource "rnix-0-12";
+  rnix-0-14-src = viewSource "rnix-0-14";
+  starship-src = viewSource "starship";
 
   # Registry-driven package discovery, exposed as a factory over any packages
   # root so a downstream consumer (ix) discovers its own `packages/<name>/
@@ -87,48 +99,6 @@
   # substitutable (darwin cross-lane eval-time IFD nodes). See its doc comment.
   evalTimeSubstitutable = import ./util/eval-time-substitutable.nix;
   publicArtifactsFor = pkgs: import ./util/public-artifacts.nix {inherit lib pkgs;};
-  # Apply an in-repo ordered patch series to an upstream source tree (the
-  # de-forking replacement for a separate fork repo). Bound per package set like
-  # `cargoUnit` / `rustWorkspace` so a patched source builds for the consuming
-  # system, not the top-level x86_64-linux one. See lib/util/patched-src.nix.
-  patchedSrcFor = pkgs:
-    import ./util/patched-src.nix {
-      inherit lib evalTimeSubstitutable pkgs forkPackages;
-      inherit (pkgs) applyPatches;
-      patchesRoot = paths.root;
-    };
-  # Maintained-fork registry (name -> input or vendored path / forkRepo /
-  # bookmark / upstreaming intent), the single source of truth for the
-  # fork-sync workflow and upstream-sync. See lib/fork-packages.nix.
-  #
-  # Guarded here rather than in the data file, which takes no arguments and so
-  # has no `lib`. Both invariants fail at EVAL, for everyone, because both
-  # would otherwise fail late and quietly: a source-less entry sends every
-  # consumer looking up a flake.lock node that is not there, and an
-  # autoUpdate + vendored entry would be skipped by the fork-sync rebase loop
-  # (which floats flake inputs, and a vendored fork has none) without any
-  # in-tree lane rebasing it instead, so the fork would silently stop tracking
-  # upstream. ENG-11685 is the lane that would make the combination legal.
-  forkPackages = let
-    registry = (import ./fork-packages.nix).forkPackages;
-    sourceless = builtins.filter (f: (f ? input) == (f ? vendored)) registry;
-    floatingVendored =
-      builtins.filter (f: (f ? vendored) && (f.autoUpdate or false)) registry;
-    names = fs: lib.concatMapStringsSep ", " (f: f.name) fs;
-  in
-    lib.throwIf (sourceless != []) ''
-      lib/fork-packages.nix: ${names sourceless} declare(s) both `input` and
-      `vendored`, or neither. Exactly one: a fork is fetched by rev or carried
-      in this repo as a derived view, never both and never unspecified.
-    ''
-    lib.throwIf (floatingVendored != []) ''
-      lib/fork-packages.nix: ${names floatingVendored} declare(s) both
-      `vendored` and `autoUpdate = true`. The fork-sync cron rebases a floating
-      fork by moving its flake input, and a vendored fork has no input to move,
-      so it would silently stop being rebased. Set autoUpdate = false until
-      ENG-11685 gives vendored forks their own rebase lane.
-    ''
-    registry;
   # Mirror-enabled packages (opt-in `mirror` attr in a package's package.nix):
   # id, repo-relative path, and mirror-repo coordinates for each package that
   # publishes a standalone read-only mirror. `nix eval --json
@@ -148,23 +118,6 @@
         else null;
     })
     packageRegistry.mirrorEntries;
-  # Build the de-forked-package flake checks (`patched-src-<name>` +
-  # `patch-dag-<name>`) for a repo's fork list. The single owner of those check
-  # derivations, reused by `lib/per-system.nix` for index's own forks and by a
-  # downstream consumer (ix) for its forks via `inputs.index.lib.mkForkChecks`.
-  # See lib/mk-fork-checks.nix.
-  mkForkChecks = args: import ./mk-fork-checks.nix ({inherit lib;} // args);
-  # The directory holding the shared DAG driver + verifier (`dag-check.nu` +
-  # `dag-lib.nu`) that `mkForkChecks` stages into each `patch-dag-<name>` build.
-  # index's own forks migrated to jj megamerge fork repos (no in-repo series),
-  # but ix still keeps patch-dir forks and consumes this via `mkForkChecks`.
-  forkDagCheckSrc = paths.root + "/lib/util/fork-dag-check";
-  # The generated GitHub-org roster driving the @-mention block on upstream
-  # PRs. Live org membership cannot be read at eval time, so it is generated
-  # (`nix run .#upstream-sync -- members --write`) and committed like a lock
-  # file; both upstreaming wrappers bake this path in. Exposed here rather
-  # than reached for with `../` from packages/upstream-pr.
-  orgMembersFile = paths.root + "/packages/upstream-sync/org-members.json";
   secretRefs = import ./util/secret-refs.nix {inherit lib;};
   selfVersionFor = self: import ./util/self-version.nix {inherit lib self;};
   checks = import ./checks.nix {inherit lib;};
@@ -315,10 +268,6 @@
     ;
   cargoUnit = cargoUnitFor pkgs;
   cargoUnitExternal = import ./rust/external.nix {repoRoot = paths.root;};
-  # Default patched-source builder, bound to the top-level x86_64-linux pkgs for
-  # image/module eval; `ixForPackages` / the overlay context rebind it to the
-  # consuming pkgs so a patched source builds for its own system.
-  patchedSrc = patchedSrcFor pkgs;
   # Patch the vendored rnix inside a rust tool so it lexes underscore digit
   # separators in nix numeric literals; the alejandra/statix/deadnix package
   # dirs under packages/nix/ consume this. See its doc comment.
@@ -568,6 +517,12 @@
   caller's package set. The default `rustWorkspace` uses the repo's
   `x86_64-linux` package set for image and module evaluation.
   */
+  # Bound here rather than inline in `rustWorkspaceFor` below because two
+  # consumers need it: that workspace builder, and `sharedHelpers`, which is
+  # the `ix` module argument `lib/dev/profiles.nix` builds the dev toolchain
+  # through.
+  rustToolchainFor = languages.rust.toolchain;
+
   rustWorkspaceFor = import ./rust/workspace.nix {
     inherit
       lib
@@ -581,8 +536,23 @@
       appleSdkToolchain
       pins
       ;
-    ghosttySrc = ghostty-src;
-    rustToolchainFor = languages.rust.toolchain;
+    ghosttySrc = ghosttySource;
+    inherit rustToolchainFor;
+    # The ix rustc fork for the native unit graph (workspace.nix's
+    # nativeForkToolchain). Built straight off its registry path with the
+    # minimal `ix` closure the package reads (pins + languages + pkgs), the
+    # same bootstrap shape tooling.nix uses for llm-clippy: resolving it
+    # through the assembled package set would let the overlay that builds
+    # rustc-ix recurse into itself, and making it the tooling.nix default
+    # would move `defaultToolchainId` under every existing prebuilt-unit
+    # assertion.
+    forkRustToolchainFor = forkPkgs:
+      forkPkgs.callPackage (packagePath "rustc-ix") {
+        ix = {
+          pkgs = forkPkgs;
+          inherit languages pins;
+        };
+      };
   };
   rustWorkspace = rustWorkspaceFor pkgs;
 
@@ -599,6 +569,8 @@
       inherit lib packageRegistry buildPyStrictCheck;
       pkgs = unibindPkgs;
       rustWorkspace = rustWorkspaceFor unibindPkgs;
+      cargoUnit = cargoUnitFor unibindPkgs;
+      rustToolchain = languages.rust.toolchain unibindPkgs;
       wheelBuilder = paths.root + "/lib/build/pyo3-wheel.py";
     };
   unibind = unibindFor pkgs;
@@ -674,7 +646,12 @@
   apple-sdk toolchain above; args are the exact nixpkgs deps it needs (see
   the file) plus `{ target, toolchain }`, returning the compiler derivation. See [`lib/darwin/cross-ghc.nix`](lib/darwin/cross-ghc.nix).
   */
-  crossGhc = import ./darwin/cross-ghc.nix;
+  crossGhc = import ./darwin/cross-ghc.nix {
+    ghcSrc = builtins.path {
+      path = paths.root + "/views/ghc-cross";
+      name = "ghc-cross-view";
+    };
+  };
 
   /**
   Setup-based builder that compiles a Haskell package plus its library
@@ -725,9 +702,6 @@
       efx
       evalTimeSubstitutable
       evaluatorGate
-      forkPackages
-      forkDagCheckSrc
-      orgMembersFile
       formatProvenance
       gitDefaults
       goUnit
@@ -741,15 +715,12 @@
       minecraft
       mirrorPackages
       mkBenchSuite
-      mkForkChecks
       mkMinecraftLoader
       mkMinecraftNbtFormat
       wrapPackage
       mkMinecraftSyncManaged
       netCidr
       paths
-      patchedSrc
-      patchedSrcFor
       pins
       provenance
       publicArtifactsFor
@@ -757,6 +728,7 @@
       repoRustToolchainFor
       rnixDigitSeparators
       ruffAnnArgs
+      rustToolchainFor
       rustWorkspace
       rustWorkspaceFor
       secretRefs
@@ -779,44 +751,26 @@
     btopSrc = btop-src;
     home-managerSrc = home-manager-src;
     gitSrc = git-src;
+    starshipSrc = starship-src;
     jjSrc = jj-src;
     nushell = nushell-src;
     nushellSrc = nushell-src;
     codexSrc = codex-src;
+    curlSrc = curl-src;
     clippySrc = clippy-src;
     nixSrc = nix-src;
     nix-fast-buildSrc = nix-fast-build-src;
-    # Carried in this repo at `vendor/nix-derivation` as a jj-views derived
-    # view of indexable-inc/Haskell-Nix-Derivation-Library, not fetched by rev,
-    # so there is no pin to drift and a fork edit is an ordinary in-tree diff.
-    #
-    # `builtins.path` rather than a bare path literal or a
-    # `path:./vendor/nix-derivation` flake input, and this is the whole reason
-    # a vendored fork is affordable. Both of those resolve to a subpath of the
-    # WHOLE flake source (`<flake>/./vendor/nix-derivation`), so any commit
-    # anywhere in the repo moves the string and rebuilds the fork.
-    # `builtins.path` hashes just this directory, so the store path moves only
-    # when the fork does. lib/kernel/kbuild-unit.nix takes the same slice for
-    # the same reason.
-    #
-    # `paths.root + "/..."` rather than `../vendor/nix-derivation` because
-    # astlog's no-parent-path rule forbids a `../` literal that reaches across
-    # a directory. Same directory either way, so the same store path
-    # (`am4z46cf...-nix-derivation-source`), verified after the change.
-    nix-derivationSrc = builtins.path {
-      path = paths.root + "/vendor/nix-derivation";
-      name = "nix-derivation-source";
-    };
+    nix-derivationSrc = viewSource "nix-derivation";
     rnix-0-12Src = rnix-0-12-src;
     rnix-0-14Src = rnix-0-14-src;
     drgnSrc = drgn-src;
     perftestSrc = perftest-src;
     fffSrc = fff-src;
     nuJupyterKernelSrc = nu-jupyter-kernel-src;
-    launchkSrc = launchk-src;
+    launchkSrc = launchkSource;
     nixNinjaSrc = nix-ninja-src;
     snixSrc = snix-src;
-    ghosttySrc = ghostty-src;
+    ghosttySrc = ghosttySource;
     mesaSrc = mesa-src;
     # Pinned toolchain evaluation context for the prebuilt public-SDK rlib:
     # the exact nixpkgs + rust-overlay sources whose evaluation reproduces the

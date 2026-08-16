@@ -1,0 +1,5 @@
+# cabal check
+These warnings may cause trouble when distributing the package:
+Warning: [recursive-glob] In the 'data-files': glob '**/*.dat' starts at project root directory, this might include `.git/`, ``dist-newstyle/``, or other large directories!
+Warning: [recursive-glob] In the 'extra-doc-files': glob '**/*.md' starts at project root directory, this might include `.git/`, ``dist-newstyle/``, or other large directories!
+Warning: [recursive-glob] In the 'extra-source-files': glob '**/*.hs' starts at project root directory, this might include `.git/`, ``dist-newstyle/``, or other large directories!

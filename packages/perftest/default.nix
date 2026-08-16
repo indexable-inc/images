@@ -13,6 +13,10 @@ stdenv.mkDerivation {
 
   src = ix.perftestSrc;
 
+  # The benchmarks need real RDMA hardware; upstream wires no unit tests
+  # into `make check`.
+  doCheck = false;
+
   # perftest ships autogen.sh (an `autoreconf -i` wrapper) rather than a
   # committed ./configure, so autoreconfHook regenerates the build system.
   nativeBuildInputs = [

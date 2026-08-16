@@ -1,0 +1,31 @@
+#!/bin/sh
+
+set -eux
+
+GMP_VERSION=6.3.0
+
+GMP_TARBALL=gmp-$GMP_VERSION.tar.xz
+GMP_SIGNATURE=gmp-$GMP_VERSION.tar.xz.sig
+
+GMP_DOWNLOAD_TARBALL=https://gmplib.org/download/gmp/$GMP_TARBALL
+GMP_DOWNLOAD_SIGNATURE=https://gmplib.org/download/gmp/$GMP_SIGNATURE
+
+OUT_TARBALL=gmp-$GMP_VERSION-nodoc.tar.xz
+
+wget "$GMP_DOWNLOAD_TARBALL"
+wget "$GMP_DOWNLOAD_SIGNATURE"
+gpg --keyserver keyserver.ubuntu.com --recv-keys 343C2FF0FBEE5EC2EDBEF399F3599FF828C67298
+gpg --verify "$GMP_SIGNATURE" "$GMP_TARBALL"
+# Fingerprint is okay
+rm "$GMP_SIGNATURE"
+
+tar -xJf "$GMP_TARBALL"
+rm "$GMP_TARBALL"
+cd gmp-$GMP_VERSION
+rm -r doc
+patch -p1 < ../0001-Enable-building-for-wasm32-wasi.patch
+patch -p1 < ../gmpsrc.patch
+cd ..
+XZ_OPT="-T0 -9e" tar -cJ --sort=name --mtime=0 --owner=0 --group=0 --numeric-owner -f $OUT_TARBALL gmp-$GMP_VERSION
+rm -r gmp-$GMP_VERSION
+echo "Output tarball is in $OUT_TARBALL"

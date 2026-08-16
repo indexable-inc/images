@@ -1,0 +1,82 @@
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:21:5
+   |
+LL |     io().await;
+   |     ^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:20:5
+   |
+LL |     io().instrument("a").await;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+   = note: `-D clippy::uninstrumented-await` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::uninstrumented_await)]`
+
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:27:5
+   |
+LL |     io().await;
+   |     ^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:26:5
+   |
+LL |     io().instrument("a").await;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:29:13
+   |
+LL |     let _ = io().await + 1;
+   |             ^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:26:5
+   |
+LL |     io().instrument("a").await;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:39:9
+   |
+LL |         io().await;
+   |         ^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:38:9
+   |
+LL |         io().instrument("a").await;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:47:5
+   |
+LL |     io().await;
+   |     ^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:46:5
+   |
+LL |     io().awaited("a").await;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+
+error: this `.await` is not covered by a span, so its time is invisible in the trace
+  --> tests/ui/uninstrumented_await.rs:118:5
+   |
+LL |     inner.await;
+   |     ^^^^^^^^^^^
+   |
+note: this function instruments other `.await`s, so its trace reads as complete
+  --> tests/ui/uninstrumented_await.rs:113:5
+   |
+LL |     io().instrument("outer").await;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: give the future a span before awaiting it (`.awaited("...")`, or `.instrument(tracing::trace_span!("..."))`), or, if the callee is already `#[instrument]`ed, `#[expect(clippy::uninstrumented_await, reason = "...")]` on the statement
+
+error: aborting due to 6 previous errors
+

@@ -165,14 +165,14 @@
       ln -sf ${lib.escapeShellArg file} ${target}
     '';
   in
-    pkgs.runCommand "velocity-managed-${label}" {} ''
+    pkgs.runCommand "velocity-managed-${label}" {__structuredAttrs = true;} ''
       mkdir -p "$out"
       ${lib.concatMapAttrsStringSep "\n" linkEntry files}
     '';
 
   managed = {
     config = mkManaged "config" managedConfigFiles;
-    plugins = pkgs.runCommand "velocity-managed-plugins" {} (
+    plugins = pkgs.runCommand "velocity-managed-plugins" {__structuredAttrs = true;} (
       ''
         mkdir -p "$out"
       ''
@@ -722,6 +722,14 @@ in {
       preStart = ''
         set -eu
 
+        # plugins/ is made here rather than declared as a nested
+        # `StateDirectory = "velocity/plugins"`: systemd creates the
+        # intermediate directories of a nested state path with a plain mkdir
+        # and only chowns the innermost one (systemd.exec(5)), so the nested
+        # form would leave `${dataDir}` itself root-owned -- and under
+        # `ProtectSystem = "strict"` only the declared leaf is bind-mounted
+        # writable, so this preStart's own writes into `${dataDir}` would fail
+        # with EROFS. Measured in index/tests/hardened-state-directory-vm.nix.
         mkdir -p ${lib.escapeShellArg "${dataDir}/plugins"}
 
         if [ -f ${lib.escapeShellArg managedPluginManifest} ]; then
@@ -742,13 +750,27 @@ in {
         ix.systemdHardening
         // {
           Type = "simple";
-          # DynamicUser (not a static velocity user): systemd allocates the uid
-          # per boot and re-chowns the StateDirectory to it, so the managed
-          # plugins dir under `${dataDir}` is owned by the service even after a
-          # golden-snapshot restore changes the uid. A static User= leaves the
-          # snapshot's plugins dir owned by the previous uid (real host-root,
-          # outside the idmapped state mount), unwritable by the new service
-          # (`ln: ... Permission denied`, crash-looping the proxy).
+          # DynamicUser is a choice here, not a requirement. It was
+          # introduced (index#1649) as a workaround for a static `User=`
+          # whose plugins dir came back unwritable after a golden restore,
+          # blamed first on an idmapped state mount that varies per VM and
+          # then on `PrivateUsers=` leaving a nested StateDirectory leaf
+          # root-owned. Neither exists. ix idmaps nothing: a guest's state
+          # lives in its own XFS block volume (`root=/dev/vda`, see
+          # `crates/vm/host/runtime/src/config/disk.rs`), a restore
+          # COW-branches that volume, and nothing on either path chowns or
+          # shifts an id. And systemd chowns a static user's StateDirectory
+          # exactly as it does a dynamic one -- flat, nested, and recursively
+          # over a tree that already exists owned by some other uid (upstream
+          # systemd#11842, fixed in v242; we run 261).
+          #
+          # index/tests/hardened-state-directory-vm.nix boots all six shapes
+          # under this same hardening set and asserts each service can write
+          # its own state dir, including one that inherits a
+          # DynamicUser-created tree. So a static `User=` would work here; it
+          # is left as DynamicUser because a proxy with no reason to own a
+          # stable uid may as well not have one, and switching back would
+          # migrate every deployed /var/lib/velocity for no gain.
           DynamicUser = true;
           WorkingDirectory = dataDir;
           ExecStart = lib.escapeShellArgs javaArgs;

@@ -1,0 +1,11 @@
+[package]
+name = "chain-d"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Fixture exercises the rmeta comment-edit cutoff through a real dependency
+# chain; the explicit `path` edge is the thing under test, not a real
+# workspace dep.
+# astlog-ignore: no-cargo-path-dep
+chain-c = { path = "../chain-c" }

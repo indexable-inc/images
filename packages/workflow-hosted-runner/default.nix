@@ -28,6 +28,7 @@ quietly outlive the thing that justified it.
 */
 {
   ix,
+  lib,
   pkgs ? ix.pkgs,
 }: let
   # The .github tree alone, not the repo root: this lint reads nothing else, and
@@ -86,7 +87,7 @@ in
     scan() {
       yq -o=json '.' "$1" \
         | jq --exit-status --arg workflow "$2" --arg allow "$3" \
-            --arg repo ${pkgs.lib.escapeShellArg repo} --from-file ${scanner}
+            --arg repo ${lib.escapeShellArg repo} --from-file ${scanner}
     }
 
     fixtures=$PWD/fixtures
@@ -353,12 +354,12 @@ in
     for workflow in "''${workflows[@]}"; do
       # stdout is jq's `true` per compliant workflow, 51 lines of it. The
       # refusal goes to stderr, so dropping stdout loses nothing diagnostic.
-      scan "$workflow" ".github/workflows/$(basename "$workflow")" ${pkgs.lib.escapeShellArg allowJson} >/dev/null
+      scan "$workflow" ".github/workflows/$(basename "$workflow")" ${lib.escapeShellArg allowJson} >/dev/null
     done
 
-    ${pkgs.lib.concatStringsSep "\n" (
-      pkgs.lib.mapAttrsToList
-      (key: why: ''printf 'workflow-hosted-runner: ALLOWED %s -- %s\n' ${pkgs.lib.escapeShellArg key} ${pkgs.lib.escapeShellArg why}'')
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList
+      (key: why: ''printf 'workflow-hosted-runner: ALLOWED %s -- %s\n' ${lib.escapeShellArg key} ${lib.escapeShellArg why}'')
       allowlist
     )}
     printf 'workflow-hosted-runner: every job claims an ix-ci-run-* fleet runner\n'

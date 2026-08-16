@@ -13,6 +13,7 @@ mod helper;
 mod protocol;
 mod serve;
 mod socket;
+mod token;
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -60,6 +61,30 @@ enum Action {
     /// Print the socket path this host derives, so a long-lived process can
     /// agree with the helper without being told.
     SocketPath,
+    /// git's credential helper protocol answered from a token file the host
+    /// already holds, for a VM provisioned from the ix secret store rather
+    /// than borrowing from a workstation. Register as `credential.helper`.
+    TokenHelper {
+        /// The file holding the token, e.g. a delivered secret.
+        #[arg(long)]
+        token_file: PathBuf,
+        /// Hosts this will answer for. Repeatable.
+        #[arg(long = "allow-host", default_values_t = [String::from("github.com")])]
+        allow_host: Vec<String>,
+        /// The username to pair with the token. GitHub ignores it for PATs
+        /// and app tokens, but it must be present.
+        #[arg(long, default_value = "x-access-token")]
+        username: String,
+        /// git passes `get`, `store` or `erase`.
+        operation: String,
+    },
+    /// Exit nonzero, naming the cause, if a token file cannot produce a
+    /// credential. The preflight for a unit about to need one.
+    TokenCheck {
+        /// The file holding the token.
+        #[arg(long)]
+        token_file: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -69,6 +94,18 @@ fn main() -> Result<()> {
         // skips the report handler: a panic hook that pretty-prints is
         // startup cost on a hot path with nothing to pretty-print.
         Action::Helper { operation } => helper::run(&operation),
+        // Spawned by git per authenticated fetch, so it skips the report
+        // handler for the same reason `Helper` does.
+        Action::TokenHelper {
+            token_file,
+            allow_host,
+            username,
+            operation,
+        } => token::helper(&operation, &token_file, &allow_host, &username),
+        Action::TokenCheck { token_file } => {
+            color_eyre::install()?;
+            token::check(&token_file)
+        }
         Action::SocketPath => {
             println!("{}", socket::path().display());
             Ok(())
@@ -97,7 +134,8 @@ fn lend(host: &str, remote_command: &[String]) -> Result<()> {
     let local_for_thread = local.clone();
     // The agent dies with this process, so the loan cannot outlive the
     // session even if ssh is killed rather than exiting.
-    let agent = std::thread::spawn(move || serve::run(&local_for_thread, &allow, &serve::GhResolver));
+    let agent =
+        std::thread::spawn(move || serve::run(&local_for_thread, &allow, &serve::GhResolver));
 
     let status = Command::new("ssh")
         .arg("-R")
@@ -111,7 +149,9 @@ fn lend(host: &str, remote_command: &[String]) -> Result<()> {
     if agent.is_finished() {
         // The agent only returns on a bind failure, which is the
         // interesting error to surface over ssh's exit code.
-        agent.join().map_err(|_| color_eyre::eyre::eyre!("credential agent panicked"))??;
+        agent
+            .join()
+            .map_err(|_| color_eyre::eyre::eyre!("credential agent panicked"))??;
     }
 
     if status.success() {

@@ -1,21 +1,26 @@
 {
   lib,
-  pkgs,
+  stdenvNoCC,
+  fetchurl,
   ix,
 }: let
   pin = (ix.pins.loadPins ./pins.json).ix-cli;
 in
-  pkgs.stdenvNoCC.mkDerivation {
+  stdenvNoCC.mkDerivation {
     pname = "ix-cli";
-    version = "unstable-2026-08-02";
-    src = pkgs.fetchurl {
+    version = "unstable-2026-08-05";
+    src = fetchurl {
       inherit (pin) hash url;
     };
     dontUnpack = true;
     dontStrip = true;
     strictDeps = true;
 
+    # Pinned release binary; nothing to test at build time.
+    doCheck = false;
+
     installPhase = ''
+      # shell
       runHook preInstall
       install -Dm755 "$src" "$out/bin/ix"
       runHook postInstall

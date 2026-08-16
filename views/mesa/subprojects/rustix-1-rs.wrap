@@ -1,0 +1,6 @@
+[wrap-file]
+directory = rustix-1.1.2
+source_url = https://crates.io/api/v1/crates/rustix/1.1.2/download
+source_filename = rustix-1.1.2.tar.gz
+source_hash = cd15f8a2c5551a84d56efdc1cd049089e409ac19a3072d5037a17fd70719ff3e
+patch_directory = rustix-1-rs

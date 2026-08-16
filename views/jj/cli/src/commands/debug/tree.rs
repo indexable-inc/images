@@ -1,0 +1,87 @@
+// Copyright 2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::fmt::Debug;
+use std::io::Write as _;
+
+use jj_lib::backend::BackendResult;
+use jj_lib::backend::TreeId;
+use jj_lib::merge::Merge;
+use jj_lib::merge::MergedTreeValue;
+use jj_lib::repo::Repo as _;
+use jj_lib::repo_path::RepoPathBuf;
+
+use crate::cli_util::CommandHelper;
+use crate::cli_util::RevisionArg;
+use crate::command_error::CommandError;
+use crate::command_error::user_error;
+use crate::ui::Ui;
+
+/// List the recursive entries of a tree.
+#[derive(clap::Args, Clone, Debug)]
+pub struct DebugTreeArgs {
+    #[arg(long, short = 'r', value_name = "REVSET")]
+    revision: Option<RevisionArg>,
+
+    #[arg(long, conflicts_with = "revision")]
+    id: Option<String>,
+
+    #[arg(long, requires = "id")]
+    dir: Option<String>,
+
+    #[arg(value_name = "FILESETS")]
+    paths: Vec<String>,
+    // TODO: Add an option to include trees that are ancestors of the matched paths
+}
+
+pub async fn cmd_debug_tree(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &DebugTreeArgs,
+) -> Result<(), CommandError> {
+    let workspace_command = command.workspace_helper(ui).await?;
+    let matcher = workspace_command
+        .parse_file_patterns(ui, &args.paths)?
+        .to_matcher();
+    let entries: Box<dyn Iterator<Item = (RepoPathBuf, BackendResult<MergedTreeValue>)>> =
+        if let Some(tree_id_hex) = &args.id {
+            let tree_id =
+                TreeId::try_from_hex(tree_id_hex).ok_or_else(|| user_error("Invalid tree id"))?;
+            let dir = if let Some(dir_str) = &args.dir {
+                workspace_command.parse_file_path(dir_str)?
+            } else {
+                RepoPathBuf::root()
+            };
+            let store = workspace_command.repo().store();
+            let tree = store.get_tree(dir, &tree_id).await?;
+            // We can't use `MergedTree` here, since it only supports iterating from the
+            // root, but we support a `--dir` option to read trees at any path.
+            Box::new(
+                tree.entries_matching(matcher.as_ref())
+                    .map(|(path, value)| (path, Ok(Merge::normal(value)))),
+            )
+        } else {
+            let commit = workspace_command
+                .resolve_single_rev(ui, args.revision.as_ref().unwrap_or(&RevisionArg::AT))
+                .await?;
+            let tree = commit.tree();
+            Box::new(tree.entries_matching(matcher.as_ref()))
+        };
+    for (path, value) in entries {
+        let ui_path = workspace_command.format_file_path(&path);
+        writeln!(ui.stdout(), "{ui_path}: {value:?}")?;
+    }
+
+    Ok(())
+}

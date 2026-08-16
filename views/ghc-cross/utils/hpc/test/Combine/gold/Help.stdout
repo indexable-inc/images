@@ -1,0 +1,15 @@
+Usage: hpc combine [OPTION] .. <TIX_FILE> <TIX_FILE>
+Combine two .tix files in a single .tix file
+
+
+Options:
+
+    --exclude=[PACKAGE:][MODULE]  exclude MODULE and/or PACKAGE
+    --include=[PACKAGE:][MODULE]  include MODULE and/or PACKAGE
+    --output=FILE                 output FILE
+    --function=FUNCTION           combine .tix files with join function, default = ADD
+                                  FUNCTION = ADD | DIFF | SUB
+    --union                       use the union of the module namespace (default is intersection)
+    --verbosity=[0-2]             verbosity level, 0-2
+                                  default 1
+

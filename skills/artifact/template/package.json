@@ -1,0 +1,18 @@
+{
+  "name": "artifact",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "mdsvex": "^0.12.7",
+    "shiki": "^4.1.0",
+    "svelte": "^5.55.9",
+    "vite": "^8.0.14"
+  }
+}

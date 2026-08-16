@@ -1,0 +1,384 @@
+cabal-version:  1.12
+name:           unix
+version:        2.8.7.0
+-- NOTE: Don't forget to update ./changelog.md
+
+license:        BSD3
+license-file:   LICENSE
+maintainer:     Julian Ospald <hasufell@posteo.de>, Viktor Dukhovni <ietf-dane@dukhovni.org>, Andrew Lelechenko <andrew.lelechenko@gmail.com>
+homepage:       https://github.com/haskell/unix
+bug-reports:    https://github.com/haskell/unix/issues
+synopsis:       POSIX functionality
+category:       System
+build-type:     Configure
+tested-with:    GHC==9.12.1,
+                GHC==9.10.1,
+                GHC==9.8.4,
+                GHC==9.6.6,
+                GHC==9.4.7,
+                GHC==9.2.8,
+                GHC==9.0.2,
+                GHC==8.10.7,
+                GHC==8.8.4,
+                GHC==8.6.5
+description:
+    This package gives you access to the set of operating system
+    services standardised by
+    <http://pubs.opengroup.org/onlinepubs/9699919799/ POSIX.1-2008>
+    (or the IEEE Portable Operating System Interface for Computing
+    Environments - IEEE Std. 1003.1).
+    .
+    The package is not supported under Windows.
+
+extra-source-files:
+    changelog.md
+    config.guess
+    config.sub
+    configure
+    configure.ac
+    include/HsUnix.h
+    include/HsUnixConfig.h.in
+    install-sh
+    unix.buildinfo.in
+
+extra-tmp-files:
+    autom4te.cache
+    config.log
+    config.status
+    include/HsUnixConfig.h
+    unix.buildinfo
+
+flag os-string
+  description: Use the new os-string package
+  default: False
+  manual: False
+
+source-repository head
+    type:     git
+    location: https://github.com/haskell/unix.git
+
+library
+    default-language: Haskell2010
+    other-extensions:
+        CApiFFI
+        CPP
+        DeriveDataTypeable
+        InterruptibleFFI
+        NondecreasingIndentation
+        RankNTypes
+        RecordWildCards
+        Safe
+        Trustworthy
+
+    if os(windows)
+        -- This package currently supports neither Cygwin nor MinGW,
+        -- therefore os(windows) is effectively not supported.
+        build-depends: unbuildable<0
+        buildable: False
+
+    build-depends:
+        base        >= 4.12.0.0  && < 4.22,
+        bytestring  >= 0.9.2     && < 0.13,
+        time        >= 1.9.1     && < 1.15
+
+    if flag(os-string)
+      build-depends: filepath >= 1.5.0.0, os-string >= 2.0.0
+    else
+      build-depends: filepath >= 1.4.100.0 && < 1.5.0.0
+
+    exposed-modules:
+        System.Posix
+        System.Posix.ByteString
+        System.Posix.PosixString
+
+        System.Posix.Error
+        System.Posix.Resource
+        System.Posix.Time
+        System.Posix.Unistd
+        System.Posix.Signals
+        System.Posix.Signals.Exts
+        System.Posix.Semaphore
+        System.Posix.SharedMem
+
+        System.Posix.User
+        System.Posix.User.ByteString
+
+        System.Posix.ByteString.FilePath
+        System.Posix.PosixPath.FilePath
+
+        System.Posix.Directory
+        System.Posix.Directory.Internals
+        System.Posix.Directory.Fd
+        System.Posix.Directory.ByteString
+        System.Posix.Directory.PosixPath
+
+        System.Posix.DynamicLinker.Module
+        System.Posix.DynamicLinker.Module.ByteString
+        System.Posix.DynamicLinker.Prim
+        System.Posix.DynamicLinker.ByteString
+        System.Posix.DynamicLinker
+
+        System.Posix.Files
+        System.Posix.Files.ByteString
+        System.Posix.Files.PosixString
+
+        System.Posix.IO
+        System.Posix.IO.ByteString
+        System.Posix.IO.PosixString
+
+        System.Posix.Env
+        System.Posix.Env.ByteString
+        System.Posix.Env.PosixString
+
+        System.Posix.Fcntl
+
+        System.Posix.Process
+        System.Posix.Process.Internals
+        System.Posix.Process.ByteString
+        System.Posix.Process.PosixString
+
+        System.Posix.Temp
+        System.Posix.Temp.ByteString
+        System.Posix.Temp.PosixString
+
+        System.Posix.Terminal
+        System.Posix.Terminal.ByteString
+        System.Posix.Terminal.PosixString
+
+    other-modules:
+        System.Posix.Directory.Common
+        System.Posix.DynamicLinker.Common
+        System.Posix.Files.Common
+        System.Posix.IO.Common
+        System.Posix.Process.Common
+        System.Posix.Terminal.Common
+        System.Posix.User.Common
+        System.Posix.Env.Internal
+
+    ghc-options: -Wall
+
+    include-dirs: include
+    install-includes:
+        HsUnix.h
+        execvpe.h
+
+    if !arch(javascript)
+      c-sources:
+          cbits/HsUnix.c
+          cbits/execvpe.c
+
+    if arch(javascript)
+      js-sources:
+          jsbits/time.js
+
+test-suite unix-tests
+    hs-source-dirs: tests
+    main-is: Test.hs
+    other-modules:
+        FileStatus
+        FileExtendedStatus
+        FileStatusByteString
+        Signals001
+        ReadDirStream
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, bytestring, tasty, tasty-hunit, tasty-quickcheck, unix
+    if flag(os-string)
+      build-depends: filepath >= 1.5.0.0, os-string >= 2.0.0
+    else
+      build-depends: filepath >= 1.4.100.0 && < 1.5.0.0
+    ghc-options: -Wall -with-rtsopts=-V0
+
+test-suite FdReadBuf001
+    -- JS: missing "pipe"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: FdReadBuf001.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall -threaded
+
+test-suite ForkProcess01
+    -- JS: missing "forkProcess"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: ForkProcess01.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite Signals002
+    -- JS: missing "raise"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Signals002.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite Signals004
+    -- JS: missing "raise"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Signals004.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite Posix004
+    -- JS: missing "forkProcess"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Posix004.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite Posix009
+    -- JS: missing "rtsTimerSignal"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Posix009.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall -with-rtsopts=-V0
+
+test-suite Posix014
+    -- JS: missing "pipe"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Posix014.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite T8108
+    -- JS: missing "sysconf"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: T8108.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite ResourceLimit
+    -- JS: missing "setrlimit"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: ResourceLimit.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix, tasty-hunit
+    ghc-options: -Wall
+
+test-suite Terminal
+    -- JS: missing "openpty"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Terminal.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix, tasty-hunit
+    ghc-options: -Wall
+
+test-suite PutEnv001
+    -- JS: missing "performGC"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: PutEnv001.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix, tasty, tasty-hunit
+    ghc-options: -Wall -with-rtsopts=-V0 -O0
+
+test-suite Semaphore001
+    -- JS: missing "sem_open"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Semaphore001.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall
+
+test-suite Semaphore002
+    -- JS: missing "sem_open"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: Semaphore002.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall -threaded
+
+test-suite SemaphoreInterrupt
+    -- JS: missing "sem_open"
+    if arch(javascript)
+        build-depends: unbuildable<0
+        buildable: False
+
+    hs-source-dirs: tests
+    main-is: SemaphoreInterrupt.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix
+    ghc-options: -Wall -threaded
+
+test-suite T13660
+    hs-source-dirs: tests
+    main-is: T13660.hs
+    type: exitcode-stdio-1.0
+    default-language: Haskell2010
+    build-depends: base, unix, bytestring
+    if flag(os-string)
+      build-depends: filepath >= 1.5.0.0, os-string >= 2.0.0
+    else
+      build-depends: filepath >= 1.4.100.0 && < 1.5.0.0
+    ghc-options: -Wall

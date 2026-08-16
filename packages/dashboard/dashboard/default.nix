@@ -9,15 +9,22 @@
     meta.mainProgram = "dashboard";
   };
 in
-  unit.overrideAttrs (old: {
+  # A plain `//` update, not `overrideAttrs`: `selectBinaryWithTests` attaches
+  # its tests the same way, outside the derivation's override chain, so an
+  # `overrideAttrs` here reads the *underlying* drv's empty `passthru.tests`
+  # and silently drops the crate's own gate (clippy, unit tests) from
+  # `ciChecks.rust-dashboard` -- which is exactly what happened until the
+  # first unit test landed in this crate and never ran in CI.
+  unit
+  // {
     passthru =
-      (old.passthru or {})
+      unit.passthru
       // {
         tests =
-          (old.passthru.tests or {})
+          unit.passthru.tests
           // {
             # Expose the nix-built site for inspection / as a build check.
             site = ix.rustWorkspace.dashboardSite;
           };
       };
-  })
+  }

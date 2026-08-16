@@ -45,12 +45,23 @@ pub fn record_attrs(record: &ir::Record) -> RenderedRecord {
 /// new bound on field types.
 pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, RenderError> {
     let name = Ident::new(&record.name, Span::call_site());
-    let class_name = record.names.py.clone().unwrap_or_else(|| record.name.clone());
+    let class_name = record
+        .names
+        .py
+        .clone()
+        .unwrap_or_else(|| record.name.clone());
     let mut params = Vec::new();
     let mut field_idents = Vec::new();
     let mut plain_idents = Vec::new();
     let mut py_names = Vec::new();
     let mut signature = Vec::new();
+    // Only the trailing run of `Option` fields may default to None. Found once
+    // by position of the last required field, so the loop neither re-scans the
+    // tail per field nor slices with an index the compiler cannot bound.
+    let last_required = record
+        .fields
+        .iter()
+        .rposition(|field| !matches!(field.ty, ir::Type::Option(_)));
     for (index, field) in record.fields.iter().enumerate() {
         let ident = Ident::new(&field.name, Span::call_site());
         let py_ident = render::name_ident(field.names.py.as_ref().unwrap_or(&field.name))?;
@@ -58,10 +69,7 @@ pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, Ren
         plain_idents.push(ident.clone());
         py_names.push(field.names.py.clone().unwrap_or_else(|| field.name.clone()));
         params.push(quote!(#py_ident: #ty));
-        if matches!(field.ty, ir::Type::Option(_))
-            && record.fields[index..]
-                .iter()
-                .all(|field| matches!(field.ty, ir::Type::Option(_)))
+        if matches!(field.ty, ir::Type::Option(_)) && last_required.is_none_or(|last| index > last)
         {
             signature.push(quote!(#py_ident = None));
         } else {
@@ -80,6 +88,7 @@ pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, Ren
     } else {
         quote!(#(#signature),*)
     };
+    let mapping = mapping_protocol(&py_names, &plain_idents);
     Ok(quote! {
         #[::pyo3::pymethods]
         impl super::#user::#name {
@@ -134,97 +143,105 @@ pub fn constructor(record: &ir::Record, user: &Ident) -> Result<TokenStream, Ren
                 ::pyo3::PyResult::Ok(dict)
             }
 
-            // The read-only mapping protocol, so a record IS dict-like:
-            // `dict(record)`, `{**record}`, and
-            // `pandas.DataFrame(records)` all work without a comprehension.
-            // The generated package registers every record with
-            // `collections.abc.Mapping`, so the full read-only surface is
-            // implemented here, not just the three methods duck-typing
-            // checks reach for.
-
-            /// The field names, in declaration order.
-            fn keys(&self) -> ::std::vec::Vec<&'static str> {
-                ::std::vec![#(#py_names),*]
-            }
-
-            /// The field values, in declaration order.
-            #[allow(unused_variables)]
-            fn values(
-                &self,
-                py: ::pyo3::Python<'_>,
-            ) -> ::pyo3::PyResult<::std::vec::Vec<::pyo3::Py<::pyo3::PyAny>>> {
-                ::pyo3::PyResult::Ok(::std::vec![
-                    #(::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?),*
-                ])
-            }
-
-            /// `(name, value)` pairs, in declaration order.
-            #[allow(unused_variables)]
-            fn items(
-                &self,
-                py: ::pyo3::Python<'_>,
-            ) -> ::pyo3::PyResult<::std::vec::Vec<(&'static str, ::pyo3::Py<::pyo3::PyAny>)>> {
-                ::pyo3::PyResult::Ok(::std::vec![
-                    #((
-                        #py_names,
-                        ::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?,
-                    )),*
-                ])
-            }
-
-            /// The field named `key`, or `default` (`None` unset) when the
-            /// record has no such field.
-            #[allow(unused_variables)]
-            #[pyo3(signature = (key, default = None))]
-            fn get(
-                &self,
-                py: ::pyo3::Python<'_>,
-                key: &str,
-                default: ::std::option::Option<::pyo3::Py<::pyo3::PyAny>>,
-            ) -> ::pyo3::PyResult<::std::option::Option<::pyo3::Py<::pyo3::PyAny>>> {
-                match key {
-                    #(#py_names => ::pyo3::PyResult::Ok(::std::option::Option::Some(
-                        ::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?,
-                    )),)*
-                    _ => ::pyo3::PyResult::Ok(default),
-                }
-            }
-
-            #[allow(unused_variables)]
-            fn __getitem__(
-                &self,
-                py: ::pyo3::Python<'_>,
-                key: &str,
-            ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
-                match key {
-                    #(#py_names => ::pyo3::IntoPyObjectExt::into_py_any(
-                        self.#plain_idents.clone(),
-                        py,
-                    ),)*
-                    _ => ::pyo3::PyResult::Err(
-                        ::pyo3::exceptions::PyKeyError::new_err(key.to_owned()),
-                    ),
-                }
-            }
-
-            fn __contains__(&self, key: &str) -> bool {
-                [#(#py_names),*].contains(&key)
-            }
-
-            fn __len__(&self) -> usize {
-                [#(#py_names),*].len()
-            }
-
-            /// Iterates the field names, like a dict.
-            fn __iter__<'py>(
-                &self,
-                py: ::pyo3::Python<'py>,
-            ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::types::PyIterator>> {
-                let keys = ::pyo3::Bound::into_any(
-                    ::pyo3::types::PyList::new(py, [#(#py_names),*])?,
-                );
-                ::pyo3::types::PyAnyMethods::try_iter(&keys)
-            }
+            #mapping
         }
     })
+}
+
+/// The read-only mapping protocol, so a record IS dict-like: `dict(record)`,
+/// `{**record}`, and `pandas.DataFrame(records)` all work without a
+/// comprehension.
+///
+/// The generated package registers every record with `collections.abc.Mapping`,
+/// so the full read-only surface is implemented here, not just the three
+/// methods duck-typing checks reach for. Split out of [`constructor`] because
+/// it is a self-contained protocol whose only inputs are the field names and
+/// the field idents, and because inlining it put `constructor` over the
+/// hundred-line limit.
+fn mapping_protocol(py_names: &[String], plain_idents: &[Ident]) -> TokenStream {
+    quote! {
+        /// The field names, in declaration order.
+        fn keys(&self) -> ::std::vec::Vec<&'static str> {
+            ::std::vec![#(#py_names),*]
+        }
+
+        /// The field values, in declaration order.
+        #[allow(unused_variables)]
+        fn values(
+            &self,
+            py: ::pyo3::Python<'_>,
+        ) -> ::pyo3::PyResult<::std::vec::Vec<::pyo3::Py<::pyo3::PyAny>>> {
+            ::pyo3::PyResult::Ok(::std::vec![
+                #(::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?),*
+            ])
+        }
+
+        /// `(name, value)` pairs, in declaration order.
+        #[allow(unused_variables)]
+        fn items(
+            &self,
+            py: ::pyo3::Python<'_>,
+        ) -> ::pyo3::PyResult<::std::vec::Vec<(&'static str, ::pyo3::Py<::pyo3::PyAny>)>> {
+            ::pyo3::PyResult::Ok(::std::vec![
+                #((
+                    #py_names,
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?,
+                )),*
+            ])
+        }
+
+        /// The field named `key`, or `default` (`None` unset) when the
+        /// record has no such field.
+        #[allow(unused_variables)]
+        #[pyo3(signature = (key, default = None))]
+        fn get(
+            &self,
+            py: ::pyo3::Python<'_>,
+            key: &str,
+            default: ::std::option::Option<::pyo3::Py<::pyo3::PyAny>>,
+        ) -> ::pyo3::PyResult<::std::option::Option<::pyo3::Py<::pyo3::PyAny>>> {
+            match key {
+                #(#py_names => ::pyo3::PyResult::Ok(::std::option::Option::Some(
+                    ::pyo3::IntoPyObjectExt::into_py_any(self.#plain_idents.clone(), py)?,
+                )),)*
+                _ => ::pyo3::PyResult::Ok(default),
+            }
+        }
+
+        #[allow(unused_variables)]
+        fn __getitem__(
+            &self,
+            py: ::pyo3::Python<'_>,
+            key: &str,
+        ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+            match key {
+                #(#py_names => ::pyo3::IntoPyObjectExt::into_py_any(
+                    self.#plain_idents.clone(),
+                    py,
+                ),)*
+                _ => ::pyo3::PyResult::Err(
+                    ::pyo3::exceptions::PyKeyError::new_err(key.to_owned()),
+                ),
+            }
+        }
+
+        fn __contains__(&self, key: &str) -> bool {
+            [#(#py_names),*].contains(&key)
+        }
+
+        fn __len__(&self) -> usize {
+            [#(#py_names),*].len()
+        }
+
+        /// Iterates the field names, like a dict.
+        fn __iter__<'py>(
+            &self,
+            py: ::pyo3::Python<'py>,
+        ) -> ::pyo3::PyResult<::pyo3::Bound<'py, ::pyo3::types::PyIterator>> {
+            let keys = ::pyo3::Bound::into_any(
+                ::pyo3::types::PyList::new(py, [#(#py_names),*])?,
+            );
+            ::pyo3::types::PyAnyMethods::try_iter(&keys)
+        }
+    }
 }

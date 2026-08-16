@@ -1,0 +1,18 @@
+// The loom control-VM workspace: the lead claude session on the left,
+// the live fleet TUI on the right, so every subagent's fork VM is visible
+// spinning up and down next to the agent that spawned it.
+//
+// Commands resolve on PATH: the `loom` wrapper prepends its own bin dir
+// (loom-lead) and the pinned ix CLI, so the panes are deterministic
+// wherever the session starts.
+layout {
+    pane split_direction="vertical" {
+        pane command="loom-lead" focus=true
+        pane command="ix" size="35%" {
+            args "ls" "--watch"
+        }
+    }
+    pane size=1 borderless=true {
+        plugin location="zellij:status-bar"
+    }
+}

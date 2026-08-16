@@ -1,0 +1,15 @@
+include:
+  - local: 'src/imagination/ci/gitlab-ci-inc.yml'
+
+bxs-4-64-vk:
+  extends:
+    - .ci-tron-arm64-test-vk
+    - .imagination-ti-am68-sk:arm64
+    - .imagination-manual-rules
+  timeout: 50m
+  variables:
+    CI_TRON_TIMEOUT__OVERALL__MINUTES: 45
+    DEQP_SUITE: pvr-vk
+    VK_DRIVER: powervr_mesa
+    MESA_VK_IGNORE_CONFORMANCE_WARNING: 1
+    PVR_I_WANT_A_BROKEN_VULKAN_DRIVER: 1

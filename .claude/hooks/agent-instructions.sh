@@ -48,13 +48,13 @@ copy_tree() {
 #
 # Content comes from two places, and the checkout wins:
 #
-#   $root/packages/agent/skills/<name>/  the tracked source
+#   $root/skills/<name>/  the tracked source
 #   $IX_CLAUDE_SKILLS_DIR                the `.#skills` output the Claude
 #                                        wrapper baked into its launch spec
 #
 # The wrapper's store path is fixed at `darwin-rebuild switch` time and reaches
 # this repo three pins away (index -> ix -> the host's nix config), so on its
-# own it materializes whatever packages/agent/skills looked like whenever the
+# own it materializes whatever `skills/` looked like whenever the
 # machine was last rebuilt. Nothing an agent can do in the checkout moves it:
 # not pulling, not rebasing, not editing the skill it is reading. ENG-11189
 # caught that copy 11 skills of 56 out of date in a live checkout, `linting`
@@ -73,7 +73,7 @@ copy_tree() {
 materialize_skills() {
   local dest=$1
   local store=${IX_CLAUDE_SKILLS_DIR:-}
-  local tree=$root/packages/agent/skills
+  local tree=$root/skills
   local manifest=$tree/vendored-skills.txt
   local name src
 
@@ -96,10 +96,18 @@ materialize_skills() {
     done < "$manifest"
   fi
 
-  for src in "$tree"/*/; do
-    [ -d "$src" ] || continue
-    cp -RL "${src%/}" "$dest/"
-  done
+  # `lib/skills.nix` discovers skills recursively: any directory holding a
+  # regular SKILL.md is one, published under its segments below `skills/`
+  # joined with `-`, and the walk continues through directories that hold no
+  # SKILL.md of their own. So `skills/antithesis/` is both a skill and a group
+  # (`antithesis`, `antithesis-debug`, ...), while `skills/nix/` is only a
+  # group (`nix-style`, never `nix`). Copying the top level alone published
+  # the group directories and none of the skills under them (ENG-12261 nested
+  # the catalog; this reimplementation stayed flat).
+  while IFS= read -r src; do
+    name=${src#"$tree"/}
+    cp -RL "$src" "$dest/${name//\//-}"
+  done < <(find "$tree" -mindepth 1 -type d -exec test -f '{}/SKILL.md' \; -print)
 
   chmod -R u+w "$dest"
 }

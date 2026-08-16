@@ -1,0 +1,105 @@
+[package]
+name = "nix-eval-rs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Rust evaluator for the Nix language, exposed to cppnix over a C ABI"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+# Global allocator for every Rust allocation in the evaluator, whichever
+# binary links the staticlib. Measured on ENG-13148, LD_PRELOAD A/B/A/B on
+# nixosConfigurations.hil-compute-2 toplevel (dc6, cd482f815): 95.0/98.6s cpu
+# on glibc malloc vs 82.9/83.1s on mimalloc, identical output sha -- ~13%,
+# because the profile spends ~17% in the allocator (perf record, same box).
+# The bundled build (libmimalloc-sys) compiles its own C, so no meson or
+# package plumbing carries it.
+mimalloc = "0.1"
+# MIT-licensed lossless CST parser; the GPL exclusion applies to snix/tvix
+# eval code, not to rnix, which snix merely also uses.
+#
+# Our fork of 0.12, not the crates.io release, because underscore digit
+# separators (`1_000`) are this fork's own language extension -- added to the
+# cppnix lexer in 8244032f6 and absent from NixOS/nix -- so upstream rnix
+# implements the language WITHOUT them, correctly, and always will. Stock rnix
+# lexes `1_000` as INTEGER `1` then IDENT `_000`, which is why `compile.rs`
+# used to refuse the construct by name rather than mis-evaluate it as an
+# application (ENG-12140, ENG-13119). The same patch is what the index
+# monorepo applies to alejandra, statix and deadnix at build time
+# (lib/util/rnix-digit-separators), so this branch is the one place the
+# dialect's lexer is written down for Rust consumers.
+#
+# Pinned by rev, never by branch: the branch is append-only carried patches
+# and a floating ref would change what this crate parses without a diff here.
+rnix = { git = "https://github.com/indexable-inc/rnix-parser.git", rev = "ce999aabdb5521094913f93d104799d79b554ab4" }
+rowan = "0.15"
+
+# builtins.match / builtins.split. cppnix compiles these with
+# `std::regex::extended`, i.e. POSIX ERE, and the corpus exercises POSIX
+# bracket classes ([[:space:]], [[:upper:]]); this crate accepts them, an
+# ECMAScript engine does not.
+regex = "1"
+
+# builtins.fromJSON / builtins.fromTOML. serde_json keeps the int-vs-float
+# distinction cppnix's parser also keeps (1 is an integer, 1.0 a float).
+serde_json = "1"
+toml = "1"
+
+# builtins.hashString, the four algorithms cppnix's parseHashAlgo accepts.
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+
+# The memo table and content-addressed store the compile cache lives in.
+ix-kernel = { path = "../ix-kernel" }
+
+# rustc's own string hasher, for the symbol interner (ENG-12861). Already in
+# this workspace's lock as a dependency of `rowan`, so it adds nothing to the
+# build closure. It is here rather than hand-rolled because a hash function is
+# a thing to depend on, not a thing to maintain forty lines of.
+#
+# Not DoS-resistant, deliberately, and that is not a downgrade: cppnix's own
+# `SymbolTable` is an unordered container over `std::hash`, so an attacker who
+# could pick colliding attribute names already has the same lever there -- and
+# anyone who can choose the program text being evaluated can ask for arbitrary
+# derivations, which is a larger one.
+rustc-hash = "1"
+
+[dev-dependencies]
+# Examples construct a store directly, and tests/cache_semantics.rs opens one
+# to watch a second evaluation hit.
+ix-kernel = { path = "../ix-kernel" }
+# `the_fingerprint_is_recomputable_from_the_sources_it_claims_to_cover` runs
+# the build script's own hashing code, so it needs the build script's hasher.
+blake3 = "1"
+
+[build-dependencies]
+# Fingerprints the crate's own source into the compile-cache key; the same
+# hash the kernel uses, so there is one hash in the workspace.
+blake3 = "1"
+
+[lints]
+workspace = true
+
+# The probe carries a guard test for the one property that makes it honest --
+# that it refuses exactly what the embedder refuses -- so its tests run with
+# the crate's.
+[[example]]
+name = "nixpkgs-probe"
+test = true
+
+[features]
+default = ["perf"]
+# The counters that sit in the innermost dispatch loop: the per-op-kind counts
+# and the attribute-name intern count, both of which fire millions of times on
+# a NixOS toplevel. Opt-in, and the on/off pair in
+# maintainers/ix/perf-counter-overhead.md is what justifies keeping them out of
+# the default build.
+perf-ops = []
+# All the coarse counters. Default ON, so the shipped binary can answer
+# questions about itself; the flag exists so the on/off pair in
+# maintainers/ix/perf-counter-overhead.md is a measurement and not an
+# argument from the size of a Cell increment.
+perf = []

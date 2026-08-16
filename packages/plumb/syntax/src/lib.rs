@@ -11,7 +11,7 @@ mod ast;
 mod parse;
 
 pub use ast::{
-    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, PathSeg, Pipeline, Program,
-    RedirOp, Redirect, Span, Word,
+    AndOr, AndOrTail, Assign, Command, Connector, Item, Part, PathSeg, Pipeline, Program, RedirOp,
+    Redirect, Span, Word,
 };
-pub use parse::{parse, ParseError};
+pub use parse::{ParseError, parse};

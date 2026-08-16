@@ -45,7 +45,11 @@ fn overlapping_connections_count_once_in_network_wall() {
 
 #[test]
 fn markdown_carries_marker_hosts_and_caveat() {
-    let text = markdown(&summarize(&[phase(vec![connection(0, 1000, "github.com")])]));
+    let text = markdown(&summarize(&[phase(vec![connection(
+        0,
+        1000,
+        "github.com",
+    )])]));
     assert!(text.starts_with("<!-- net-trace -->"));
     assert!(text.contains("github.com:443"));
     assert!(text.contains("required-check"));

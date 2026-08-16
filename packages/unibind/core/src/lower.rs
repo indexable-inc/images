@@ -13,6 +13,8 @@ use syn::spanned::Spanned as _;
 
 use crate::ir;
 
+pub use attrs::PartPath;
+
 /// A lowering failure, positioned so the macro can emit `compile_error!` at
 /// the offending tokens.
 #[derive(Debug)]
@@ -46,6 +48,10 @@ pub enum Backend {
     Ex,
     /// The C-ABI/FFM backend (`unibind-backend-jvm`, cargo feature `jvm`).
     Jvm,
+    /// The wasm-bindgen backend (`unibind-backend-wasm`, cargo feature
+    /// `wasm`). Browser sibling of `Ts`: it shares the `ts` rename slot and
+    /// TypeScript doc spelling, so node and browser publish one vocabulary.
+    Wasm,
 }
 
 /// The backends `#[unibind::export(backends(...))]` selected; `None` when
@@ -66,10 +72,26 @@ pub fn export_backends(module_args: proc_macro2::TokenStream) -> Result<Option<V
     Ok(meta.backends)
 }
 
+/// The source files `#[unibind::export(parts = [...])]` listed, in the order
+/// it listed them.
+///
+/// The macro reads and splices them before lowering; the list is empty for
+/// an export that keeps its whole surface inline.
+///
+/// # Errors
+///
+/// Returns a positioned error for malformed `#[unibind::export(...)]`
+/// options.
+pub fn export_parts(module_args: proc_macro2::TokenStream) -> Result<Vec<attrs::PartPath>> {
+    let meta = attrs::UnibindMeta::parse(module_args, Span::call_site())?;
+    Ok(meta.parts.unwrap_or_default())
+}
+
 /// Type names declared in the exported module, used to validate references.
 #[derive(Debug, Default)]
 pub struct Declared {
     pub records: Vec<String>,
+    pub enums: Vec<String>,
     pub errors: Vec<String>,
     pub objects: Vec<String>,
 }
@@ -82,14 +104,15 @@ pub struct Declared {
 /// # Errors
 ///
 /// Returns a positioned error for anything outside the supported surface:
-/// generics, data enums, unsupported boundary types, misplaced markers or
-/// flags, or malformed `#[unibind(...)]` metadata.
+/// generics, data-carrying enum variants, unsupported boundary types,
+/// misplaced markers or flags, or malformed `#[unibind(...)]` metadata.
 pub fn lower_module(
     module_args: proc_macro2::TokenStream,
     module: &syn::ItemMod,
 ) -> Result<ir::Interface> {
     let meta = attrs::UnibindMeta::parse(module_args, module.span())?;
     meta.reject_default("a module")?;
+    meta.reject_rename_all("a module")?;
     meta.reject_py_base("a module")?;
     meta.reject_jvm_base("a module")?;
     meta.reject_resource("a module")?;
@@ -139,16 +162,26 @@ pub fn lower_module(
                          an exception class",
                     ));
                 }
+                marker::MarkerKind::Enumeration => {
+                    return Err(LowerError::new(
+                        found.span,
+                        "#[unibind::enumeration] goes on an enum; a struct with \
+                         named fields is a #[unibind::record]",
+                    ));
+                }
             },
             (syn::Item::Enum(item), Some(found)) => match found.kind {
                 marker::MarkerKind::Error => {
                     interface.errors.push(data::lower_error(item, &found)?);
                 }
+                marker::MarkerKind::Enumeration => {
+                    interface.enums.push(data::lower_enum(item, &found)?);
+                }
                 marker::MarkerKind::Record => {
                     return Err(LowerError::new(
                         found.span,
-                        "data enums are not part of phase 0; model the value as a \
-                         #[unibind::record] struct until enums land",
+                        "#[unibind::record] goes on a struct; a closed set of \
+                         unit variants is #[unibind::enumeration]",
                     ));
                 }
                 marker::MarkerKind::Object => return Err(object_misplaced(found.span)),
@@ -156,9 +189,12 @@ pub fn lower_module(
             (_, Some(found)) => {
                 return Err(match found.kind {
                     marker::MarkerKind::Object => object_misplaced(found.span),
-                    marker::MarkerKind::Record | marker::MarkerKind::Error => LowerError::new(
+                    marker::MarkerKind::Record
+                    | marker::MarkerKind::Error
+                    | marker::MarkerKind::Enumeration => LowerError::new(
                         found.span,
-                        "this unibind marker goes on a struct (record) or enum (error)",
+                        "this unibind marker goes on a struct (record) or enum \
+                         (enumeration, error)",
                     ),
                 });
             }
@@ -168,6 +204,12 @@ pub fn lower_module(
         }
     }
     interface.objects = objects.finish()?;
+    // Every doc comment in this module reaches four published surfaces, so a
+    // link that names nothing is refused here rather than shipped as dead
+    // text (ENG-12396). The span is the module's: the IR carries no per-doc
+    // spans, and the message names the doc site instead.
+    crate::docs::validate(&interface)
+        .map_err(|error| LowerError::new(module.span(), error.to_string()))?;
     Ok(interface)
 }
 
@@ -198,23 +240,32 @@ fn collect_declared(items: &[syn::Item]) -> Result<Declared> {
                 check_fresh(&declared, &item.ident)?;
                 declared.errors.push(item.ident.to_string());
             }
+            (syn::Item::Enum(item), marker::MarkerKind::Enumeration) => {
+                check_fresh(&declared, &item.ident)?;
+                declared.enums.push(item.ident.to_string());
+            }
             _ => {}
         }
     }
     Ok(declared)
 }
 
-/// Records, errors, and objects share one type namespace: a reference like
-/// `Row` in a signature must resolve to exactly one declaration.
+/// Records, enumerations, errors, and objects share one type namespace: a
+/// reference like `Row` in a signature must resolve to exactly one
+/// declaration.
 fn check_fresh(declared: &Declared, ident: &syn::Ident) -> Result<()> {
     let name = ident.to_string();
     let taken = declared.records.contains(&name)
+        || declared.enums.contains(&name)
         || declared.errors.contains(&name)
         || declared.objects.contains(&name);
     if taken {
         return Err(LowerError::new(
             ident.span(),
-            format!("`{name}` is declared twice; records, errors, and objects share one namespace"),
+            format!(
+                "`{name}` is declared twice; records, enumerations, errors, and \
+                 objects share one namespace"
+            ),
         ));
     }
     Ok(())

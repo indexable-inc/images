@@ -24,11 +24,19 @@ defmodule IxMcp.Agents do
   working, and react to the `agent_finished` notification; `await/2`
   exists for the moments the lead genuinely cannot proceed without the
   answer.
+
+  That notification is durable, which is what makes the non-blocking idiom
+  safe to rely on: a final is written to the outbox before anything tries to
+  deliver it, so a child that finishes while no transport is attached is
+  replayed on reconnect rather than lost with the CLI process that produced
+  it. See `IxMcp.Agents.Events` and `IxMcp.MCP.Notifier`.
   """
 
   import Kernel, except: [send: 2, spawn: 1]
 
+  alias IxMcp.ActionLog
   alias IxMcp.Agents.Events
+  alias IxMcp.Session
 
   @harness IxMcp.Agents.Harness
 
@@ -69,7 +77,13 @@ defmodule IxMcp.Agents do
 
     case AgentHarness.create_subagent(@harness, brief, opts) do
       {:ok, id} ->
-        Events.register_spawn(id, %{backend: backend, model: model, brief: brief})
+        Events.register_spawn(id, %{
+          backend: backend,
+          model: model,
+          brief: brief,
+          child_session: register_child_session(id, opts)
+        })
+
         {:ok, id}
 
       {:error, _reason} = error ->
@@ -77,15 +91,49 @@ defmodule IxMcp.Agents do
     end
   end
 
+  # The child's row in the host session directory, so a process outside
+  # this BEAM (claude-html) can see the lead's subagents at all
+  # (ENG-12004). Registration is strictly best-effort: the ledger note in
+  # `Events` holds for the mirror too -- losing it must never cost the
+  # child, so a dead or degraded ActionLog yields nil and the spawn
+  # proceeds unlisted.
+  @spec register_child_session(id(), keyword()) :: integer() | nil
+  defp register_child_session(id, opts) do
+    parent = Session.ids().session_id
+
+    row =
+      ActionLog.create_session(Keyword.get(opts, :name) || id, ActionLog, parent: parent)
+
+    # 0 is the disabled log's reply, not a row.
+    if row > 0, do: row
+  catch
+    :exit, _ -> nil
+  end
+
   @doc """
   Queue a message for a child. Delivery follows the card: after the
   child's next tool result (claude backends, injected over stdin), or by
   waking it if idle. Codex children have no mid-run channel, so messages
   queue until the child idles and then wake it through `exec resume`.
+
+  Steering invalidates the child's stored final: the answer to a message is
+  the turn that message causes, so an `await/2` straight afterwards blocks
+  for that turn rather than handing back the one before it. Until the new
+  final lands the child has none, so `report/0` and `graph/0` show it working
+  instead of reporting a result that predates the message.
   """
   @spec send(id(), String.t()) :: :ok | {:error, :not_found}
   def send(id, text) when is_binary(text) do
-    AgentHarness.send_message(@harness, AgentHarness.lead_id(), id, text)
+    # Existence first, so a mistyped id cannot drop a real child's final;
+    # then the clear, strictly before the harness can deliver, so it can
+    # never land on the very turn it is meant to wait for. A child deleted
+    # inside that window loses its stored final and an await blocks to its
+    # timeout -- the safe direction, the alternative being a confident stale
+    # answer returned in 0.0s.
+    with {:ok, _status} <- AgentHarness.subagent_status(@harness, id),
+         :ok <- Events.expect_turn(id) do
+      AgentHarness.send_message(@harness, AgentHarness.lead_id(), id, text)
+    end
   end
 
   @doc "Status of every subagent this session created."
@@ -99,15 +147,47 @@ defmodule IxMcp.Agents do
   Block until the child's final response or error. Prefer reacting to the
   `agent_finished` notification; the card's non-blocking harnesses beat
   the blocking one on latency and tokens.
+
+  A final this returns is not announced again: the reply carries it, so the
+  durable row is acked here the way the exec reply path acks a job it waited
+  out (#3934). A timeout acks nothing -- the child has not settled and its
+  announcement is still owed.
   """
   @spec await(id(), timeout()) :: {:ok, String.t()} | {:error, term()}
-  def await(id, timeout \\ :infinity), do: Events.await(id, timeout)
+  def await(id, timeout \\ :infinity) do
+    case Events.await(id, timeout) do
+      # Nothing was delivered, so nothing may be suppressed: the child has not
+      # settled and its announcement is still owed. A real error final carries
+      # the backend's text, never this bare atom, which only the await timeout
+      # produces.
+      {:error, :timeout} = timed_out ->
+        timed_out
+
+      final ->
+        # This reply carries the final, so announcing it would say the same
+        # thing twice (#3934). Strictly after the reply is in hand, exactly as
+        # the exec reply path does it: a death before this line leaves the row
+        # unacked and the announcement still fires.
+        ack_final(id)
+        final
+    end
+  end
+
+  defp ack_final(id) do
+    ActionLog.ack_outbox_ref(:agents, id)
+  catch
+    :exit, _reason -> 0
+  end
 
   @doc "Terminate a child and free its concurrency slot."
   @spec delete(id()) :: :ok | {:error, :not_found}
   def delete(id), do: AgentHarness.delete_subagent(@harness, id)
 
-  @doc "Recent normalized events of one child, newest first."
+  @doc """
+  Recent normalized events of one child, NEWEST FIRST: index 0 is the latest
+  line the child produced. Capped at the most recent few hundred, oldest
+  dropped first, so this is a tail rather than a transcript.
+  """
   @spec events(id()) :: [map()]
   def events(id), do: Events.events(id)
 

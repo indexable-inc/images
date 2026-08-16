@@ -1,0 +1,28 @@
+[package]
+authors.workspace = true
+description = "A version incrementer plugin for Nushell"
+repository = "https://github.com/nushell/nushell/tree/main/crates/nu_plugin_example"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+name = "nu_plugin_example"
+version.workspace = true
+publish = false
+
+[[bin]]
+name = "nu_plugin_example"
+bench = false
+
+[lib]
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+nu-plugin.workspace = true
+nu-protocol = { workspace = true, features = ["plugin"] }
+
+[dev-dependencies]
+nu-plugin-test-support.workspace = true
+nu-cmd-lang.workspace = true

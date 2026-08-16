@@ -1,0 +1,24 @@
+[package]
+name = "nu_plugin_custom_values"
+repository = "https://github.com/nushell/nushell/tree/main/crates/nu_plugin_custom_values"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "nu_plugin_custom_values"
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+nu-plugin = { workspace = true, features = [] }
+nu-protocol = { workspace = true, features = ["plugin"] }
+serde = { workspace = true }
+typetag = "0.2"
+
+[dev-dependencies]
+nu-plugin-test-support.workspace = true

@@ -1,0 +1,153 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
+# Mise support is experimental.
+# See https://jj-vcs.github.io/jj/latest/contributing/#alternative-development-setup-with-mise
+
+[vars]
+bacon_version = "3.16.0"
+cargo_insta_version = "1.46.3"
+cargo_nextest_version = "0.9.113"
+rust_version = "1.89"
+uv_version = "0.8.13"
+node_version = "24"
+
+[settings]
+# the default cmd doesn't support shell expansion, use PowerShell instead
+windows_default_inline_shell_args = "pwsh -Command"
+
+[tools]
+# We need cargo-binstall so that Mise would download "cargo:" tools instead of building them.
+"cargo-binstall" = "latest"
+
+[tasks."review:cli-reference"]
+description = "Build and review the changes to the command line reference (cli/tests/cli-reference@.md.snap)"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:cargo-insta" = "{{vars.cargo_insta_version}}"
+run = "cargo insta test --review --workspace -- test_generate_md_cli_help"
+
+[tasks."review:test"]
+alias = "test:review"
+description = "Run the tests and review changes to snapshots"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:cargo-insta" = "{{vars.cargo_insta_version}}"
+tools."cargo:cargo-nextest" = "{{vars.cargo_nextest_version}}"
+env.NEXTEST_STATUS_LEVEL = "slow"
+env.NEXTEST_FINAL_STATUS_LEVEL = "none"
+run = "cargo insta test --review --workspace --test-runner nextest --"
+
+[tasks."build:cli-reference"]
+description = "Build the command line reference (cli/tests/cli-reference@.md.snap)"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:cargo-insta" = "{{vars.cargo_insta_version}}"
+run = "cargo insta test --accept --workspace -- test_generate_md_cli_help"
+
+[tasks."build:debug"]
+alias = "build"
+description = "Build jj in debug mode"
+tools.rust = "{{vars.rust_version}}"
+run = "cargo build"
+
+[tasks."build:docs"]
+description = "Build documentation into rendered-docs/ for offline use"
+tools.uv = "{{vars.uv_version}}"
+run = "uv run mkdocs build"
+
+[tasks."build:web"]
+description = "Build the new astro-based documentation"
+tools.node = "{{vars.node_version}}"
+run = "npm install && npm run build"
+dir = "web/docs"
+
+[tasks."build:release"]
+description = "Build jj in release mode"
+tools.rust = "{{vars.rust_version}}"
+run = "cargo build --release"
+
+[tasks."build:gen-protos"]
+description = "Generate Protocol Buffers definitions"
+tools.protoc = "latest"
+tools.rust = "{{vars.rust_version}}"
+run = "cargo run --bin gen-protos"
+
+
+[tasks."check:clippy"]
+description = "Lint the code with Clippy"
+tools.rust = "{{vars.rust_version}}"
+run = "cargo clippy --workspace --all-targets"
+
+[tasks."check:codespell"]
+description = "Check code for common misspellings"
+tools.uv = "{{vars.uv_version}}"
+run = "uv run codespell $(jj file list)"
+
+[tasks."check:format"]
+description = "Check the code format"
+tools.rust = "nightly"
+run = "cargo fmt --check"
+
+[tasks."check:test"]
+alias = "test"
+description = "Run the tests"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:cargo-insta" = "{{vars.cargo_insta_version}}"
+tools."cargo:cargo-nextest" = "{{vars.cargo_nextest_version}}"
+env.NEXTEST_STATUS_LEVEL = "slow"
+env.NEXTEST_FINAL_STATUS_LEVEL = "none"
+run = "cargo insta test --check --workspace --test-runner nextest --"
+
+[tasks."check:zizmor"]
+description = "Check GitHub workflows with Zizmor"
+tools."cargo:zizmor" = "latest"
+run = "zizmor ."
+
+
+[tasks."fix:clippy"]
+description = "Fix the clippy alerts"
+tools.rust = "{{vars.rust_version}}"
+run = "cargo clippy --fix"
+
+[tasks."fix:codespell"]
+description = "Fix common code misspellings"
+tools.uv = "{{vars.uv_version}}"
+run = "uv run codespell -w $(jj file list)"
+
+[tasks."fix:format"]
+description = "Format the code"
+tools.rust = "nightly"
+run = "cargo fmt"
+
+[tasks."fix:test"]
+alias = "test:accept"
+description = "Accept changes to snapshot tests"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:cargo-insta" = "{{vars.cargo_insta_version}}"
+tools."cargo:cargo-nextest" = "{{vars.cargo_nextest_version}}"
+env.NEXTEST_STATUS_LEVEL = "slow"
+env.NEXTEST_FINAL_STATUS_LEVEL = "none"
+run = "cargo insta test --accept --workspace --test-runner nextest --"
+
+
+[tasks."serve:docs"]
+description = "Preview documentation with live reloading"
+tools.uv = "{{vars.uv_version}}"
+run = "uv run mkdocs serve"
+
+[tasks."serve:web"]
+description = "Preview the new astro-based documentation with live reloading"
+tools.node = "{{vars.node_version}}"
+run = "npm install && npm run dev"
+dir = "web/docs"
+
+
+[tasks."clippy:watch"]
+description = "Lint the code with Clippy when the code changes"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:bacon" = "{{vars.bacon_version}}"
+run = "bacon clippy -- --workspace --all-targets"
+
+[tasks."test:watch"]
+description = "Run tests when the code changes"
+tools.rust = "{{vars.rust_version}}"
+tools."cargo:bacon" = "{{vars.bacon_version}}"
+tools."cargo:cargo-nextest" = "{{vars.cargo_nextest_version}}"
+run = "bacon nextest -- --nff --workspace"

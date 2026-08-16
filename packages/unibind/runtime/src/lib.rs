@@ -66,7 +66,14 @@ impl<T> fmt::Debug for UniStream<T> {
 /// checked-out stream) and keeps later pulls from checking the stream
 /// back in.
 pub struct PullStream<T> {
-    stream: std::sync::Mutex<Option<UniStream<T>>>,
+    stream: parking_lot::Mutex<Option<UniStream<T>>>,
+    /// Gate serializing concurrent pulls.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "PullStream::next holds this guard across the tokio::select! \
+                  that races the pull against close, so it must be an async \
+                  mutex; parking_lot's guard is not Send across an await point"
+    )]
     pull: tokio::sync::Mutex<()>,
     closed: tokio::sync::watch::Sender<bool>,
 }
@@ -74,22 +81,30 @@ pub struct PullStream<T> {
 impl<T> PullStream<T> {
     /// Wrap `stream` for one consumer's serialized pulls.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "initializes the `pull` field, which is a tokio mutex for the \
+                  reason given on its declaration"
+    )]
     pub fn new(stream: UniStream<T>) -> Self {
         Self {
-            stream: std::sync::Mutex::new(Some(stream)),
+            stream: parking_lot::Mutex::new(Some(stream)),
             pull: tokio::sync::Mutex::new(()),
             closed: tokio::sync::watch::Sender::new(false),
         }
     }
 
-    fn slot(&self) -> std::sync::MutexGuard<'_, Option<UniStream<T>>> {
-        self.stream
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn slot(&self) -> parking_lot::MutexGuard<'_, Option<UniStream<T>>> {
+        self.stream.lock()
     }
 
     /// The next element, or `None` once the stream ends or closes.
     pub async fn next(&self) -> Option<T> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "held across the tokio::select! below, which is why `pull` \
+                      is a tokio mutex in the first place"
+        )]
         let _pull = self.pull.lock().await;
         let mut stream = self.slot().take()?;
         let mut closed = self.closed.subscribe();
@@ -107,7 +122,10 @@ impl<T> PullStream<T> {
     /// Drop the stream early; a pull in flight resolves `None`, and the
     /// producer sees its stream dropped.
     pub fn close(&self) {
-        let _ = self.closed.send(true);
+        // `send_replace`, not `send`: `send` reports Err and leaves the value
+        // untouched when no pull is in flight to hold a receiver, so the flag
+        // this type documents as "flips to closed" would stay clear.
+        self.closed.send_replace(true);
         self.slot().take();
     }
 }

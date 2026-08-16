@@ -36,6 +36,8 @@ let
     inherit version;
     src = built.ex.mixPackage;
     strictDeps = true;
+    # MIX_ENV=prod compile of generated bindings; no ExUnit suite ships here.
+    doCheck = false;
 
     nativeBuildInputs = [erlang elixir];
     env = sharedEnv // {MIX_ENV = "prod";};

@@ -72,6 +72,8 @@ in
 
     dontConfigure = true;
     dontBuild = true;
+    # Signed upstream .app bundle, installed verbatim; nothing to test.
+    doCheck = false;
     # The bundle is signed and notarized; any byte rewrite (strip, patch, the
     # default fixup) would void the code signature, so install it verbatim.
     dontFixup = true;

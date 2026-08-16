@@ -185,7 +185,7 @@ fn a_remote_delete_refuses_a_path_outside_the_destination() {
 }
 
 /// Every file in a macOS checkout carries at least one extended attribute
-/// (`com.apple.provenance`), and bsdtar serialises xattrs as AppleDouble
+/// (`com.apple.provenance`), and bsdtar serialises xattrs as `AppleDouble`
 /// sidecars: a `._<name>` companion written next to every real file. A tree
 /// synced that way arrives with twice the files it should have, and the extra
 /// ones are not in the repo.
@@ -234,7 +234,7 @@ fn set_xattr(path: &Path) {
         .status();
 }
 
-/// Fail if any AppleDouble sidecar reached `root`, naming the files rather than
+/// Fail if any `AppleDouble` sidecar reached `root`, naming the files rather than
 /// leaving the next reader to decode a `._` prefix.
 ///
 /// Named separately from the test so it can be exercised directly; see
@@ -264,11 +264,7 @@ fn apple_double_files(root: &Path) -> Vec<PathBuf> {
                 stack.push(path);
                 continue;
             }
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("._")
-            {
+            if entry.file_name().to_string_lossy().starts_with("._") {
                 found.push(path);
             }
         }

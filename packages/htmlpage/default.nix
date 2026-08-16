@@ -10,6 +10,9 @@ stdenvNoCC.mkDerivation {
   version = "0.1.0";
   src = ./src;
 
+  # The tree ships no tests for this small render wrapper.
+  doCheck = false;
+
   installPhase = ''
     # shell
     runHook preInstall

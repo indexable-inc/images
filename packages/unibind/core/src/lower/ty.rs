@@ -131,22 +131,49 @@ fn lower_path(path: &syn::TypePath, declared: &Declared, position: Position) -> 
                 value: Box::new(lower_type(pair.value, declared, Position::Owned)?),
             })
         }
-        _ => lower_named(path, segment, &ident, declared, position),
+        _ => lower_named(
+            NamedPath {
+                path,
+                segment,
+                ident: &ident,
+            },
+            declared,
+            position,
+        ),
     }
 }
 
-fn lower_named(
-    path: &syn::TypePath,
-    segment: &syn::PathSegment,
-    ident: &str,
-    declared: &Declared,
-    position: Position,
-) -> Result<ir::Type> {
+/// The single path segment a named type resolves through, with its stringified
+/// ident.
+///
+/// Three views of one syntax node, kept together so a caller cannot hand
+/// `lower_named` a `segment` and `ident` that came from different paths.
+/// `Copy` for the same reason as [`super::func::Callable`]: three shared
+/// references that `lower_named` only reads.
+#[derive(Clone, Copy)]
+struct NamedPath<'a> {
+    path: &'a syn::TypePath,
+    segment: &'a syn::PathSegment,
+    ident: &'a str,
+}
+
+fn lower_named(named: NamedPath<'_>, declared: &Declared, position: Position) -> Result<ir::Type> {
+    let NamedPath {
+        path,
+        segment,
+        ident,
+    } = named;
     no_generics(segment)?;
     if path.path.segments.len() != 1 {
         return Err(unsupported(&syn::Type::Path(path.clone())));
     }
-    if declared.records.iter().any(|name| name == ident) {
+    // A record and an enumeration both cross by value in every position,
+    // and both spell as `Named`; which one a name resolves to is settled by
+    // the interface's own declarations, which is where every backend already
+    // looks to tell a record from an object handle.
+    if declared.records.iter().any(|name| name == ident)
+        || declared.enums.iter().any(|name| name == ident)
+    {
         return Ok(ir::Type::Named(ident.to_owned()));
     }
     if declared.objects.iter().any(|name| name == ident) {
@@ -170,8 +197,9 @@ fn lower_named(
     Err(LowerError::new(
         segment.span(),
         format!(
-            "`{ident}` is not a #[unibind::record] in this module; only records \
-             and boundary primitives cross"
+            "`{ident}` is not a #[unibind::record] or #[unibind::enumeration] \
+             in this module; only records, enumerations, and boundary \
+             primitives cross"
         ),
     ))
 }

@@ -9,6 +9,7 @@
 //! renderer, so NIF names and arities cannot drift apart); this emitter only
 //! decides where the files land.
 
+use unibind_core::docs;
 use unibind_core::ir::Interface;
 
 use crate::host::{EmitError, HostEmitter, HostFile};
@@ -26,6 +27,10 @@ impl HostEmitter for ExEmitter {
     }
 
     fn emit(&self, interface: &Interface) -> Result<Vec<HostFile>, EmitError> {
+        // Intra-doc links resolve into this language's spelling before
+        // anything renders a doc comment; see `unibind_core::docs`.
+        let interface = &docs::resolve(interface, docs::Language::Ex)
+            .map_err(|error| EmitError { message: error.to_string() })?;
         let modules =
             unibind_backend_ex::host_modules(interface, &self.nif_soname).map_err(|error| {
                 EmitError {

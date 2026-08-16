@@ -1291,8 +1291,9 @@ fn read_wrapped(iterator: &RowIterator) -> Result<bool> {
 /// a screen-side cell property, and the render state's cell view only reaches
 /// it through the raw handle.
 fn read_wide(cells: &RowCells) -> Result<CellWide> {
-    let raw_cell: sys::GhosttyCell =
-        unsafe { cells.get(sys::GhosttyRenderStateRowCellsData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW) }?;
+    let raw_cell: sys::GhosttyCell = unsafe {
+        cells.get(sys::GhosttyRenderStateRowCellsData::GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW)
+    }?;
     let mut wide: u32 = 0;
     check(unsafe {
         sys::ghostty_cell_get(

@@ -1,0 +1,11 @@
+error:
+       … while calling the 'path' builtin
+         at /pwd/lang/eval-fail-path-filter-missing-ancestor.nix:24:1:
+           23| # flake, and lives in `maintainers/ix/rust-nix-eval-gate.sh` section 8c.
+           24| builtins.path {
+             | ^
+           25|   path = /eng13123-no-such-root/sub;
+
+       … while adding path '/eng13123-no-such-root/sub'
+
+       error: path '/eng13123-no-such-root/sub' does not exist

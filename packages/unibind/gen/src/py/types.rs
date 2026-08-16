@@ -70,10 +70,14 @@ pub fn py_name<'a>(names: &'a ir::Names, name: &'a str) -> &'a str {
     names.py.as_deref().unwrap_or(name)
 }
 
-/// Resolve a `Named` reference (a record or an object) to its Python name.
+/// Resolve a `Named` reference (a record, an enumeration, or an object) to
+/// its Python name.
 fn named_py_name(interface: &ir::Interface, name: &str) -> String {
     if let Some(record) = interface.records.iter().find(|record| record.name == name) {
         return py_name(&record.names, &record.name).to_owned();
+    }
+    if let Some(declared) = interface.enums.iter().find(|declared| declared.name == name) {
+        return py_name(&declared.names, &declared.name).to_owned();
     }
     interface
         .objects

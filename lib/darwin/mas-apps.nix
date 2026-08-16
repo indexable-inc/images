@@ -43,12 +43,15 @@
   iMovie = 408981434;
 
   # ── Apple: iWork ───────────────────────────────────────────────────────
-  # Legacy Mac-specific IDs from `mas list`; the lookup API resolves only the
-  # newer universal IDs (361309726/361304891/361285480), but these still
-  # install correctly via `mas`. Keep as-is.
-  Pages = 409201541;
-  Numbers = 409203825;
-  Keynote = 409183694;
+  # Universal IDs. The legacy Mac-specific IDs (409201541/409203825/409183694)
+  # died: as of 2026-08-10 `mas info` answers "No apps found in the App Store
+  # for ADAM ID" for all three, which hard-failed `brew bundle` during darwin
+  # activation on hydra (Spotlight indexing is disabled there, so mas cannot
+  # detect the installed copies and always re-installs by ID). The universal
+  # IDs below were verified the same day with `mas info` on macOS 26.
+  Pages = 361309726;
+  Numbers = 361304891;
+  Keynote = 361285480;
 
   # ── Productivity & task management ─────────────────────────────────────
   "Things 3" = 904280696;

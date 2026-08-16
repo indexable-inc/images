@@ -1,0 +1,3 @@
+GNUmakefile
+/dist-*
+ghc.mk

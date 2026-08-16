@@ -12,7 +12,7 @@
   import { seedDemo } from '$lib/demo';
   import { paneScope } from '$lib/scope';
   import { sidebarModel } from '$lib/sidebar-model.svelte';
-  import { withKey, kindOf } from '$lib/run';
+  import { withKey, kindOf, isAgentTerminal } from '$lib/run';
   import { rendererFor } from '$lib/renderers';
   import Sidebar from '$components/Sidebar.svelte';
   import RunDetail from '$components/RunDetail.svelte';
@@ -20,6 +20,7 @@
   import Statusbar from '$components/Statusbar.svelte';
   import EditHistory from '$components/EditHistory.svelte';
   import FocusView from '$components/FocusView.svelte';
+  import AgentCard from '$components/AgentCard.svelte';
   import KeyHelp from '$components/KeyHelp.svelte';
   import type { Pane } from '$lib/types';
 
@@ -101,6 +102,10 @@
       {#if selected}
         {#if isRunSelection}
           <RunDetail pane={selected.pane} {sessionLabel} />
+        {:else if isAgentTerminal(selected.pane)}
+          <!-- An agent terminal gets the web-native card: transcript, status,
+               compose, with the raw terminal one toggle away. -->
+          <AgentCard pane={selected.pane} />
         {:else}
           <!-- A resource fills the stage directly (terminal / browser). -->
           {@const Body = rendererFor(selected.pane.kind, selected.pane.renderer)}

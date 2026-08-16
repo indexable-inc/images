@@ -247,10 +247,7 @@ impl Mapper<'_> {
                 assign.span,
                 "assignment has no Nix equivalent; Nix values are immutable",
             )),
-            other => Err(self.err(
-                other.span(),
-                "this JavaScript form has no Nix equivalent",
-            )),
+            other => Err(self.err(other.span(), "this JavaScript form has no Nix equivalent")),
         }
     }
 
@@ -269,10 +266,7 @@ impl Mapper<'_> {
         if is_bare_ident(name) {
             Ok(name.into())
         } else {
-            Err(self.err(
-                span,
-                format!("`{name}` is not a valid Nix identifier"),
-            ))
+            Err(self.err(span, format!("`{name}` is not a valid Nix identifier")))
         }
     }
 
@@ -307,7 +301,10 @@ impl Mapper<'_> {
             digits.parse().ok()
         };
         parsed.map(Number::Int).ok_or_else(|| {
-            self.err(lit.span, "integer literal does not fit in a 64-bit Nix integer")
+            self.err(
+                lit.span,
+                "integer literal does not fit in a 64-bit Nix integer",
+            )
         })
     }
 
@@ -373,9 +370,9 @@ impl Mapper<'_> {
                 ast::ObjectPropertyKind::ObjectProperty(property) => {
                     let binding = self.property(property)?;
                     if let Attr::Name(name) = &binding.key
-                        && bindings.iter().any(|prior| {
-                            matches!(&prior.key, Attr::Name(existing) if existing == name)
-                        })
+                        && bindings.iter().any(
+                            |prior| matches!(&prior.key, Attr::Name(existing) if existing == name),
+                        )
                     {
                         return Err(self.err(
                             property.span,
@@ -394,10 +391,7 @@ impl Mapper<'_> {
 
     fn property(&self, property: &ast::ObjectProperty<'_>) -> Result<Binding, Error> {
         if property.kind != ast::PropertyKind::Init {
-            return Err(self.err(
-                property.span,
-                "getters and setters have no Nix equivalent",
-            ));
+            return Err(self.err(property.span, "getters and setters have no Nix equivalent"));
         }
         if property.method {
             return Err(self.err(
@@ -472,10 +466,7 @@ impl Mapper<'_> {
             return Err(self.err(arrow.span, "`async` has no Nix equivalent"));
         }
         if let Some(rest) = &arrow.params.rest {
-            return Err(self.err(
-                rest.span,
-                "variadic rest parameters have no Nix equivalent",
-            ));
+            return Err(self.err(rest.span, "variadic rest parameters have no Nix equivalent"));
         }
         if arrow.params.items.is_empty() {
             return Err(self.err(
@@ -723,7 +714,8 @@ impl Mapper<'_> {
 
     fn arrow_body(&self, arrow: &ast::ArrowFunctionExpression<'_>) -> Result<Expr, Error> {
         if arrow.expression {
-            let Some(ast::Statement::ExpressionStatement(statement)) = arrow.body.statements.first()
+            let Some(ast::Statement::ExpressionStatement(statement)) =
+                arrow.body.statements.first()
             else {
                 return Err(self.err(arrow.body.span, "malformed arrow expression body"));
             };
@@ -741,10 +733,9 @@ impl Mapper<'_> {
                     self.const_bindings(declaration, &mut bindings)?;
                 }
                 ast::Statement::TSTypeAliasDeclaration(alias) => {
-                    return Err(self.err(
-                        alias.span,
-                        "`type` aliases live at module top level only",
-                    ));
+                    return Err(
+                        self.err(alias.span, "`type` aliases live at module top level only")
+                    );
                 }
                 ast::Statement::ReturnStatement(ret) => {
                     let Some(argument) = &ret.argument else {
@@ -874,10 +865,7 @@ impl Mapper<'_> {
         let mut mapped = self.expr(&call.callee)?;
         for argument in &call.arguments {
             let Some(expression) = argument.as_expression() else {
-                return Err(self.err(
-                    argument.span(),
-                    "spread arguments have no Nix equivalent",
-                ));
+                return Err(self.err(argument.span(), "spread arguments have no Nix equivalent"));
             };
             mapped = Expr::Apply {
                 function: Box::new(mapped),
@@ -935,13 +923,13 @@ impl Mapper<'_> {
 
     fn static_member(&self, member: &ast::StaticMemberExpression<'_>) -> Result<Expr, Error> {
         let base = self.expr(&member.object)?;
-        Ok(push_select(base, Attr::Name(member.property.name.to_string())))
+        Ok(push_select(
+            base,
+            Attr::Name(member.property.name.to_string()),
+        ))
     }
 
-    fn computed_member(
-        &self,
-        member: &ast::ComputedMemberExpression<'_>,
-    ) -> Result<Expr, Error> {
+    fn computed_member(&self, member: &ast::ComputedMemberExpression<'_>) -> Result<Expr, Error> {
         let key = match &member.expression {
             ast::Expression::StringLiteral(lit) => Attr::Name(lit.value.to_string()),
             ast::Expression::NumericLiteral(lit) => {
@@ -984,10 +972,7 @@ impl Mapper<'_> {
             ast::ChainElement::StaticMemberExpression(member) => self.static_member(member)?,
             ast::ChainElement::ComputedMemberExpression(member) => self.computed_member(member)?,
             other => {
-                return Err(self.err(
-                    other.span(),
-                    "only attribute access can appear under `?.`",
-                ));
+                return Err(self.err(other.span(), "only attribute access can appear under `?.`"));
             }
         };
         let Expr::Select {

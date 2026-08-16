@@ -115,7 +115,7 @@
     lib.concatMapAttrsStringSep "" (key: value: "${key} ${toString value}\n") finalSettings
   );
 
-  confDir = pkgs.runCommand "spark-conf" {} ''
+  confDir = pkgs.runCommand "spark-conf" {__structuredAttrs = true;} ''
     mkdir -p "$out"
     cp ${sparkDefaultsConf} "$out/spark-defaults.conf"
   '';

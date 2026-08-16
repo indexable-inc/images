@@ -128,5 +128,14 @@ in {
       };
       inherit components targets;
       profile = checkedProfile;
+    }
+    # `ixRustChannel` lets a consumer refuse a flag its channel cannot accept
+    # (`lib/rust/resolve.nix` does this for nightly-only `-Z` flags) by reading a
+    # field instead of matching the store-path name, which the toolchain is free
+    # to change. Added by `//` rather than `overrideAttrs` deliberately: an
+    # override would move the store path, and the path feeds every unit hash, so
+    # recording a fact about the toolchain would rebuild the whole workspace.
+    // {
+      ixRustChannel = checkedChannel;
     };
 }

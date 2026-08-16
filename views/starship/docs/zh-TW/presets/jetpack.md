@@ -1,0 +1,24 @@
+[Return to Presets](./#jetpack)
+
+# Jetpack Preset
+
+This is a pseudo minimalist preset inspired by the [geometry](https://github.com/geometry-zsh/geometry) and [spaceship](https://github.com/spaceship-prompt/spaceship-prompt) prompts.
+
+> Jetpack uses the terminal's color theme.
+
+![Screenshot of Jetpack preset](/presets/img/jetpack.png)
+
+### Prerequisite
+
+- Requires a shell with [`right-prompt`](https://starship.rs/advanced-config/#enable-right-prompt) support.
+- 建議使用 [Jetbrains Mono](https://www.jetbrains.com/lp/mono/)。
+
+### 設定
+
+```sh
+starship preset jetpack -o ~/.config/starship.toml
+```
+
+[點擊此處下載 TOML](/presets/toml/jetpack.toml){download}
+
+<<< @/public/presets/toml/jetpack.toml

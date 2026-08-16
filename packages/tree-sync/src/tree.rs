@@ -162,7 +162,13 @@ const MAX_SUBMODULE_DEPTH: usize = 8;
 fn git_paths(dir: &Path, prefix: &Path, depth: usize) -> Result<Vec<PathBuf>> {
     let listed = git(
         dir,
-        &["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        &[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
     )?;
     let submodules = gitlinks(dir)?;
 

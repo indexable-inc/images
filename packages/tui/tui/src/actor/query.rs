@@ -19,8 +19,9 @@ const CAN: u8 = 0x18;
 const SUB: u8 = 0x1a;
 
 /// Longest CSI parameter/intermediate run that can still be a query this crate
-/// answers (`6`, `5`, ``, `0`); a longer run is some other sequence, so the
-/// scanner stops buffering and lets the final byte pass unmatched.
+/// answers (`6`, `5`, the empty run, `0`); a longer run is some other
+/// sequence, so the scanner stops buffering and lets the final byte pass
+/// unmatched.
 const MAX_PARAMS: usize = 8;
 
 /// A terminal query that expects a reply written back as terminal input.

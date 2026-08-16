@@ -5,7 +5,7 @@ title: PR descriptions now distinguish Linear's closing verbs from Refs
 tags: [agent, workflow, linear]
 links:
   - label: workflow skill
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/workflow/SKILL.md
+    href: https://github.com/indexable-inc/index/blob/main/skills/workflow/SKILL.md
 ---
 
 An audit of the ENG team's In Progress column found 39 issues stuck there with

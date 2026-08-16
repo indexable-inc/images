@@ -71,7 +71,8 @@ pub fn head(root: &Path) -> Result<Head> {
         return Err(eyre!("`git status` failed: {}", stderr.trim()));
     }
 
-    let stdout = String::from_utf8(output.stdout).wrap_err("`git status` wrote non-UTF-8 output")?;
+    let stdout =
+        String::from_utf8(output.stdout).wrap_err("`git status` wrote non-UTF-8 output")?;
     parse(&stdout)
 }
 
@@ -181,7 +182,13 @@ u UU N... 100644 100644 100644 100644 0000 1111 2222 conflict.rs
         let head = parse(STATUS).expect("parse status");
 
         assert_eq!(head.name, HeadName::Branch("main".to_owned()));
-        assert_eq!(head.tracking, Some(Tracking { ahead: 2, behind: 1 }));
+        assert_eq!(
+            head.tracking,
+            Some(Tracking {
+                ahead: 2,
+                behind: 1
+            })
+        );
         assert_eq!(
             head.counts,
             Counts {
@@ -196,8 +203,10 @@ u UU N... 100644 100644 100644 100644 0000 1111 2222 conflict.rs
 
     #[test]
     fn a_detached_head_reports_the_abbreviated_commit() {
-        let head = parse("# branch.oid dc3a5af9332bf3f46fd7624e49d55f19d668b344\n# branch.head (detached)\n")
-            .expect("parse status");
+        let head = parse(
+            "# branch.oid dc3a5af9332bf3f46fd7624e49d55f19d668b344\n# branch.head (detached)\n",
+        )
+        .expect("parse status");
 
         assert_eq!(head.name, HeadName::Detached("dc3a5af".to_owned()));
         assert_eq!(head.tracking, None);

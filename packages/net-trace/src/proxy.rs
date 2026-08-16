@@ -73,7 +73,11 @@ impl Recorder {
     #[must_use]
     pub fn snapshot(&self) -> Vec<Connection> {
         let now = self.elapsed_ms();
-        let mut connections = self.connections.lock().expect("recorder lock poisoned").clone();
+        let mut connections = self
+            .connections
+            .lock()
+            .expect("recorder lock poisoned")
+            .clone();
         for connection in &mut connections {
             if !connection.finished {
                 connection.dur_ms = now.saturating_sub(connection.start_ms);
@@ -129,7 +133,10 @@ const MAX_HEAD: usize = 64 * 1024;
 pub fn spawn(recorder: Arc<Recorder>) -> Result<u16> {
     let listener =
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).wrap_err("bind localhost proxy listener")?;
-    let port = listener.local_addr().wrap_err("read proxy listener port")?.port();
+    let port = listener
+        .local_addr()
+        .wrap_err("read proxy listener port")?
+        .port();
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
@@ -209,7 +216,9 @@ fn handle(mut client: TcpStream, recorder: &Recorder) -> Result<()> {
     };
     // Long transfers may idle past any sane timeout; the child's exit is the
     // real deadline (its socket EOF ends both copy directions).
-    client.set_read_timeout(None).wrap_err("clear tunnel timeout")?;
+    client
+        .set_read_timeout(None)
+        .wrap_err("clear tunnel timeout")?;
     let transfer = pump(client, upstream, initial)?;
     record(&transfer, false);
     Ok(())
@@ -241,15 +250,23 @@ fn read_head(client: &mut TcpStream) -> Result<Head> {
 }
 
 fn find_head_end(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(4).position(|window| window == b"\r\n\r\n").map(|i| i + 4)
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|i| i + 4)
 }
 
 fn parse_target(head: &[u8]) -> Result<Target> {
     let text = std::str::from_utf8(head).wrap_err("request head is not UTF-8")?;
-    let request_line = text.lines().next().ok_or_else(|| eyre!("empty request head"))?;
+    let request_line = text
+        .lines()
+        .next()
+        .ok_or_else(|| eyre!("empty request head"))?;
     let mut words = request_line.split_whitespace();
     let method = words.next().ok_or_else(|| eyre!("missing method"))?;
-    let uri = words.next().ok_or_else(|| eyre!("missing request target"))?;
+    let uri = words
+        .next()
+        .ok_or_else(|| eyre!("missing request target"))?;
     if method == "CONNECT" {
         let authority = Authority::parse(uri, 443)?;
         return Ok(Target {
@@ -283,7 +300,8 @@ impl Authority {
         let (host, port) = match text.rsplit_once(':') {
             Some((host, port)) if !port.contains(']') => (
                 host,
-                port.parse::<u16>().wrap_err_with(|| format!("bad port in {text}"))?,
+                port.parse::<u16>()
+                    .wrap_err_with(|| format!("bad port in {text}"))?,
             ),
             _ => (text, default_port),
         };
@@ -315,13 +333,17 @@ fn connect_upstream(target: &Target) -> Result<TcpStream> {
 }
 
 fn pump(client: TcpStream, mut upstream: TcpStream, initial_up: &[u8]) -> Result<Transfer> {
-    upstream.write_all(initial_up).wrap_err("forward buffered request bytes")?;
+    upstream
+        .write_all(initial_up)
+        .wrap_err("forward buffered request bytes")?;
     let initial = initial_up.len() as u64;
     let client_reader = client.try_clone().wrap_err("clone client socket")?;
     let upstream_writer = upstream.try_clone().wrap_err("clone upstream socket")?;
     let up_thread = thread::spawn(move || copy_counted(client_reader, upstream_writer));
     let down = copy_counted(upstream, client);
-    let up = up_thread.join().map_err(|_| eyre!("upload copy thread panicked"))?;
+    let up = up_thread
+        .join()
+        .map_err(|_| eyre!("upload copy thread panicked"))?;
     Ok(Transfer {
         up: initial + up,
         down,

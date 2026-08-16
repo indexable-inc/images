@@ -72,7 +72,7 @@
       # snippets because the CAS-booted guest reaches /bin and /usr through
       # symlinks into the read-only store, where their recreate-and-rename
       # can never succeed (ix#8307).
-      systemRoot = pkgs.runCommand "system-root" {} ''
+      systemRoot = pkgs.runCommand "system-root" {__structuredAttrs = true;} ''
         mkdir -p $out
         ln -s ${toplevel}/init $out/init
         mkdir -p $out/etc

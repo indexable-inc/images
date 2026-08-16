@@ -305,8 +305,7 @@ version = \"0.1.0\"
         fs::write(package.join("src/lib.rs"), "pub fn example() {}\n").expect("lib.rs");
         exec::git(root, &["init", "--quiet"]).expect("git init");
         // A signing key or an autocrlf inherited from the developer's global
-        // config would break the scratch commits (see upstream-sync's
-        // `neutralize_config`).
+        // config would break the scratch commits.
         for (key, value) in [("commit.gpgsign", "false"), ("core.autocrlf", "false")] {
             exec::git(root, &["config", key, value]).expect("git config");
         }

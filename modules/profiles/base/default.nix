@@ -15,6 +15,24 @@
   ...
 }: let
   cfg = config.ix.profiles.base;
+
+  # Claude Code refuses bypass-permissions mode for the root user unless it is
+  # told it is sandboxed (`getuid() === 0 && IS_SANDBOX !== "1"` exits with
+  # "cannot be used with root/sudo privileges"), and guest sessions run as
+  # root, so the bare `pkgs.claude-code` wrapper (which bakes
+  # `--dangerously-skip-permissions`) would refuse to start in every VM. The
+  # guest VM is precisely the sandbox that guard asks about, so bake
+  # IS_SANDBOX=1 into the binary. Kept byte-identical to the wrapper in
+  # `lib/dev/agents.nix` (the managed-settings policy owner for dev images) so
+  # an image importing both modules dedupes to one `bin/claude` instead of
+  # colliding. Named with the upstream version so `lib.getName` stays
+  # "claude-code" for the image nixpkgs unfree allowlist.
+  claude-code =
+    pkgs.runCommand "claude-code-${pkgs.claude-code.version}"
+    {nativeBuildInputs = [pkgs.makeWrapper];}
+    ''
+      makeWrapper ${pkgs.claude-code}/bin/claude "$out/bin/claude" --set IS_SANDBOX 1
+    '';
 in {
   options.ix.profiles.base = {
     enable = lib.mkEnableOption "base runtime tools";
@@ -751,136 +769,152 @@ in {
       };
     };
 
-    environment.systemPackages = builtins.attrValues {
-      inherit
-        (pkgs)
-        ast-grep
-        bat
-        bpftrace
-        btop
-        codex
-        # dig/nslookup for DNS debugging; `host` alone (shipped via
-        # NixOS defaults) answers "does it resolve" but not "from which
-        # server, with which record details".
-        dnsutils
-        # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
-        # stripped binaries against separate debuginfo, `eu-readelf`
-        # gives a saner view of section/note contents than `readelf`,
-        # and `eu-unstrip` recombines a stripped binary with its
-        # debug companion before feeding it to gdb/drgn/pahole.
-        elfutils
-        eza
-        fd
-        file
-        # C toolchain: `pip install` of any package with a native
-        # extension, node-gyp, and every "./configure && make" README
-        # assume cc + make exist. 5 of 7 competitor default images ship
-        # one; a VM that can't build a C extension fails the first
-        # real Python or Node session.
-        gcc
-        gdb
-        gnumake
-        # gnutar, gzip, and zstd ride along so any VM switched once stays
-        # switchable: the `ix apply` source upload streams a tarball through
-        # `tar -x -I zstd` inside the guest, and these binaries are not
-        # on NixOS' default system PATH.
-        gnutar
-        gzip
-        # Alternative editors next to the default neovim. Helix is the
-        # modern single-binary editor; micro is the nano-style fallback
-        # for operators who want predictable bindings without modes.
-        helix
-        htop
-        micro
-        jq
-        lldb
-        lsof
-        mgrep
-        ncdu
-        # nh wraps nixos-rebuild/home-manager/darwin-rebuild with a
-        # build tree (via nom), pre-activation diffs (via dix), and
-        # confirmation prompts. nix-output-monitor is shipped
-        # separately so plain `nom nix build .#foo` works outside nh.
-        # nix-tree is the interactive TUI for exploring a derivation's
-        # dependency graph.
-        nh
-        nix-output-monitor
-        nix-tree
-        # Default language runtimes. python3 and node are the two
-        # interpreters "run this script" instructions assume exist
-        # (both ship in 5 of 7 competitor default sandboxes); uv is
-        # the package/venv path for Python that doesn't fight the
-        # read-only store the way bare pip does.
-        nodejs
-        python3
-        uv
-        # TLS/cert debugging (s_client, x509) plus the digest/keygen
-        # one-liners every deploy doc reaches for.
-        openssl
-        # Walks DWARF/BTF type info to pretty-print kernel and userspace
-        # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
-        # canonical tool for "I have raw memory and I need to know what
-        # struct lives at this offset", which gdb/lldb both fumble.
-        pahole
-        # killall/pstree muscle memory from every other Unix box.
-        psmisc
-        # drgn complements pahole: pahole answers "what is the layout of
-        # struct foo?", drgn lets you start from a typed root and walk
-        # the live value graph in Python (dereference pointers, follow
-        # intrusive lists, dump fields). Packaged in `packages/drgn/`
-        # against the v0.2.0 upstream release until the open nixpkgs PR
-        # (#446138) lands and the pin moves.
-        drgn
-        pv
-        ripgrep
-        # The `sqlite3` CLI: half of local app state (browsers, package
-        # managers, our own atuin history) is a SQLite file, and
-        # inspecting one without the CLI means writing a script.
-        sqlite
-        strace
-        tcpdump
-        # zellij (below) is the curated multiplexer, but tmux is the
-        # one operators and agent recipes actually type; both are tiny.
-        tmux
-        tree
-        # Complements ripgrep with what it lacks: boolean queries
-        # (-%), fuzzy match (-Z), and searching inside archives and
-        # compressed files (-z).
-        ugrep
-        # Half the internet distributes .zip; gnutar/zstd cover the
-        # rest of the archive formats but reject zip, which turns a
-        # plain `curl -LO <github archive>` into a dead end.
-        unzip
-        # wget rides along for the copy-paste commands that assume it;
-        # curl comes from NixOS' core packages.
-        wget
-        # Hex dump/reverse for quick binary pokes without pulling
-        # a full vim install (nvim's wrapper does not expose xxd).
-        xxd
-        # Pane and tab multiplexer for one session. Connection survival
-        # across SSH drops is handled by ix itself (AGENTS.md "VM
-        # assumptions"), so zellij is shipped for splits, not reattach.
-        zellij
-        zip
-        zstd
-        ;
-    };
+    environment.systemPackages =
+      builtins.attrValues {
+        inherit
+          (pkgs)
+          ast-grep
+          bat
+          bpftrace
+          btop
+          codex
+          # dig/nslookup for DNS debugging; `host` alone (shipped via
+          # NixOS defaults) answers "does it resolve" but not "from which
+          # server, with which record details".
+          dnsutils
+          # Stack unwinder and ELF/DWARF inspector. `eu-stack` resolves
+          # stripped binaries against separate debuginfo, `eu-readelf`
+          # gives a saner view of section/note contents than `readelf`,
+          # and `eu-unstrip` recombines a stripped binary with its
+          # debug companion before feeding it to gdb/drgn/pahole.
+          elfutils
+          eza
+          fd
+          file
+          # C toolchain: `pip install` of any package with a native
+          # extension, node-gyp, and every "./configure && make" README
+          # assume cc + make exist. 5 of 7 competitor default images ship
+          # one; a VM that can't build a C extension fails the first
+          # real Python or Node session.
+          gcc
+          gdb
+          gnumake
+          # gnutar, gzip, and zstd ride along so any VM switched once stays
+          # switchable: the `ix apply` source upload streams a tarball through
+          # `tar -x -I zstd` inside the guest, and these binaries are not
+          # on NixOS' default system PATH.
+          gnutar
+          gzip
+          # Alternative editors next to the default neovim. Helix is the
+          # modern single-binary editor; micro is the nano-style fallback
+          # for operators who want predictable bindings without modes.
+          helix
+          htop
+          micro
+          jq
+          lldb
+          lsof
+          mgrep
+          ncdu
+          # nh wraps nixos-rebuild/home-manager/darwin-rebuild with a
+          # build tree (via nom), pre-activation diffs (via dix), and
+          # confirmation prompts. nix-output-monitor is shipped
+          # separately so plain `nom nix build .#foo` works outside nh.
+          # nix-tree is the interactive TUI for exploring a derivation's
+          # dependency graph.
+          nh
+          nix-output-monitor
+          nix-tree
+          # Default language runtimes. python3 and node are the two
+          # interpreters "run this script" instructions assume exist
+          # (both ship in 5 of 7 competitor default sandboxes); uv is
+          # the package/venv path for Python that doesn't fight the
+          # read-only store the way bare pip does.
+          nodejs
+          python3
+          uv
+          # TLS/cert debugging (s_client, x509) plus the digest/keygen
+          # one-liners every deploy doc reaches for.
+          openssl
+          # Walks DWARF/BTF type info to pretty-print kernel and userspace
+          # structs out of core dumps, /proc/kcore, or VM RAM memfds. The
+          # canonical tool for "I have raw memory and I need to know what
+          # struct lives at this offset", which gdb/lldb both fumble.
+          pahole
+          # killall/pstree muscle memory from every other Unix box.
+          psmisc
+          # drgn complements pahole: pahole answers "what is the layout of
+          # struct foo?", drgn lets you start from a typed root and walk
+          # the live value graph in Python (dereference pointers, follow
+          # intrusive lists, dump fields). Packaged in `packages/drgn/`
+          # against the v0.2.0 upstream release until the open nixpkgs PR
+          # (#446138) lands and the pin moves.
+          drgn
+          pv
+          ripgrep
+          # The `sqlite3` CLI: half of local app state (browsers, package
+          # managers, our own atuin history) is a SQLite file, and
+          # inspecting one without the CLI means writing a script.
+          sqlite
+          strace
+          tcpdump
+          # zellij (below) is the curated multiplexer, but tmux is the
+          # one operators and agent recipes actually type; both are tiny.
+          tmux
+          tree
+          # Complements ripgrep with what it lacks: boolean queries
+          # (-%), fuzzy match (-Z), and searching inside archives and
+          # compressed files (-z).
+          ugrep
+          # Half the internet distributes .zip; gnutar/zstd cover the
+          # rest of the archive formats but reject zip, which turns a
+          # plain `curl -LO <github archive>` into a dead end.
+          unzip
+          # wget rides along for the copy-paste commands that assume it;
+          # curl comes from NixOS' core packages.
+          wget
+          # Hex dump/reverse for quick binary pokes without pulling
+          # a full vim install (nvim's wrapper does not expose xxd).
+          xxd
+          # Pane and tab multiplexer for one session. Connection survival
+          # across SSH drops is handled by ix itself (AGENTS.md "VM
+          # assumptions"), so zellij is shipped for splits, not reattach.
+          zellij
+          zip
+          zstd
+          ;
+      }
+      # The two agent CLIs ride together: codex comes straight from pkgs (above),
+      # claude needs the IS_SANDBOX wrapper from the let-block because guests run
+      # as root. Both belong in the consensus baseline this profile ships - "the
+      # first ten minutes of a person or agent in a fresh VM must just work"
+      # includes the agents themselves.
+      ++ [claude-code];
 
     systemd.tmpfiles.rules =
       [
-        # With `use-sqlite-wal = false` (above) nix opens db.sqlite on
-        # SQLite's unix-dotfile VFS, whose lock is a real directory entry
-        # (`db.sqlite.lock`) rather than a POSIX lock that dies with its
-        # holder. A rootfs captured while nix held that lock (golden
-        # template capture of a mid-write guest) therefore boots with the
-        # lock still present, and every later nix invocation spins forever
-        # in SQLITE_BUSY retries -- `ix apply` then fails its 5s
-        # wasm-capability probe with "stream into guest failed" (ix#8389).
-        # After a fresh boot no process can hold the lock, so removing it
-        # here ("!" = boot only, before nix-daemon or any login shell can
-        # run nix) is always safe. The sibling db.sqlite-journal must
-        # stay: a hot journal is how SQLite rolls back the interrupted
-        # write on next open.
+        # Belt and suspenders, not the mechanism. The guarantee is made at
+        # capture: sealing an image refuses when a platform-made lock
+        # artifact is present in it (ENG-12405), because a boot-side heal
+        # can only enumerate the messes someone already found, while a
+        # capture-side gate refuses the ones nobody has met yet. This rule
+        # stays for images sealed before that gate existed, and for a lock
+        # arriving by a route the gate's list does not yet name.
+        #
+        # What it heals: with `use-sqlite-wal = false` (above) nix opens
+        # db.sqlite on SQLite's unix-dotfile VFS, whose lock is a real
+        # directory entry (`db.sqlite.lock`) rather than a POSIX lock that
+        # dies with its holder. A rootfs carrying one boots with the lock
+        # still present and no process able to hold it, so every later nix
+        # invocation spins forever in SQLITE_BUSY retries -- `ix apply`
+        # then fails its 5s wasm-capability probe with "stream into guest
+        # failed" (ix#8389). Removing it here ("!" = boot only, before
+        # nix-daemon or any login shell can run nix) is always safe for
+        # the same reason it is needed: after a fresh boot nobody holds it.
+        #
+        # The sibling db.sqlite-journal must stay, and the seal gate does
+        # not refuse it either: a hot journal is how SQLite rolls back the
+        # interrupted write on next open.
         "R! /nix/var/nix/db/db.sqlite.lock"
       ]
       # Pre-create the workspace at boot so login.nu can cd into it

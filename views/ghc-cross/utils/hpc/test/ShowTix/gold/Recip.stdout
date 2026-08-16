@@ -1,0 +1,119 @@
+    0          7 Main                          18:21-18:21 ExpBox False
+    1          7 Main                          18:24-18:24 ExpBox False
+    2          2 Main                          18:21-18:24 BinBox GuardBinBox True
+    3          5 Main                          18:21-18:24 BinBox GuardBinBox False
+    4          7 Main                          18:21-18:24 ExpBox False
+    5          2 Main                          18:33-18:33 ExpBox True
+    6          5 Main                          19:21-19:29 BinBox GuardBinBox True
+    7          0 Main                          19:21-19:29 BinBox GuardBinBox False
+    8          5 Main                          19:21-19:29 ExpBox False
+    9          5 Main                          19:33-19:33 ExpBox False
+   10          5 Main                          19:46-19:46 ExpBox False
+   11          5 Main                          19:48-19:49 ExpBox False
+   12          5 Main                          19:37-19:49 ExpBox False
+   13          5 Main                          19:33-19:49 ExpBox True
+   14          7 Main                           18:1-19:49 TopLevelBox ["position"]
+   15         12 Main                          14:13-14:13 ExpBox False
+   16         12 Main                          14:15-14:16 ExpBox False
+   17         12 Main                          14:12-14:17 ExpBox False
+   18         12 Main                          14:29-14:29 ExpBox False
+   19         12 Main                          14:12-14:29 ExpBox False
+   20          9 Main                          15:28-15:28 ExpBox False
+   21         11 Main                          15:30-15:30 ExpBox False
+   22         11 Main                          15:33-15:33 ExpBox False
+   23         10 Main                          15:35-15:36 ExpBox False
+   24         11 Main                          15:32-15:37 ExpBox False
+   25         11 Main                          15:21-15:37 ExpBox False
+   26         11 Main                          10:17-10:17 ExpBox False
+   27         14 Main                          10:26-10:27 ExpBox False
+   28          2 Main                          10:17-10:27 BinBox GuardBinBox True
+   29         12 Main                          10:17-10:27 BinBox GuardBinBox False
+   30         14 Main                          10:17-10:27 ExpBox False
+   31          2 Main                          10:32-10:33 ExpBox False
+   32          2 Main                          10:45-10:45 ExpBox False
+   33          2 Main                          10:47-10:48 ExpBox False
+   34          2 Main                          10:36-10:48 ExpBox False
+   35          2 Main                          10:31-10:49 ExpBox True
+   36         12 Main                          11:17-11:17 ExpBox False
+   37         12 Main                          11:22-11:22 ExpBox False
+   38          1 Main                          11:17-11:22 BinBox GuardBinBox True
+   39         11 Main                          11:17-11:22 BinBox GuardBinBox False
+   40         12 Main                          11:17-11:22 ExpBox False
+   41          1 Main                          11:37-11:37 ExpBox False
+   42          1 Main                          11:32-11:37 ExpBox False
+   43          1 Main                          11:40-11:40 ExpBox False
+   44          1 Main                          11:31-11:41 ExpBox True
+   45         11 Main                          12:17-12:17 ExpBox False
+   46         11 Main                          12:22-12:22 ExpBox False
+   47         11 Main                          12:17-12:22 BinBox GuardBinBox True
+   48          0 Main                          12:17-12:22 BinBox GuardBinBox False
+   49         11 Main                          12:17-12:22 ExpBox False
+   50         11 Main                          12:37-12:37 ExpBox False
+   51         11 Main                          12:32-12:37 ExpBox False
+   52         11 Main                          12:42-12:47 ExpBox False
+   53         11 Main                          12:32-12:47 ExpBox False
+   54         11 Main                          12:50-12:54 ExpBox False
+   55         11 Main                          12:31-12:55 ExpBox True
+   56         14 Main                           10:1-15:37 TopLevelBox ["divide"]
+   57          3 Main                            8:28-8:28 ExpBox False
+   58          3 Main                            8:30-8:30 ExpBox False
+   59          3 Main                            8:32-8:33 ExpBox False
+   60          3 Main                            8:21-8:33 ExpBox False
+   61          3 Main                            4:16-4:16 ExpBox False
+   62          3 Main                            4:20-4:20 ExpBox False
+   63          3 Main                            4:16-4:20 BinBox GuardBinBox True
+   64          0 Main                            4:16-4:20 BinBox GuardBinBox False
+   65          3 Main                            4:16-4:20 ExpBox False
+   66          3 Main                            4:25-4:27 ExpBox False
+   67          3 Main                            4:31-4:33 ExpBox False
+   68          3 Main                            4:37-4:42 ExpBox False
+   69          3 Main                            4:31-4:42 ExpBox False
+   70          3 Main                            4:25-4:42 ExpBox False
+   71          3 Main                            4:45-4:49 ExpBox False
+   72          3 Main                            4:24-4:50 ExpBox True
+   73          0 Main                            5:16-5:24 BinBox GuardBinBox True
+   74          0 Main                            5:16-5:24 BinBox GuardBinBox False
+   75          0 Main                            5:16-5:24 ExpBox False
+   76          0 Main                            6:15-6:63 ExpBox False
+   77          0 Main                            5:28-6:63 ExpBox True
+   78          3 Main                             4:1-8:33 TopLevelBox ["reciprocal"]
+   79          3 Main                          27:23-27:23 ExpBox False
+   80          3 Main                          27:12-27:23 ExpBox False
+   81          2 Main                          26:14-26:14 ExpBox False
+   82          2 Main                           26:7-26:14 ExpBox False
+   83          2 Main                          26:18-26:18 ExpBox False
+   84          2 Main                           26:7-26:18 ExpBox False
+   85          2 Main                           26:3-26:18 LocalBox ["showRecip","p"]
+   86          3 Main                            23:3-23:6 ExpBox False
+   87          3 Main                          23:16-23:16 ExpBox False
+   88          3 Main                          23:11-23:16 ExpBox False
+   89          3 Main                          23:21-23:25 ExpBox False
+   90          3 Main                            24:6-24:6 ExpBox False
+   91          3 Main                            24:9-24:9 ExpBox False
+   92          1 Main                            24:6-24:9 BinBox CondBinBox True
+   93          2 Main                            24:6-24:9 BinBox CondBinBox False
+   94          3 Main                            24:6-24:9 ExpBox False
+   95          1 Main                          24:16-24:16 ExpBox True
+   96          2 Main                          24:28-24:28 ExpBox False
+   97          2 Main                          24:30-24:30 ExpBox False
+   98          2 Main                          24:23-24:30 ExpBox False
+   99          2 Main                          24:35-24:37 ExpBox False
+  100          2 Main                          24:47-24:47 ExpBox False
+  101          2 Main                          24:49-24:49 ExpBox False
+  102          2 Main                          24:42-24:49 ExpBox False
+  103          2 Main                          24:54-24:56 ExpBox False
+  104          2 Main                          24:42-24:56 ExpBox False
+  105          2 Main                          24:35-24:56 ExpBox False
+  106          2 Main                          24:23-24:56 ExpBox True
+  107          3 Main                           24:3-24:56 ExpBox False
+  108          3 Main                          23:21-24:56 ExpBox False
+  109          3 Main                          23:11-24:56 ExpBox False
+  110          3 Main                           23:3-24:56 ExpBox False
+  111          3 Main                           22:1-27:23 TopLevelBox ["showRecip"]
+  112          1 Main                          30:13-30:18 ExpBox False
+  113          3 Main                          31:23-31:28 ExpBox False
+  114          3 Main                          31:12-31:29 ExpBox False
+  115          3 Main                           31:3-31:29 ExpBox False
+  116          3 Main                            32:3-32:6 ExpBox False
+  117          1 Main                            29:8-32:6 ExpBox False
+  118          1 Main                            29:1-32:6 TopLevelBox ["main"]

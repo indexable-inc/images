@@ -12,17 +12,11 @@ use crate::{convert, error, function, mirror, object, record, stream};
 ///
 /// # Errors
 ///
-/// Fails for surface the ts backend does not implement yet (data enums,
-/// integer-keyed maps, streams of objects) and for renames that cannot
-/// become identifiers.
+/// Fails for surface the ts backend does not implement yet (integer-keyed
+/// maps, streams of objects) and for renames that cannot become
+/// identifiers. Data-carrying enums never reach here: lowering refuses
+/// them.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
-    if let Some(data_enum) = interface.enums.first() {
-        return Err(RenderError::new(format!(
-            "`{}` is a data enum, which the ts backend does not render",
-            data_enum.name
-        )));
-    }
-
     // Every reference to the user's module goes through one alias bound
     // here, at the glue module's own scope. napi-derive relocates the items
     // it expands into generated helper modules, and a `super::` written
@@ -36,10 +30,11 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         #[allow(unused_imports)]
         use super::#module as #user;
     };
-    let mirrored = mirror::mirrored_records(&interface.records);
+    let mirrored = mirror::mirrored_records(&interface.records, &interface.enums);
     let ctx = TyCtx {
         user: &user,
         objects: &interface.objects,
+        enums: &interface.enums,
         mirrored: &mirrored,
     };
     let glue_ident = format_ident!("__unibind_ts_{}", interface.name.trim_start_matches('_'));
@@ -47,7 +42,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     for rec in &interface.records {
         record::check_record(rec)?;
     }
-    let narrowers = convert::helpers(interface, &mirrored);
+    let narrowers = convert::helpers(interface, &ctx)?;
     let mirrors = interface
         .records
         .iter()
@@ -105,11 +100,11 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
 /// `AbortSignal` bridge.
 fn needs_signal(interface: &ir::Interface) -> bool {
     let fns = interface.functions.iter();
-    let methods = interface
+    let members = interface
         .objects
         .iter()
-        .flat_map(|object| object.methods.iter());
-    fns.chain(methods)
+        .flat_map(|object| object.methods.iter().chain(object.associated.iter()));
+    fns.chain(members)
         .any(|function| matches!(function.asyncness, ir::Asyncness::Async))
 }
 

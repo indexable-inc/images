@@ -36,6 +36,8 @@ in
 
     dontUnpack = true;
     strictDeps = true;
+    # Fixed-output asset assembly; nothing to test at build time.
+    doCheck = false;
     nativeBuildInputs = [
       curl
       jq

@@ -2,14 +2,39 @@
   lib,
   paths,
 }: let
-  # Auto-discover skill directories under paths.skills. Each subdirectory is a
-  # Claude Code skill (a directory containing a SKILL.md, and optionally
-  # assets/ and references/ subdirectories). `vendoredSources` below adds
-  # skills that ship inside packaged upstreams.
-  entries = builtins.readDir paths.skills;
+  # Source paths group related skills. Runtime clients still receive one flat
+  # directory per skill, named by joining the source path with `-`.
+  skillRecordsFrom = segments: directory: let
+    entries = builtins.readDir directory;
+    skill =
+      lib.optional
+      (segments
+        != []
+        && builtins.hasAttr "SKILL.md" entries
+        && entries."SKILL.md" == "regular")
+      {
+        name = lib.concatStringsSep "-" segments;
+        path = directory;
+      };
+    children = lib.concatLists (
+      lib.mapAttrsToList
+      (
+        entryName: entryType:
+          if entryType == "directory"
+          then skillRecordsFrom (segments ++ [entryName]) (directory + "/${entryName}")
+          else []
+      )
+      entries
+    );
+  in
+    skill ++ children;
 
-  skillNames = lib.sort lib.lessThan (
-    lib.attrNames (lib.filterAttrs (_: type: type == "directory") entries)
+  skillRecords = skillRecordsFrom [] paths.skills;
+  discoveredNames = map (record: record.name) skillRecords;
+  duplicateNames = lib.unique (
+    lib.filter
+    (name: 1 < lib.count (candidate: candidate == name) discoveredNames)
+    discoveredNames
   );
 
   # Ingest each skill as its own store path instead of leaving it as a subpath
@@ -17,7 +42,7 @@
   # its source identity. `paths.skills` is a relative-path input whose lock
   # node resolves against the PARENT tree, so a consumer vendoring index as
   # `path:./index` (ix does) sees
-  # `<consumer-tree>/index/packages/agent/skills/<name>` and re-keys every
+  # `<consumer-tree>/index/skills/<name>` and re-keys every
   # skill on every commit anywhere in that repo. The reach is the whole fleet:
   # skills -> claude-code's launch spec -> claude-code -> system-path -> each
   # host's toplevel, so one comment in ix's docs/ moved all twelve ix hosts'
@@ -31,7 +56,13 @@
       name = "claude-skill-${name}";
     };
 
-  sources = lib.genAttrs skillNames (name: ingest name (paths.skills + "/${name}"));
+  sources = assert lib.assertMsg (duplicateNames == [])
+  "skills: source paths collapse to duplicate skill name(s): ${lib.concatStringsSep ", " duplicateNames}";
+    lib.genAttrs' skillRecords (
+      record: lib.nameValuePair record.name (ingest record.name record.path)
+    );
+
+  skillNames = lib.sort lib.lessThan (lib.attrNames sources);
 
   # Skills vendored from packaged upstreams: the package already ships a
   # plugin-ready skill directory, so the catalog derives it from the pin
@@ -67,10 +98,14 @@
   allSkills = assert lib.assertMsg (vendorCollisions == [])
   "skills: vendored skill name(s) shadow repo skills: ${lib.concatStringsSep ", " vendorCollisions}";
   assert lib.assertMsg (manifestNames == vendoredNames)
-  "skills: packages/agent/skills/vendored-skills.txt lists [${lib.concatStringsSep ", " manifestNames}] but vendoredSources defines [${lib.concatStringsSep ", " vendoredNames}]; the SessionStart materializer reads the file, so they must match";
+  "skills: skills/vendored-skills.txt lists [${lib.concatStringsSep ", " manifestNames}] but vendoredSources defines [${lib.concatStringsSep ", " vendoredNames}]; the SessionStart materializer reads the file, so they must match";
     lib.sort lib.lessThan (skillNames ++ vendoredNames);
 
-  partitioned = lib.partition (lib.hasPrefix "antithesis") allSkills;
+  partitioned =
+    lib.partition (
+      name: name == "antithesis" || lib.hasPrefix "antithesis-" name
+    )
+    allSkills;
 
   antithesisSkills = partitioned.right;
 
@@ -136,7 +171,7 @@
     # symlink target is a store path, instead of asking each consumer to do it
     # on the host, and pin the no-symlink invariant so a future skill that
     # ships a symlink fails this build rather than vanishing from the menu.
-      pkgs.runCommand "claude-skills" {} ''
+      pkgs.runCommand "claude-skills" {__structuredAttrs = true;} ''
         cp -RL ${farm} "$out"
         links=$(find "$out" -type l)
         if [ -n "$links" ]; then
@@ -152,10 +187,10 @@ in {
   Each value is the store path of one Claude Code skill directory
   (containing `SKILL.md`, and optionally `assets/` and `references/`),
   ingested per skill so it is keyed on that skill's own bytes rather than on
-  the tree it was discovered in (see `ingest`). Discovered automatically
-  from `paths.skills`, so adding a directory there is the only step needed
-  to publish a new shared skill. Vendored skills are not here: their paths
-  depend on the consumer's package set, so `mkSkillsDir` resolves them from
+  the tree it was discovered in (see `ingest`). Discovered recursively from
+  `paths.skills`: `antithesis/debug/SKILL.md` is published as
+  `antithesis-debug`. Vendored skills are not here: their paths depend on the
+  consumer's package set, so `mkSkillsDir` resolves them from
   `vendoredSources`.
   */
   inherit sources;
@@ -171,7 +206,7 @@ in {
   /**
   Curated skill subsets for consumers to pick from.
 
-  `antithesis` is every skill whose name starts with `antithesis`;
+  `antithesis` is the root skill and every name starting with `antithesis-`;
   `common` is the rest. Together they partition `allSkills`.
   */
   inherit profiles;

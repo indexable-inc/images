@@ -1,6 +1,7 @@
 //! Shared assertions for Unibind integration and snapshot tests.
 
 pub mod fixtures;
+pub mod sample;
 
 use std::fmt::Write as _;
 

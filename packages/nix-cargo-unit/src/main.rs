@@ -98,6 +98,9 @@ struct NextestMetadataArgs {
     binaries_metadata: PathBuf,
 }
 
+// Independent CLI switches, not a state machine (same shape as the render
+// options bag it feeds).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, clap::Args)]
 struct RenderArgs {
     /// Canonical workspace root from cargo --unit-graph.
@@ -128,6 +131,20 @@ struct RenderArgs {
     /// compiled artifact for reachable panic machinery and fails if any is found.
     #[arg(long)]
     deny_panics: bool,
+
+    /// Compile lib-only units with `-Zembed-metadata=no`: their rlib carries a
+    /// metadata stub, and dependents pass each such crate twice, `--extern
+    /// name=<rlib>` plus `--extern name=<sibling .rmeta>` (cargo's
+    /// -Zno-embed-metadata scheme), so compiles read full metadata and links
+    /// consume the thin rlib. Requires a nightly rustc.
+    #[arg(long)]
+    no_embed_metadata: bool,
+
+    /// Extra rustc flag for metadata-emitting lib compiles (Rustc driver
+    /// only; repeatable, order preserved). The policy layer pairs these with
+    /// a toolchain that accepts them; the renderer just transcribes.
+    #[arg(long = "rmeta-stability-flag", value_name = "FLAG")]
+    rmeta_stability_flags: Vec<String>,
 }
 
 fn merge(args: MergeArgs) -> color_eyre::Result<()> {
@@ -306,6 +323,8 @@ fn render(args: RenderArgs) -> color_eyre::Result<()> {
             toolchain_id: args.toolchain_id,
             deny_unused_crate_dependencies: args.deny_unused_crate_dependencies,
             deny_panics: args.deny_panics,
+            embed_metadata: !args.no_embed_metadata,
+            rmeta_stability_flags: args.rmeta_stability_flags,
         },
     )
     .wrap_err("rendering Cargo unit graph as Nix")?;

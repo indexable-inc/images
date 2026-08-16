@@ -22,7 +22,12 @@ fn rows_kept(cols: u16, max_scrollback_bytes: usize, lines: usize) -> u64 {
 /// `ROW_BUDGET_COST_PERCENT`.
 #[test]
 fn scrollback_bytes_for_lines_delivers_the_rows_it_promises() {
-    for (lines, cols) in [(10_000_usize, 80_u16), (10_000, 200), (2_000, 400), (40_000, 80)] {
+    for (lines, cols) in [
+        (10_000_usize, 80_u16),
+        (10_000, 200),
+        (2_000, 400),
+        (40_000, 80),
+    ] {
         let budget = scrollback_bytes_for_lines(lines, cols);
         // Twice the ask, so the terminal is saturated and the number read back
         // is the limit rather than however much happened to be written.
@@ -43,8 +48,8 @@ fn scrollback_bytes_for_lines_delivers_the_rows_it_promises() {
 /// number a user typed bought exactly the same 637 rows.
 #[test]
 fn a_row_count_in_the_byte_field_buys_the_same_floor_whatever_it_says() {
-    let kept = [1_000_usize, 10_000, 100_000, 1_000_000]
-        .map(|budget| rows_kept(80, budget, 20_000));
+    let kept =
+        [1_000_usize, 10_000, 100_000, 1_000_000].map(|budget| rows_kept(80, budget, 20_000));
 
     assert!(
         kept[0] < 2_000,

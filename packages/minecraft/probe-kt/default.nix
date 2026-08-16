@@ -31,6 +31,8 @@ in
     version = "0.1.0";
     src = ./src;
     strictDeps = true;
+    # The tree ships no tests for this small kotlinc build.
+    doCheck = false;
     nativeBuildInputs = [
       jdk
       kotlinc

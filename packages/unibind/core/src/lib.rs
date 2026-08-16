@@ -7,9 +7,14 @@
 //! `unibind-backend-py` consume the IR and render the language-specific
 //! binding code.
 
+pub mod casing;
+pub mod docs;
 pub mod embed;
 pub mod ir;
 mod lower;
 pub mod render;
 
-pub use lower::{Backend, LowerError, export_backends, lower_module, strip_unibind_attrs};
+pub use lower::{
+    Backend, LowerError, PartPath, export_backends, export_parts, lower_module,
+    strip_unibind_attrs,
+};

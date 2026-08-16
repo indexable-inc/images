@@ -1,7 +1,7 @@
 {
   "ix-cli": {
-    "hash": "sha256-GaR6xB1NbKdtbJIAhSC3wd1D/XsLzGHk+1ds7mi16NA=",
-    "url": "https://ix.dev/cli/linux-x86_64/sha256/19a47ac41d4d6ca76d6c92008520b7c1dd43fd7b0bcc61e4fb576cee68b5e8d0/ix"
+    "hash": "sha256-QR1s3kDdV48W+exzVe+cEEbxr3DIIPzTJdlaaEJjK0M=",
+    "url": "https://ix.dev/cli/linux-x86_64/sha256/411d6cde40dd578f16f9ec7355ef9c1046f1af70c820fcd325d95a6842632b43/ix"
   },
   "mix-deps": {
     "hash": "sha256-1BCT7iRwMiOqD7AtocOzIAKa8oet1rWIB1XtWbzMONc="

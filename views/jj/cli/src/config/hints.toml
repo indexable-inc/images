@@ -1,0 +1,3 @@
+[hints]
+resolving-conflicts = true
+views-push-host-repo = true

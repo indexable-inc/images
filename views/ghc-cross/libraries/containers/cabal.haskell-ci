@@ -1,0 +1,16 @@
+-- configuration for haskell-ci
+-- so we don't need to pass all via command line arguments
+
+-- build only master branch, or PRs to master branch
+branches: master
+
+-- don't install --dep as cabal doesn't handle it for this project
+install-dependencies: False
+
+-- text depends on binary, and binary depends on containers, so we need to
+-- reinstall these boot libraries
+-- ghc-heap is depended on by nothunks which we use in the tests, and also
+-- depends on containers
+installed: +all -binary -text -ghc-heap
+
+cabal-check: False

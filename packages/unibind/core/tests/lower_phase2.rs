@@ -183,7 +183,10 @@ fn stray_unibind_attributes_on_an_object_are_rejected() {
         "mod m { #[unibind::object] #[unibind(resource)] pub struct H { id: u64 } \
          impl H { pub async fn close(&self) {} } }",
     );
-    assert!(message.contains("#[unibind::object(resource)]"), "{message}");
+    assert!(
+        message.contains("#[unibind::object(resource)]"),
+        "{message}"
+    );
 }
 
 /// Order does not save it: the stray attribute is refused above the marker

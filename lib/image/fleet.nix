@@ -58,36 +58,6 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     snapshot = true;
     switch.buildOn = "remote";
   };
-  isSecretName = name: builtins.match "[a-z][a-z0-9_]*" name != null;
-
-  normalizeSecretAttachment = sourceName: value:
-    assert lib.assertMsg (isSecretName sourceName)
-    "secret key '${sourceName}' must be lower snake_case: [a-z][a-z0-9_]*";
-    assert lib.assertMsg (isAttrs value) "secret '${sourceName}' must be an attrset";
-      if value ? env
-      then
-        assert lib.assertMsg (!(value ? file)) "secret '${sourceName}' cannot set both env and file"; {
-          name = sourceName;
-          target = {
-            name = value.env;
-            injectAs = "env";
-          };
-        }
-      else if value ? file
-      then {
-        name = sourceName;
-        target =
-          {
-            name = value.file;
-            injectAs = "file";
-          }
-          // lib.optionalAttrs (value ? owner) {inherit (value) owner;}
-          // lib.optionalAttrs (value ? mode) {inherit (value) mode;};
-      }
-      else throw "secret '${sourceName}' must set either env or file";
-
-  normalizeSecrets = secrets: lib.mapAttrsToList normalizeSecretAttachment secrets;
-
   mergeDeployments = parts:
     lib.mergeAttrsList parts
     // {
@@ -102,20 +72,23 @@ rendered fleet plan, image attrset, and wrapped CLI app.
   # different failure modes.
   #
   # `ix apply` is the supported path and it reads only the evaluated system:
-  # `ix.networking.groups` and `ix.networking.ipv4`, nothing else (ix's
-  # `DECLARED_NETWORKING`, `crates/ix/cli/src/run/client_command/apply_command.rs`).
-  # The plan this file renders is read by the deprecated `ix-fleet` alone. So a
-  # key describing the VM that gets created, rather than the workflow that
-  # deploys it, is a key `ix apply` cannot see unless something puts it into a
-  # module. That is how ENG-10846 shipped: `deployment.ipv4 = true` produced
-  # proxies with no public address, no warning, and no way to tell the result
-  # apart from a fleet that never asked.
+  # `ix.networking.groups`, `ix.networking.ipv4` and `ix.secretAttachments`,
+  # nothing else (ix's `DECLARED_APPLY`,
+  # `crates/control/orch/node-agent/src/vm_manager/resolve_ops.rs`). The plan
+  # this file renders is read by the deprecated `ix-fleet` alone. So a key
+  # describing the VM that gets created, rather than the workflow that deploys
+  # it, is a key `ix apply` cannot see unless something puts it into a module.
+  # That is how ENG-10846 shipped: `deployment.ipv4 = true` produced proxies
+  # with no public address, no warning, and no way to tell the result apart
+  # from a fleet that never asked, and how ENG-12214 shipped:
+  # `deployment.secrets` produced VMs with no `/run/secrets`, and the first
+  # symptom was a unit failing minutes later for a missing file.
   #
   # `identityModule` below is the path into the evaluated config, and
   # `unwiredIdentityKeys` is the assertion that every create-identity key has
   # one. Adding a key to `createIdentityDeploymentKeys` without wiring it fails
   # the eval instead of shipping another silent drop.
-  createIdentityDeploymentKeys = ["ipv4"];
+  createIdentityDeploymentKeys = ["ipv4" "secrets"];
 
   # Create-identity keys with no evaluated-config path today, listed so the
   # gap is in the source rather than in someone's memory. `region` is one:
@@ -135,7 +108,6 @@ rendered fleet plan, image attrset, and wrapped CLI app.
     "env"
     "l7ProxyPorts"
     "recreateOnUp"
-    "secrets"
     "snapshot"
     "switch"
   ];
@@ -147,6 +119,10 @@ rendered fleet plan, image attrset, and wrapped CLI app.
   # an address itself.
   identityModule = deploy: {
     ipv4 = {ix.networking.ipv4 = lib.mkIf deploy.ipv4 true;};
+    # A plain assignment rather than `mkIf`: `{}` is both the default and the
+    # "no opinion" value here, and an attrset merges with whatever a module
+    # declared instead of overriding it.
+    secrets = {ix.secrets = deploy.secrets;};
   };
 
   unwiredIdentityKeys =
@@ -427,7 +403,12 @@ rendered fleet plan, image attrset, and wrapped CLI app.
           inherit (deploy) l7ProxyPorts;
           # Per-VM user-store secret references plus delivery targets. ix-fleet
           # verifies the source keys exist before deploying.
-          secrets = normalizeSecrets (deploy.secrets or {});
+          #
+          # Read off the evaluated system rather than off `deploy`, for the
+          # same reason `groups` is: `deployment.secrets` is only one way in,
+          # and a module setting `ix.secrets` itself has to reach the plan and
+          # the `ix apply` evaluator alike.
+          secrets = config.ix.secretAttachments;
           dependsOn = expandedDependencies.${name};
           healthChecks = planHealthChecks config;
           # Rolling-update window for this node's replica group; ix-fleet

@@ -1,0 +1,6 @@
+error: dynamic attribute 'dyn' already defined at /pwd/lang/eval-fail-overrides-dynamic-dup.nix:10:5
+       at /pwd/lang/eval-fail-overrides-dynamic-dup.nix:16:3:
+           15|   __overrides = overrides;
+           16|   ${key} = "from the rec set";
+             |   ^
+           17| })

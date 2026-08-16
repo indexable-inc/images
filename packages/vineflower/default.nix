@@ -24,6 +24,9 @@ in
     strictDeps = true;
     nativeBuildInputs = [jdk];
 
+    # Upstream release jar; nothing to test at build time.
+    doCheck = false;
+
     installPhase = ''
       # shell
       runHook preInstall

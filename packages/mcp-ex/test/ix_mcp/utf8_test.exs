@@ -45,4 +45,30 @@ defmodule IxMcp.UTF8Test do
       assert UTF8.truncate("☃", 1) == ""
     end
   end
+
+  describe "truncate_tail/2" do
+    test "keeps the END of the text, which is where a diagnostic lives" do
+      assert UTF8.truncate_tail("abcdef", 3) == "def"
+      assert UTF8.truncate_tail("abc", 10) == "abc"
+      assert UTF8.truncate_tail("", 4) == ""
+    end
+
+    test "never begins inside a multibyte codepoint" do
+      # A byte-exact tail of an arrow run starts mid-sequence; the result must
+      # still be valid UTF-8, or it raises {:invalid_byte, _} from JSON.encode!
+      # on the reply path (#3538).
+      arrows = String.duplicate("→", 50)
+
+      for max <- 1..12 do
+        tail = UTF8.truncate_tail(arrows, max)
+        assert String.valid?(tail), "invalid tail at max=#{max}"
+        assert byte_size(tail) <= max
+      end
+    end
+
+    test "is the mirror of truncate/2, not the same function" do
+      assert UTF8.truncate("abcdef", 3) == "abc"
+      assert UTF8.truncate_tail("abcdef", 3) == "def"
+    end
+  end
 end

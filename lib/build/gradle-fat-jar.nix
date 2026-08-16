@@ -178,7 +178,7 @@ Arguments:
     )
     artifacts;
 
-  mavenRepo = pkgs.runCommand "${pname}-maven-repository" {} (
+  mavenRepo = pkgs.runCommand "${pname}-maven-repository" {__structuredAttrs = true;} (
     ''
       runHook preInstall
     ''

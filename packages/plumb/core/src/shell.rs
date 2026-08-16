@@ -12,9 +12,7 @@ use plumb_syntax::{
     RedirOp, Word, parse,
 };
 
-use crate::engine::{
-    self, EngineConfig, EnvPair, ExternalSpec, FileSink, StageSpec, StdinSpec,
-};
+use crate::engine::{self, EngineConfig, EnvPair, ExternalSpec, FileSink, StageSpec, StdinSpec};
 use crate::error::Error;
 use crate::report::{Capture, PipelineRun, Report, Stage};
 
@@ -228,7 +226,11 @@ impl Shell {
     /// Number of background runs still in flight.
     #[must_use]
     pub fn background_pending(&self) -> usize {
-        self.lock().jobs.iter().filter(|j| !j.handle.is_finished()).count()
+        self.lock()
+            .jobs
+            .iter()
+            .filter(|j| !j.handle.is_finished())
+            .count()
     }
 
     /// Reap finished background runs, returning their reports.
@@ -338,12 +340,7 @@ impl Shell {
         bg_id
     }
 
-    fn run_and_or(
-        &self,
-        and_or: &AndOr,
-        report: &mut Report,
-        ctx: RunCtx,
-    ) -> Result<(), Error> {
+    fn run_and_or(&self, and_or: &AndOr, report: &mut Report, ctx: RunCtx) -> Result<(), Error> {
         self.run_pipeline_ast(&and_or.first, report, ctx)?;
         let mut status = report.pipelines.last().map_or(0, |p| p.status);
         for tail in &and_or.rest {
@@ -641,7 +638,11 @@ fn echo_spec(argv: Vec<String>) -> StageSpec {
     } else {
         true
     };
-    let mut text = rest.cloned().collect::<Vec<String>>().join(" ").into_bytes();
+    let mut text = rest
+        .cloned()
+        .collect::<Vec<String>>()
+        .join(" ")
+        .into_bytes();
     if newline {
         text.push(b'\n');
     }
@@ -809,9 +810,8 @@ impl Shell {
                     } else if name == "?" {
                         self.lock().last_status.to_string()
                     } else {
-                        self.var(name).ok_or_else(|| Error::UnsetVar {
-                            name: name.clone(),
-                        })?
+                        self.var(name)
+                            .ok_or_else(|| Error::UnsetVar { name: name.clone() })?
                     };
                     expanded.text.push_str(&value);
                     // Expansion results are data, never glob patterns.

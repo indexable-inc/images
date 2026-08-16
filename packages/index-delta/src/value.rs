@@ -93,21 +93,17 @@ fn sniff(contents: &[u8]) -> Format {
 }
 
 fn looks_keyvalue(text: &str) -> bool {
-    let mut entries = 0usize;
-    let mut other = 0usize;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
-            continue;
-        }
-        let is_header = trimmed.starts_with('[') && trimmed.ends_with(']');
-        if is_header || trimmed.contains('=') {
-            entries += 1;
-        } else {
-            other += 1;
-        }
-    }
-    entries > 0 && entries >= other
+    let significant = text
+        .lines()
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !t.starts_with('#') && !t.starts_with(';'));
+    let (entries, other): (Vec<_>, Vec<_>) = significant.partition(|t| keyvalue_entry(t));
+    !entries.is_empty() && entries.len() >= other.len()
+}
+
+/// A section header (`[name]`) or a `key=value` line.
+fn keyvalue_entry(trimmed: &str) -> bool {
+    (trimmed.starts_with('[') && trimmed.ends_with(']')) || trimmed.contains('=')
 }
 
 /// Parse contents under a format, degrading gracefully: a structured file

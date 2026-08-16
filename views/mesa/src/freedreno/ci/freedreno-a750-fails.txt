@@ -1,0 +1,138 @@
+KHR-GL46.shader_image_size.basic-nonMS-tes-int,Fail
+KHR-GL46.tessellation_shader.tessellation_control_to_tessellation_evaluation.gl_tessLevel,Fail
+KHR-GL46.tessellation_shader.tessellation_shader_tessellation.TES,Fail
+KHR-GL46.texture_lod_bias.texture_lod_bias_all,Fail
+KHR-GL46.texture_stencil8.multisample,Fail
+KHR-GL46.vertex_attrib_binding.advanced-iterations,Fail
+
+KHR-GLES3.framebuffer_blit.framebuffer_blit_functionality_multisampled_to_singlesampled_blit,Fail
+KHR-GLES3.framebuffer_blit.multisampled_to_singlesampled_blit_depth_config_test,Fail
+KHR-GLES31.core.texture_stencil8.multisample,Fail
+KHR-GLES31.core.vertex_attrib_binding.advanced-iterations,Fail
+
+# New failures with GL CTS 4.6.7.0 & ES CTS 3.2.13.0
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.rgba8_rgba8ui.renderbuffer_to_renderbuffer,Fail
+dEQP-GLES31.functional.copy_image.non_compressed.viewclass_32_bits.srgb8_alpha8_rgba8ui.renderbuffer_to_renderbuffer,Fail
+
+
+gmem-dEQP-VK.clipping.user_defined.clip_cull_distance_dynamic_index.vert_geom.6_2,Fail
+gmem-dEQP-VK.clipping.user_defined.clip_cull_distance_dynamic_index.vert_geom.6_2_fragmentshader_read,Fail
+gmem-dEQP-VK.draw.dynamic_rendering.complete_secondary_cmd_buff.scissor.dynamic_scissor_out_of_order_updates,Fail
+gmem-dEQP-VK.glsl.builtin.function.integer.bitfieldextract.ivec4_highp_geometry,Fail
+gmem-dEQP-VK.glsl.builtin.function.integer.usubborrow.uvec4_mediump_geometry,Fail
+gmem-dEQP-VK.spirv_assembly.instruction.graphics.cross_stage.interface_blocks.relaxedprecision,Fail
+
+dynamic-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
+dynamic-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d24_unorm_s8_uint_separate_layouts.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
+dynamic-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d32_sfloat_s8_uint.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
+dynamic-dEQP-VK.renderpass2.depth_stencil_resolve.image_2d_32_32.samples_2.d32_sfloat_s8_uint_separate_layouts.compatibility_depth_zero_stencil_zero_testing_stencil,Fail
+
+# New failures with VKCTS 1.4.4.0
+dEQP-VK.pipeline.monolithic.misc.identically_defined_layout,Fail
+
+# New failures when updating kernel from msm-next at 6.16 to 6.19.5
+# https://gitlab.freedesktop.org/drm/msm/-/issues/93
+dEQP-VK.pipeline.monolithic.timestamp.calibrated.calibration_test,Fail
+dEQP-VK.pipeline.monolithic.timestamp.calibrated.dev_domain_test,Fail
+
+
+# Bad assumptions in piglit about layout of multiplanar formats,
+# it should use separate buffers per plane:
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvu420,Fail
+
+
+# OpenCL tests below
+#
+## rusticl-core issues:
+#
+#Unexpected CL error: CL_BUILD_PROGRAM_FAILURE -11
+#Expected CL error: CL_INVALID_BUILD_OPTIONS -43
+api@clbuildprogram,Fail
+
+#Unexpected CL error: CL_COMPILE_PROGRAM_FAILURE -15
+#Expected CL error: CL_INVALID_COMPILER_OPTIONS -66
+api@clcompileprogram,Fail
+
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_KERNEL_ARG_INFO_NOT_AVAILABLE -19
+api@clgetkernelarginfo,Fail
+
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_INVALID_LINKER_OPTIONS -67
+#Failed (error code: CL_SUCCESS): Trigger CL_INVALID_LINKER_OPTIONS if the linker options specified by options are invalid.
+#Unexpected CL error: CL_LINK_PROGRAM_FAILURE -17
+#Expected CL error: CL_INVALID_OPERATION -59
+#Failed (error code: CL_LINK_PROGRAM_FAILURE): Trigger CL_INVALID_OPERATION if the rules for devices containing compiled binaries or libraries as described in input_programs argument above are not followed.
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_LINK_PROGRAM_FAILURE -17
+api@cllinkprogram,Fail
+
+# can be resolved by RUSTICL_FEATURES=fp16,fp64
+program@build@vector-data-types,Fail
+
+# https://gitlab.freedesktop.org/mesa/mesa/-/issues/8408
+program@execute@global-offset,Fail
+program@execute@global-offset@3d- input dependent,Fail
+
+# Regressed between https://gitlab.freedesktop.org/mesa/mesa/-/jobs/70146138 and https://gitlab.freedesktop.org/mesa/mesa/-/jobs/70217173
+program@execute@vector-conversion,Fail
+
+#
+## freedreno issues:
+#
+#Error at data[0]
+custom@r600 create release buffer bug,Fail
+
+#
+## works on OnePlus 6:
+#
+#Failed: return NULL if platform is not a valid platform
+api@clgetextensionfunctionaddressforplatform,Fail
+
+#
+## Not our problem:
+#
+# CL_DEVICE_MAX_READ_IMAGE_ARGS: failed, expected at least 128, got 16 
+api@clgetdeviceinfo,Fail
+
+# CL_QUEUE_SIZE Unexpected CL error: CL_INVALID_COMMAND_QUEUE -36
+api@clgetcommandqueueinfo,Fail
+
+# broken piglit test (doesn't account for FTZ)
+program@execute@builtin@builtin-float-nextafter-1.0.generated,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float1,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float16,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float2,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float4,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float8,Fail
+
+# Initial ANGLE failures
+angle-dEQP-GLES2.functional.shaders.algorithm.rgb_to_hsl_vertex,Fail
+
+KHR-GL46.shader_atomic_counters.basic-usage-tes,Fail
+
+# test_shader_instructions:3479:124:f32tof16: Test failed: Got {0x00000000, 0x00000000, 0x00000000, 0x00000000}, expected {0x00000001, 0x00000002, 0x00000003, 0x00000004} at (0, 0).
+# test_shader_instructions:3479:125:f32tof16: Test failed: Got {0x00008000, 0x00008000, 0x00008000, 0x00008000}, expected {0x00008001, 0x00008002, 0x00008003, 0x00008004} at (0, 0).
+# test_shader_instructions:3479:130:f32tof16: Todo succeeded: Got {0x00006400, 0x00006401, 0x00006402, 0x00006403}, expected {0x00006400, 0x00006401, 0x00006402, 0x00006403} at (32, 32).
+# test_shader_instructions:3479:131:f32tof16: Todo succeeded: Got {0x00006800, 0x00006801, 0x00006802, 0x00006803}, expected {0x00006800, 0x00006801, 0x00006802, 0x00006803} at (32, 32).
+# test_shader_instructions:3479:132:f32tof16: Todo succeeded: Got {0x0000e400, 0x0000e401, 0x0000e402, 0x0000e403}, expected {0x0000e400, 0x0000e401, 0x0000e402, 0x0000e403} at (32, 32).
+# test_shader_instructions:3479:133:f32tof16: Todo succeeded: Got {0x0000e800, 0x0000e801, 0x0000e802, 0x0000e803}, expected {0x0000e800, 0x0000e801, 0x0000e802, 0x0000e803} at (32, 32).
+# test_shader_instructions:3479:134:f32tof16: Todo: Got {0x00000000, 0x00008000, 0x00000000, 0x00008000}, expected {0x00000000, 0x00008000, 0x00000001, 0x00008001} at (0, 0).
+vkd3d-test_shader_instructions,Fail
+
+# This one runs until OOM in the heap, it seems.  Even single-threaded under
+# deqp-runner, we see failures with:
+#   4128:err:vkd3d_allocate_device_memory: Failed to allocate device memory (size 16842752, type_flags 0x1, type_mask 0x7).
+#   test_stress_fallback_render_target_allocation_device:3309: Test failed: Failed to create heap, hr #8007000e.
+vkd3d-test_stress_fallback_render_target_allocation_device,Fail
+
+vkd3d-test_sparse_depth_stencil_rendering,Fail
+vkd3d-test_clear_render_target_view_extreme_values,Fail
+
+# Autotune regression
+vkd3d-test_multisample_resolve_formats,Fail
+
+# test_sampler_feedback_implicit_lod_aniso:3429:Test 19: Test failed: Mip 1, expected 0, got 1.
+# Enabled by EXT_shader_image_atomic_int64:
+# https://github.com/HansKristian-Work/vkd3d-proton/blob/master/docs/sampler_feedback.md
+vkd3d-test_sampler_feedback_implicit_lod_aniso,Fail

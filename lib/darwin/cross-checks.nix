@@ -106,6 +106,26 @@
       esac
     '';
   };
+  # Run the installed Linux-hosted compiler and read its configured target.
+  # This stops a Git-source bootstrap regression at GHC instead of rebuilding
+  # nom's Haskell closure before reporting the missing compiler.
+  cross-darwin-ghc-smoke = let
+    crossGhc = crossPackages.nix-output-monitor-aarch64-apple-darwin.crossGhc;
+  in
+    mkCheck "cross-darwin-ghc-smoke" {
+      script = ''
+        ghc=${crossGhc}
+        info=$("$ghc/bin/${crossGhc.targetPrefix}ghc" --info)
+        echo "$info"
+        case "$info" in
+          *"Target platform"*"aarch64-apple-darwin"*) ;;
+          *)
+            echo "expected aarch64-apple-darwin target" >&2
+            exit 1
+            ;;
+        esac
+      '';
+    };
   # nom rides the same lane one level deeper: a Linux-hosted cross GHC
   # (ix.crossGhc) compiles the whole Haskell closure to Mach-O arm64
   # (#3606). Assert the Haskell lane emits a real Mach-O arm64 nom and

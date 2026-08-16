@@ -1,0 +1,72 @@
+cabal-version: 3.12
+name: AutogenModules
+version: 0.1
+license: BSD-3-Clause
+license-file: LICENSE
+author: Federico Mastellone
+maintainer: Federico Mastellone
+synopsis: AutogenModules
+category: PackageTests
+build-type: Simple
+
+description:
+    Check that Cabal recognizes the autogen-modules fields below.
+
+Library
+    default-language: Haskell2010
+    build-depends: base == 4.*
+    exposed-modules:
+        MyLibrary
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyLibHelperModule
+    other-modules:
+        MyLibModule
+    autogen-modules:
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyLibHelperModule
+
+Executable Exe
+    default-language: Haskell2010
+    main-is: Dummy.hs
+    build-depends: base == 4.*
+    other-modules:
+        MyExeModule
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyExeHelperModule
+    autogen-modules:
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyExeHelperModule
+
+Test-Suite Test
+    default-language: Haskell2010
+    main-is: Dummy.hs
+    type: exitcode-stdio-1.0
+    build-depends: base == 4.*
+    other-modules:
+        MyTestModule
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyTestHelperModule
+    autogen-modules:
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyTestHelperModule
+
+Benchmark Bench
+    default-language: Haskell2010
+    main-is: Dummy.hs
+    type: exitcode-stdio-1.0
+    build-depends: base == 4.*
+    other-modules:
+        MyBenchModule
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyBenchHelperModule
+    autogen-modules:
+        PackageInfo_AutogenModules
+        Paths_AutogenModules
+        MyBenchHelperModule

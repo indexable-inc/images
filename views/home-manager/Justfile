@@ -1,0 +1,28 @@
+# Common commands
+#
+# Contributing manual:
+# - https://nix-community.github.io/home-manager/#ch-contributing
+
+# List tests matching a pattern `pattern`
+list *pattern:
+  nix run .#tests -- -l {{pattern}}
+
+# Run all tests matching a pattern `pattern`
+test *pattern:
+  nix run .#tests -- {{pattern}}
+
+# List integration tests
+list_integration_tests:
+  nix run .#tests -- -t -l
+
+# Run integration tests
+integration_tests:
+  nix run .#tests -- -t integration-test-
+
+# Create a news entry
+create-news-entry:
+  modules/misc/news/create-news-entry.sh
+
+# format codebase with treefmt
+format:
+  treefmt

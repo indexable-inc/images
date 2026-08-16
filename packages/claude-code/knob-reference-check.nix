@@ -93,4 +93,4 @@ in
   "claude-code env-registry.tsv: not generated from ${versionMarker}; run `nix build .#claude-code.envRegistry` and copy the result";
   assert lib.assertMsg subcommandsCurrent
   "claude-code subcommands.tsv: not generated from ${versionMarker}; run `nix run .#claude-code.updateScript -- --registry-only`. A stale token list is how the launcher starts prepending flags ahead of a subcommand again (index#4269)";
-    pkgs.runCommand "claude-code-knob-reference-check" {} "mkdir -p $out"
+    pkgs.runCommand "claude-code-knob-reference-check" {__structuredAttrs = true;} "mkdir -p $out"

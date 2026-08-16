@@ -4,7 +4,7 @@
   ix,
 }:
 # Reference package for the external-Rust-tool house style: a standalone
-# third-party binary built from a pinned flake source input with
+# third-party binary built from a checked jj view with
 # `rustPlatform.buildRustPackage`. See `skills/dependency-intake/SKILL.md`.
 let
   src = ix.launchkSrc;
@@ -28,15 +28,6 @@ in
     # libclang on the build host.
     nativeBuildInputs = [rustPlatform.bindgenHook];
 
-    # `git_version!()` shells out to `git describe` at build time; the fetched
-    # tarball has no `.git`, so resolve the about-box string to the crate version
-    # instead. --replace-fail keeps this guard honest if upstream moves the call.
-    postPatch = ''
-      # shell
-      substituteInPlace launchk/src/main.rs \
-        --replace-fail "git_version!()" 'env!("CARGO_PKG_VERSION")'
-    '';
-
     cargoBuildFlags = [
       "-p"
       "launchk"
@@ -48,7 +39,7 @@ in
 
     meta = {
       description = "Cursive TUI for observing launchd agents and daemons";
-      homepage = "https://github.com/mach-kernel/launchk";
+      homepage = "https://github.com/intellekthq/launchk";
       license = lib.licenses.mit;
       mainProgram = "launchk";
       platforms = lib.platforms.darwin;

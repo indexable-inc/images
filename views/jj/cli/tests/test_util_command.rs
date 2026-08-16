@@ -1,0 +1,308 @@
+// Copyright 2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::fs;
+
+use insta::assert_snapshot;
+use test_case::test_case;
+use testutils::TestRepoBackend;
+use testutils::TestResult;
+use testutils::TestWorkspace;
+
+use crate::common::TestEnvironment;
+
+#[test_case(TestRepoBackend::Simple, "Simple" ; "simple backend")]
+#[test_case(TestRepoBackend::Git, "git" ; "git backend")]
+fn test_util_backend_name(backend: TestRepoBackend, expected_name: &str) {
+    let test_env = TestEnvironment::default();
+    let test_workspace = TestWorkspace::init_with_backend(backend);
+    let root = test_workspace.workspace.workspace_root();
+    let output = test_env
+        .run_jj_in(&root, ["util", "backend", "name"])
+        .success();
+    assert_eq!(output.stdout.raw(), &[expected_name, "\n"].concat());
+}
+
+#[test]
+fn test_util_config_schema() {
+    let test_env = TestEnvironment::default();
+    let output = test_env.run_jj_in(".", ["util", "config-schema"]);
+    // Validate partial snapshot, redacting any lines nested 2+ indent levels.
+    insta::with_settings!({filters => vec![(r"(?m)(^        .*$\r?\n)+", "        [...]\n")]}, {
+        assert_snapshot!(output, @r#"
+        {
+            "$schema": "http://json-schema.org/draft-04/schema",
+            "$comment": "`taplo` and the corresponding VS Code plugins only support version draft-04 of JSON Schema, see <https://taplo.tamasfe.dev/configuration/developing-schemas.html>. draft-07 is mostly compatible with it, newer versions may not be.",
+            "title": "Jujutsu config",
+            "type": "object",
+            "description": "User configuration for Jujutsu VCS. See https://docs.jj-vcs.dev/latest/config/ for details",
+            "properties": {
+                [...]
+            }
+        }
+        [EOF]
+        "#);
+    });
+}
+
+#[test]
+fn test_gc_args() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    let output = work_dir.run_jj(["util", "gc"]);
+    insta::assert_snapshot!(output, @"");
+
+    let output = work_dir.run_jj(["util", "gc", "--at-op=@-"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Error: Cannot garbage collect from a non-head operation
+    [EOF]
+    [exit status: 1]
+    ");
+
+    let output = work_dir.run_jj(["util", "gc", "--expire=foobar"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Error: --expire only accepts 'now'
+    [EOF]
+    [exit status: 1]
+    ");
+}
+
+#[test]
+fn test_gc_operation_log() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    // Create an operation.
+    work_dir.write_file("file", "a change\n");
+    work_dir.run_jj(["commit", "-m", "a change"]).success();
+    let op_to_remove = work_dir.current_operation_id();
+
+    // Make another operation the head.
+    work_dir.write_file("file", "another change\n");
+    work_dir
+        .run_jj(["commit", "-m", "another change"])
+        .success();
+
+    // This works before the operation is removed.
+    work_dir
+        .run_jj(["debug", "object", "operation", &op_to_remove])
+        .success();
+
+    // Remove some operations.
+    work_dir.run_jj(["operation", "abandon", "..@-"]).success();
+    work_dir.run_jj(["util", "gc", "--expire=now"]).success();
+
+    // Now this doesn't work.
+    let output = work_dir.run_jj(["debug", "object", "operation", &op_to_remove]);
+    insta::assert_snapshot!(output.strip_stderr_last_line(), @"
+    ------- stderr -------
+    Internal error: Failed to load an operation
+    Caused by:
+    1: Object 8eda7af9cb0a21f1e2663b153d168ae65ee8508fdcff832e6ea53bd7285f5304bc6d05d3ce4096d5d0ac4c16159c02a864defafd1f2908af190e02f27d6d28ed of type operation not found
+    2: Cannot access $TEST_ENV/repo/.jj/repo/op_store/operations/8eda7af9cb0a21f1e2663b153d168ae65ee8508fdcff832e6ea53bd7285f5304bc6d05d3ce4096d5d0ac4c16159c02a864defafd1f2908af190e02f27d6d28ed
+    [EOF]
+    [exit status: 255]
+    ");
+}
+
+#[test]
+fn test_shell_completions() {
+    #[track_caller]
+    fn test(shell: &str) {
+        let test_env = TestEnvironment::default();
+        // Use the local backend because GitBackend::gc() depends on the git CLI.
+        let output = test_env
+            .run_jj_in(".", ["util", "completion", shell])
+            .success();
+        // Ensures only stdout contains text
+        assert!(
+            !output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output}"
+        );
+    }
+
+    test("bash");
+    test("elvish");
+    test("fish");
+    test("nushell");
+    test("power-shell");
+    test("zsh");
+}
+
+#[test]
+fn test_util_exec() {
+    let test_env = TestEnvironment::default();
+    let formatter_path = assert_cmd::cargo::cargo_bin!("fake-formatter");
+    let output = test_env.run_jj_in(
+        ".",
+        [
+            "util",
+            "exec",
+            "--",
+            formatter_path.to_str().unwrap(),
+            "--append",
+            "hello",
+        ],
+    );
+    // Ensures only stdout contains text
+    insta::assert_snapshot!(output, @"hello[EOF]");
+}
+
+#[test]
+fn test_util_exec_fail() {
+    let test_env = TestEnvironment::default();
+    let formatter_path = assert_cmd::cargo::cargo_bin!("fake-formatter");
+    let output = test_env.run_jj_in(
+        ".",
+        [
+            "util",
+            "exec",
+            "--",
+            formatter_path.to_str().unwrap(),
+            "--badopt",
+        ],
+    );
+    // Ensures only stdout contains text
+    insta::assert_snapshot!(output.normalize_stderr_with(|s| s.replace(".exe", "")), @"
+    ------- stderr -------
+    error: unexpected argument '--badopt' found
+
+      tip: a similar argument exists: '--abort'
+
+    Usage: fake-formatter --abort
+
+    For more information, try '--help'.
+    [EOF]
+    [exit status: 2]
+    ");
+}
+
+#[test]
+fn test_util_exec_not_found() {
+    let test_env = TestEnvironment::default();
+    let output = test_env.run_jj_in(".", ["util", "exec", "--", "jj-test-missing-program"]);
+    insta::assert_snapshot!(output.strip_stderr_last_line(), @"
+    ------- stderr -------
+    Error: Failed to execute external command 'jj-test-missing-program'
+    [EOF]
+    [exit status: 1]
+    ");
+}
+
+#[test]
+fn test_util_exec_crash() {
+    let test_env = TestEnvironment::default();
+    let formatter_path = assert_cmd::cargo::cargo_bin!("fake-formatter");
+    let output = test_env.run_jj_in(
+        ".",
+        [
+            "util",
+            "exec",
+            "--",
+            formatter_path.to_str().unwrap(),
+            "--abort",
+        ],
+    );
+
+    if cfg!(unix) {
+        insta::assert_snapshot!(output, @"
+        ------- stderr -------
+        Error: External command was terminated by signal: 15 (SIGTERM)
+        [EOF]
+        [exit status: 1]
+        ");
+    } else if cfg!(windows) {
+        // abort produces STATUS_STACK_BUFFER_OVERRUN (0xc0000409)
+        insta::assert_snapshot!(output, @r"
+        [exit status: -1073740791]
+        ");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_util_exec_sets_env() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let output = test_env.run_jj_in(
+        ".",
+        [
+            "-R",
+            "repo",
+            "util",
+            "exec",
+            "--",
+            "/bin/sh",
+            "-c",
+            r#"echo "$JJ_WORKSPACE_ROOT""#,
+        ],
+    );
+    insta::assert_snapshot!(output, @"
+    $TEST_ENV/repo
+    [EOF]
+    ");
+}
+
+#[test]
+fn test_install_man_pages() -> TestResult {
+    let test_env = TestEnvironment::default();
+
+    // no man pages present
+    let man_dir = test_env.env_root().join("man1");
+    assert!(!man_dir.exists());
+
+    // install man pages
+    let output = test_env.run_jj_in(".", ["util", "install-man-pages", "."]);
+    insta::assert_snapshot!(output, @"");
+
+    // confirm something is now present
+    assert!(man_dir.is_dir());
+    assert!(fs::read_dir(man_dir)?.next().is_some());
+    Ok(())
+}
+
+#[test]
+fn test_util_snapshot() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    work_dir.write_file("foo", "foo");
+
+    let output = work_dir.run_jj(["util", "snapshot"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    Snapshot complete.
+    [EOF]
+    ");
+}
+
+#[test]
+fn test_util_snapshot_nothing_changed() {
+    let test_env = TestEnvironment::default();
+    test_env.run_jj_in(".", ["git", "init", "repo"]).success();
+    let work_dir = test_env.work_dir("repo");
+
+    let output = work_dir.run_jj(["util", "snapshot"]);
+    insta::assert_snapshot!(output, @"
+    ------- stderr -------
+    No snapshot needed.
+    [EOF]
+    ");
+}

@@ -91,6 +91,7 @@ fn main() -> ExitCode {
         Some("git-guard") => guards::git_guard(),
         Some("write-guard") => guards::write_guard(),
         Some("search-guard") => guards::search_guard(),
+        Some("kernel-only-guard") => guards::kernel_only_guard(),
         Some("friction-report") => friction::friction_report(),
         Some("subagent-cache-lookup") => subagent_cache::lookup(),
         Some("subagent-cache-populate") => subagent_cache::populate(),

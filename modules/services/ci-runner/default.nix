@@ -126,6 +126,13 @@ in {
           # is a daemon protocol capability, not something a workflow-side
           # NIX_CONFIG can add for an untrusted runner user.
           "ca-derivations"
+          # Those same units address their output with blake3 (ADR 0003), and
+          # parsing `outputHashAlgo = "blake3"` is gated on this feature. It has
+          # to be here for the same reason `ca-derivations` is: this runner sets
+          # `accept-flake-config = false` and its users are untrusted, so the
+          # flake's own `extra-experimental-features` is ignored rather than
+          # applied, and a workflow-side NIX_CONFIG cannot add it either.
+          "blake3-hashes"
         ];
         # The daemon owns the same cache and key below. Runner users are
         # untrusted, so consuming the flake's restricted copies only emits

@@ -1,0 +1,19 @@
+[package]
+name = "ix-kernel"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Effects kernel: one memo table over a CAS, with per-effect trust disciplines"
+
+[dependencies]
+# The only hash in the system. Every hash is domain-separated (see `hash`),
+# so blake3's own tree structure is never relied on for separation.
+blake3 = "1"
+# Read side of effect.lock only; the write side is hand-rendered so that the
+# same table always produces the same bytes (see `lock`). `display` is off so
+# that is enforced rather than merely intended: the TOML writer is not linked
+# in, and a future serialisation of a lock file will not compile.
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
+
+[lints]
+workspace = true

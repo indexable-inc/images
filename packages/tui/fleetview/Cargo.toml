@@ -14,7 +14,7 @@ color-eyre.workspace = true
 crossterm.workspace = true
 ndarray.workspace = true
 ratatui.workspace = true
-tui.workspace = true
+tui = { workspace = true, features = ["publish"] }
 uuid.workspace = true
 
 [dev-dependencies]

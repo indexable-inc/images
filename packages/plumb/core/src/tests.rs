@@ -85,9 +85,7 @@ fn redirections_write_and_read_files() {
 
 #[test]
 fn command_not_found_is_status_127() {
-    let report = shell()
-        .eval("definitely-not-a-command-xyz")
-        .expect("eval");
+    let report = shell().eval("definitely-not-a-command-xyz").expect("eval");
     assert_eq!(report.status, 127);
     assert!(
         report.pipelines[0].stages[0]
@@ -140,7 +138,9 @@ fn last_status_variable() {
 
 #[test]
 fn connectors_short_circuit() {
-    let report = shell().eval("false && echo skipped; echo ran").expect("eval");
+    let report = shell()
+        .eval("false && echo skipped; echo ran")
+        .expect("eval");
     // `echo skipped` never ran: false, then `echo ran`.
     assert_eq!(report.pipelines.len(), 2);
     assert_eq!(report.output(), "ran\n");
@@ -161,7 +161,9 @@ fn assignment_and_environment() {
     let exported = sh.eval("sh -c 'echo value:$GREETING'").expect("child");
     assert_eq!(exported.output(), "value:hi\n");
     // Per-command env prefix.
-    let prefixed = shell().eval("ONLY=here sh -c 'echo got:$ONLY'").expect("eval");
+    let prefixed = shell()
+        .eval("ONLY=here sh -c 'echo got:$ONLY'")
+        .expect("eval");
     assert_eq!(prefixed.output(), "got:here\n");
 }
 
@@ -172,7 +174,9 @@ fn cd_changes_shared_cwd() {
     assert_eq!(sh.cwd(), std::path::PathBuf::from("/"));
     let report = sh.eval("sh -c pwd").expect("pwd");
     assert_eq!(report.output(), "/\n");
-    let bad = sh.eval("cd /nonexistent-dir-xyz").expect("cd failure is a status");
+    let bad = sh
+        .eval("cd /nonexistent-dir-xyz")
+        .expect("cd failure is a status");
     assert_eq!(bad.status, 1);
 }
 
@@ -237,7 +241,10 @@ fn truncation_is_loud_and_bounded() {
 fn reports_serialize_to_json() {
     let report = shell().eval("echo json | cat").expect("eval");
     let json = serde_json::to_value(&report).expect("serialize");
-    assert_eq!(json["pipelines"][0]["stages"][1]["stdout"]["text"], "json\n");
+    assert_eq!(
+        json["pipelines"][0]["stages"][1]["stdout"]["text"],
+        "json\n"
+    );
     assert_eq!(json["status"], 0);
 }
 
@@ -249,9 +256,7 @@ fn echo_dash_n() {
 
 #[test]
 fn quoting_reaches_argv_intact() {
-    let report = shell()
-        .eval(r#"printf '%s|' "a b" 'c d' e"#)
-        .expect("eval");
+    let report = shell().eval(r#"printf '%s|' "a b" 'c d' e"#).expect("eval");
     assert_eq!(report.output(), "a b|c d|e|");
 }
 
@@ -321,7 +326,11 @@ fn timing_is_recorded() {
     assert!(report.started_at_ms <= report.ended_at_ms);
     let stage = &report.pipelines[0].stages[0];
     assert!(stage.started_at_ms >= before && stage.ended_at_ms <= after);
-    assert!(stage.user_ms >= 1, "busy loop burned user cpu: {}", stage.user_ms);
+    assert!(
+        stage.user_ms >= 1,
+        "busy loop burned user cpu: {}",
+        stage.user_ms
+    );
     let path = sh.eval("echo ${runs[1].stages[0].user_ms}").expect("path");
     assert_eq!(path.output().trim_end(), stage.user_ms.to_string());
 }

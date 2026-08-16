@@ -1,0 +1,44 @@
+error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
+  --> tests/ui/fallible_int_fallback.rs:11:13
+   |
+LL |     let _ = u8::try_from(big).unwrap_or(0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
+   = note: `-D clippy::fallible-int-fallback` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::fallible_int_fallback)]`
+
+error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
+  --> tests/ui/fallible_int_fallback.rs:15:13
+   |
+LL |     let _ = i16::try_from(x).unwrap_or(i16::MAX);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
+
+error: `.unwrap_or_default()` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
+  --> tests/ui/fallible_int_fallback.rs:19:13
+   |
+LL |     let _ = i32::try_from(x).unwrap_or_default();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
+
+error: `.unwrap_or_else(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
+  --> tests/ui/fallible_int_fallback.rs:23:13
+   |
+LL |     let _ = usize::try_from(x).unwrap_or_else(|_| 0);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
+
+error: `.unwrap_or(...)` silently substitutes a default for an out-of-range integer conversion, hiding the overflow
+  --> tests/ui/fallible_int_fallback.rs:27:17
+   |
+LL |     let _: u8 = big.try_into().unwrap_or(0);
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: handle the conversion error instead (propagate with `?`, or report it); if clamping is genuinely intended, write it explicitly (e.g. `x.min(MAX)` before the cast) with a comment, or `#[allow(clippy::fallible_int_fallback)]` with a reason
+
+error: aborting due to 5 previous errors
+

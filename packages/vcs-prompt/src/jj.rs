@@ -2,8 +2,13 @@
 //!
 //! `jj-lib` would answer the same questions in-process, but it is a heavy
 //! dependency to build and pin (it is why the third-party `jj-starship` was
-//! dropped from this config), and the CLI answers in ~20ms on the largest
+//! dropped from this config), and the CLI answers in ~100ms on the largest
 //! workspace here, which a prompt can pay.
+//!
+//! One call answers everything the prompt shows, including the parent's
+//! timestamp for the commit-age segment: the extra revsets are free next to
+//! the commit-index load that dominates, measured at 100ms either way on the
+//! 4000-commit workspace here.
 
 use std::path::Path;
 use std::process::Command;
@@ -16,25 +21,65 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 /// history and keeps the parse bounded.
 const BOOKMARK_SEARCH_DEPTH: usize = 20;
 
-/// One tab-separated row per commit: change-id prefix, the rest of the
-/// shortest unique change id, comma-joined local bookmarks, then a flag blob.
-/// Fields are concatenated rather than passed through the template's
-/// `separate()`, which drops empty values and would shift the columns.
-const TEMPLATE: &str = concat!(
-    r#"change_id.shortest(8).prefix() ++ "\t""#,
-    r#" ++ change_id.shortest(8).rest() ++ "\t""#,
-    r#" ++ bookmarks.join(",") ++ "\t""#,
-    r#" ++ if(empty, "e", "") ++ if(conflict, "c", "") ++ if(divergent, "d", "") ++ "\n""#,
-);
+/// Rows are tagged by set membership rather than by position, because
+/// position is not distance: `jj log` emits a topological order, so the index
+/// of a bookmarked row in `ancestors(@, N)` is not the number of commits
+/// between it and `@` as soon as a merge is in the window. `contained_in`
+/// asks the revset engine the question directly, and the counts it yields are
+/// the ones a reader can restate: `⇡` is `trunk()..@`, `⇣` is `@..trunk()`.
+///
+/// `local_bookmarks`, never `bookmarks`: the latter also yields *remote*
+/// bookmarks, and in a non-colocated repo that includes jj's `git`
+/// pseudo-remote -- `refs/heads/*` inside `.jj/repo/store/git`, an export
+/// mirror that a `jj git push` left behind and that nothing moves afterwards.
+/// It out-ran the real trunk here and rendered `main@git+10` while `@` was in
+/// fact 10 ahead and 97 behind the actual `main`, naming a comparison against
+/// a ref no remote has ever seen.
+fn revset() -> String {
+    format!("@ | trunk() | trunk()..@ | @..trunk() | ancestors(@, {BOOKMARK_SEARCH_DEPTH})")
+}
 
-/// The bookmark the working copy hangs off, and how far ahead of it @ sits.
+/// One tab-separated row per commit: the membership tags, the change-id
+/// prefix, the rest of the shortest unique change id, the commit's local and
+/// remote bookmarks, a flag blob, and the committer epoch. Fields are
+/// concatenated rather than passed through the template's `separate()`, which
+/// drops empty values and would shift the columns.
+fn template() -> String {
+    let tags = [
+        ("@", "W"),
+        ("trunk()", "T"),
+        ("trunk()..@", "A"),
+        ("@..trunk()", "B"),
+        ("root()", "R"),
+    ]
+    .iter()
+    .map(|(revset, tag)| format!(r#"if(self.contained_in("{revset}"),"{tag}","")"#))
+    .collect::<Vec<_>>()
+    .join(" ++ ");
+
+    format!(
+        concat!(
+            r#"{tags} ++ "\t""#,
+            r#" ++ change_id.shortest(8).prefix() ++ "\t""#,
+            r#" ++ change_id.shortest(8).rest() ++ "\t""#,
+            r#" ++ local_bookmarks.join(",") ++ "\t""#,
+            r#" ++ remote_bookmarks.join(",") ++ "\t""#,
+            r#" ++ if(empty, "e", "") ++ if(conflict, "c", "") ++ if(divergent, "d", "") ++ "\n""#,
+        ),
+        tags = tags
+    )
+}
+
+/// Where `@` stands against the repository's trunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Bookmark {
-    /// Comma-joined bookmark names exactly as jj renders them, so a bookmark
-    /// out of sync with its tracked remote keeps its trailing `*`.
-    pub names: String,
-    /// Commits between the bookmark and @; 0 when @ carries the bookmark.
-    pub distance: usize,
+pub struct Trunk {
+    /// The trunk bookmark as jj renders it, so a local bookmark out of sync
+    /// with its tracked remote keeps its trailing `*`.
+    pub name: String,
+    /// Commits in `trunk()..@`: mine that trunk does not have.
+    pub ahead: usize,
+    /// Commits in `@..trunk()`: trunk's that I do not have.
+    pub behind: usize,
 }
 
 /// Flags on the working-copy commit that a prompt should surface.
@@ -55,17 +100,24 @@ pub struct Head {
     /// The remainder of the 8-character change id, shown dimmed.
     pub change_rest: String,
     pub flags: Flags,
-    pub bookmark: Option<Bookmark>,
+    /// Nearest local bookmark at or above `@`, naming the change without
+    /// claiming a distance. No `@remote` can appear here.
+    pub bookmark: Option<String>,
+    /// `None` when the comparison would be meaningless rather than merely
+    /// zero: see [`parse`].
+    pub trunk: Option<Trunk>,
 }
 
-/// Read @ and the nearest bookmark above it out of the workspace at `root`.
+/// Read `@`, the nearest bookmark above it, and its standing against trunk out
+/// of the workspace at `root`.
 pub fn head(root: &Path) -> Result<Head> {
     // `--ignore-working-copy` keeps the prompt from snapshotting the working
     // copy on every render: a snapshot writes a new operation, fights any jj
     // command running in another pane for the working-copy lock, and costs
-    // far more than the read. The trade is that `empty` reflects the last
-    // snapshot, so edits made since the last jj command do not light up until
-    // the next one.
+    // far more than the read. Verified: op head and `working_copy/tree_state`
+    // mtime are both untouched across a render. The trade is that `empty`
+    // reflects the last snapshot, so edits made since the last jj command do
+    // not light up until the next one.
     let output = Command::new("jj")
         .args(["log", "--repository"])
         .arg(root)
@@ -75,9 +127,9 @@ pub fn head(root: &Path) -> Result<Head> {
             "--color=never",
             "--quiet",
             "-r",
-            &format!("ancestors(@, {BOOKMARK_SEARCH_DEPTH})"),
+            &revset(),
             "-T",
-            TEMPLATE,
+            &template(),
         ])
         .output()
         .wrap_err("failed to run `jj log`")?;
@@ -91,21 +143,40 @@ pub fn head(root: &Path) -> Result<Head> {
     parse(&stdout)
 }
 
-/// Turn the template's rows into a [`Head`]. Rows arrive newest-first, so the
-/// first one is @ and the index of the first bookmarked row is its distance.
+/// Turn the template's rows into a [`Head`].
+///
+/// The trunk comparison is dropped, rather than rendered as a zero or a
+/// whole-history count, in the two cases where it would name nothing a reader
+/// could restate: when `trunk()` falls back to `root()` -- which stock jj's
+/// alias does in any repository without a `main`/`master` on a remote, and
+/// which would then report every commit in the repository as "ahead" -- and
+/// when the trunk row is missing entirely.
 fn parse(stdout: &str) -> Result<Head> {
     let rows: Vec<Row> = stdout.lines().map(Row::parse).collect();
     let working_copy = rows
-        .first()
-        .ok_or_else(|| eyre!("`jj log` returned no commits for `ancestors(@)`"))?;
+        .iter()
+        .find(|row| row.tagged('W'))
+        .ok_or_else(|| eyre!("`jj log` returned no working-copy commit for `@`"))?;
 
     let bookmark = rows
         .iter()
-        .enumerate()
-        .find(|(_, row)| !row.bookmarks.is_empty())
-        .map(|(distance, row)| Bookmark {
-            names: row.bookmarks.to_owned(),
-            distance,
+        .find(|row| !row.local_bookmarks.is_empty())
+        .map(|row| row.local_bookmarks.to_owned());
+
+    let trunk = rows
+        .iter()
+        .find(|row| row.tagged('T') && !row.tagged('R'))
+        .and_then(|row| {
+            let name = if row.local_bookmarks.is_empty() {
+                row.remote_bookmarks
+            } else {
+                row.local_bookmarks
+            };
+            (!name.is_empty()).then(|| Trunk {
+                name: name.to_owned(),
+                ahead: rows.iter().filter(|row| row.tagged('A')).count(),
+                behind: rows.iter().filter(|row| row.tagged('B')).count(),
+            })
         });
 
     Ok(Head {
@@ -113,14 +184,17 @@ fn parse(stdout: &str) -> Result<Head> {
         change_rest: working_copy.change_rest.to_owned(),
         flags: working_copy.flags,
         bookmark,
+        trunk,
     })
 }
 
 /// One rendered template row, borrowed out of the `jj log` output.
 struct Row<'a> {
+    tags: &'a str,
     change_prefix: &'a str,
     change_rest: &'a str,
-    bookmarks: &'a str,
+    local_bookmarks: &'a str,
+    remote_bookmarks: &'a str,
     flags: Flags,
 }
 
@@ -130,15 +204,20 @@ impl<'a> Row<'a> {
     /// segment beats one that renders an error.
     fn parse(line: &'a str) -> Self {
         let mut columns = line.split('\t');
+        let tags = columns.next().unwrap_or_default();
         let change_prefix = columns.next().unwrap_or_default();
         let change_rest = columns.next().unwrap_or_default();
-        let bookmarks = columns.next().unwrap_or_default();
+        let local_bookmarks = columns.next().unwrap_or_default();
+        let remote_bookmarks = columns.next().unwrap_or_default();
         let flags = columns.next().unwrap_or_default();
 
+
         Self {
+            tags,
             change_prefix,
             change_rest,
-            bookmarks,
+            local_bookmarks,
+            remote_bookmarks,
             flags: Flags {
                 empty: flags.contains('e'),
                 conflict: flags.contains('c'),
@@ -146,53 +225,107 @@ impl<'a> Row<'a> {
             },
         }
     }
+
+    fn tagged(&self, tag: char) -> bool {
+        self.tags.contains(tag)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Bookmark, Flags, parse};
+    use super::{Flags, Trunk, parse, revset, template};
+
+    /// `W` tags the working copy, `A`/`B` the two sides of the trunk
+    /// comparison. `@` is in `trunk()..@`, so its row carries both.
+    const ROWS: &str = "\
+WA\tykosps\tvq\t\t\t
+A\txrlxyz\tum\t\t\t
+A\tknkpqw\tsp\t\t\t
+TB\touork\tvyw\tmain*\tmain@origin\t
+B\tolnqwyy\tk\t\t\t
+";
 
     #[test]
-    fn reads_the_working_copy_and_the_nearest_bookmark() {
-        let head = parse("l\tsurukvy\t\te\nmw\typryqr\tix-patched\te\no\towsttwz\t\t\n")
-            .expect("parse rows");
+    fn the_arrows_count_revset_membership_not_row_position() {
+        let head = parse(ROWS).expect("parse rows");
 
-        assert_eq!(head.change_prefix, "l");
-        assert_eq!(head.change_rest, "surukvy");
+        assert_eq!(head.change_prefix, "ykosps");
+        assert_eq!(head.change_rest, "vq");
         assert_eq!(
-            head.flags,
-            Flags {
-                empty: true,
-                ..Flags::default()
-            }
-        );
-        assert_eq!(
-            head.bookmark,
-            Some(Bookmark {
-                names: "ix-patched".to_owned(),
-                distance: 1,
+            head.trunk,
+            Some(Trunk {
+                name: "main*".to_owned(),
+                ahead: 3,
+                behind: 2,
             })
         );
     }
 
+    /// The bug this file exists to prevent: jj's `git` pseudo-remote is a
+    /// stale export mirror, and a remote bookmark must never name the change.
     #[test]
-    fn a_bookmark_on_the_working_copy_is_zero_away() {
-        let head = parse("qp\tzxrtlnk\tmain*\tc\n").expect("parse rows");
-
-        assert!(head.flags.conflict);
-        assert!(!head.flags.empty);
-        assert_eq!(head.bookmark.expect("bookmark").distance, 0);
-    }
-
-    #[test]
-    fn no_bookmark_within_the_window_leaves_the_change_id_alone() {
-        let head = parse("qp\tzxrtlnk\t\t\nyy\tnmtruop\t\t\n").expect("parse rows");
+    fn a_remote_bookmark_never_names_the_working_copy() {
+        let head = parse("W\tyk\tospsvq\t\tmain@git\t\n").expect("parse rows");
 
         assert_eq!(head.bookmark, None);
     }
 
     #[test]
+    fn a_local_bookmark_names_the_working_copy_without_a_distance() {
+        let head = parse("W\tqp\tzxrtlnk\tix-patched\t\tc\n").expect("parse rows");
+
+        assert!(head.flags.conflict);
+        assert!(!head.flags.empty);
+        assert_eq!(head.bookmark, Some("ix-patched".to_owned()));
+    }
+
+    /// Stock jj's `trunk()` alias falls back to `root()`, which would report
+    /// the entire repository as "ahead" of it.
+    #[test]
+    fn a_trunk_that_is_the_root_commit_is_no_comparison_at_all() {
+        let head = parse("W\tq\tp\t\t\t\nTRB\tz\tz\t\t\t\n").expect("parse rows");
+
+        assert_eq!(head.trunk, None);
+    }
+
+    #[test]
+    fn an_unnamed_trunk_is_no_comparison_either() {
+        let head = parse("W\tq\tp\t\t\t\nTB\tz\tz\t\t\t\n").expect("parse rows");
+
+        assert_eq!(head.trunk, None);
+    }
+
+    #[test]
     fn empty_output_is_an_error_rather_than_a_blank_segment() {
         assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn flags_survive_a_row_with_every_column_populated() {
+        let head = parse("W\ta\tb\tmain\tmain@origin\tecd\n").expect("parse rows");
+
+        assert_eq!(
+            head.flags,
+            Flags {
+                empty: true,
+                conflict: true,
+                divergent: true,
+            }
+        );
+    }
+
+    /// Every revset the template asks `contained_in` about is also in the
+    /// revset being logged, or the tag could never be set on any row.
+    #[test]
+    fn every_tagged_revset_is_part_of_the_logged_revset() {
+        let logged = revset();
+        let rendered = template();
+        for revset in ["@", "trunk()", "trunk()..@", "@..trunk()"] {
+            assert!(
+                rendered.contains(&format!(r#"contained_in("{revset}")"#)),
+                "template lost the {revset} tag"
+            );
+            assert!(logged.contains(revset), "revset lost {revset}");
+        }
     }
 }

@@ -13,18 +13,22 @@
 //! on 󱗆 lsurukvy ix-patched+2 *
 //! $ vcs-prompt            # plain git checkout
 //! on  main !3?1⇡2
+//! $ vcs-prompt age        # either, for the commit-age segment
+//! 13 minutes ago
 //! ```
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{Result, WrapErr};
 
+mod age;
 mod git;
 mod jj;
 mod render;
+mod views;
 mod workspace;
 
 use workspace::Workspace;
@@ -52,6 +56,10 @@ enum Command {
     /// `when` gate for the custom module: it only stats directories, so it
     /// costs nothing next to rendering.
     Detect,
+    /// Print how long ago the latest commit landed, e.g. `13 minutes ago`.
+    /// Exits 1 with no output when there is no commit to date, so the
+    /// segment renders empty rather than wrong.
+    Age,
 }
 
 fn main() -> ExitCode {
@@ -71,7 +79,18 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match segment(&workspace, !cli.no_color) {
+    if matches!(cli.command, Some(Command::Age)) {
+        return match age::since_last_commit(&workspace) {
+            Ok(Some(age)) => {
+                println!("{age}");
+                ExitCode::SUCCESS
+            }
+            Ok(None) => ExitCode::FAILURE,
+            Err(error) => report(&error),
+        };
+    }
+
+    match segment(&workspace, &cwd, !cli.no_color) {
         Ok(segment) => {
             println!("{segment}");
             ExitCode::SUCCESS
@@ -87,9 +106,17 @@ fn working_directory(cli: &Cli) -> Result<PathBuf> {
     )
 }
 
-fn segment(workspace: &Workspace, color: bool) -> Result<String> {
+fn segment(workspace: &Workspace, cwd: &Path, color: bool) -> Result<String> {
     Ok(match workspace {
-        Workspace::Jj(root) => render::jj(&jj::head(root)?, color),
+        Workspace::Jj(root) => {
+            // Two independent jj invocations; overlapped, the segment costs
+            // the slower one (~30ms with a release jj) instead of their sum.
+            let (head, view) = std::thread::scope(|scope| {
+                let view = scope.spawn(|| views::at(root, cwd));
+                (jj::head(root), view.join().expect("the views thread"))
+            });
+            render::jj(&head?, view.as_ref(), color)
+        }
         Workspace::Git(root) => render::git(&git::head(root)?, color),
     })
 }

@@ -1,0 +1,209 @@
+// Copyright 2020-2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use clap_complete::ArgValueCandidates;
+use jj_lib::op_store::RefTarget;
+use jj_lib::ref_name::RefNameBuf;
+use jj_lib::repo::Repo as _;
+use jj_lib::str_util::StringExpression;
+use jj_lib::str_util::StringMatcher;
+
+use crate::cli_util::CommandHelper;
+use crate::cli_util::default_ignored_remote_name;
+use crate::command_error::CommandError;
+use crate::command_error::user_error;
+use crate::complete;
+use crate::revset_util;
+use crate::ui::Ui;
+
+/// Rename `old` bookmark name to `new` bookmark name
+///
+/// The new bookmark name points at the same commit as the old bookmark name.
+#[derive(clap::Args, Clone, Debug)]
+pub struct BookmarkRenameArgs {
+    /// The old name of the bookmark
+    #[arg(value_parser = revset_util::parse_bookmark_name)]
+    #[arg(add = ArgValueCandidates::new(complete::local_bookmarks))]
+    old: RefNameBuf,
+
+    /// The new name of the bookmark
+    #[arg(value_parser = revset_util::parse_bookmark_name)]
+    new: RefNameBuf,
+
+    /// Allow renaming even if the new bookmark name already exists
+    #[arg(long)]
+    overwrite_existing: bool,
+}
+
+pub async fn cmd_bookmark_rename(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &BookmarkRenameArgs,
+) -> Result<(), CommandError> {
+    let mut workspace_command = command.workspace_helper(ui).await?;
+    let base_repo = workspace_command.repo().clone();
+    let base_view = base_repo.view();
+    let old_bookmark = &args.old;
+    let ref_target = base_view.get_local_bookmark(old_bookmark).clone();
+    if ref_target.is_absent() {
+        return Err(user_error(format!(
+            "No such bookmark: {old_bookmark}",
+            old_bookmark = old_bookmark.as_symbol()
+        )));
+    }
+
+    let new_bookmark = &args.new;
+    if !args.overwrite_existing && base_view.get_local_bookmark(new_bookmark).is_present() {
+        return Err(user_error(format!(
+            "Bookmark already exists: {new_bookmark}",
+            new_bookmark = new_bookmark.as_symbol()
+        )));
+    }
+    if old_bookmark == new_bookmark {
+        // Noop if renaming to the same name.
+        return Ok(());
+    }
+
+    let mut tx = workspace_command.start_transaction();
+
+    let remote_matcher = match default_ignored_remote_name(tx.repo().store()) {
+        Some(remote) => StringExpression::exact(remote).negated().to_matcher(),
+        None => StringMatcher::all(),
+    };
+
+    if args.overwrite_existing {
+        // Untrack all tracked remotes of the overwritten bookmark so that
+        // tracking state transfer from the old bookmark starts clean.
+        for (symbol, remote_ref) in base_view
+            .remote_bookmarks_matching(&StringMatcher::exact(new_bookmark), &remote_matcher)
+        {
+            if remote_ref.is_tracked() {
+                tx.repo_mut()
+                    .untrack_remote_bookmark(new_bookmark.to_remote_symbol(symbol.remote));
+            }
+        }
+    }
+    tx.repo_mut()
+        .set_local_bookmark_target(new_bookmark, ref_target);
+    tx.repo_mut()
+        .set_local_bookmark_target(old_bookmark, RefTarget::absent());
+
+    // Preserve tracking state of old bookmark
+    let mut tracked_present_old_remotes_exist = false;
+    for (symbol, remote_ref) in
+        base_view.remote_bookmarks_matching(&StringMatcher::exact(old_bookmark), &remote_matcher)
+    {
+        if !remote_ref.is_tracked() {
+            continue;
+        }
+        if remote_ref.is_present() {
+            tracked_present_old_remotes_exist = true;
+        }
+        let new_remote_bookmark = new_bookmark.to_remote_symbol(symbol.remote);
+        let existing_ref = tx.repo().view().get_remote_bookmark(new_remote_bookmark);
+        if existing_ref.is_present() && !existing_ref.is_tracked() {
+            writeln!(
+                ui.warning_default(),
+                "The renamed bookmark already exists on the remote '{remote}', tracking state was \
+                 dropped.",
+                remote = new_remote_bookmark.remote.as_symbol(),
+            )?;
+            writeln!(
+                ui.hint_default(),
+                "To track the existing remote bookmark, run `jj bookmark track \
+                 {new_remote_bookmark}`.",
+            )?;
+            continue;
+        }
+        tx.repo_mut()
+            .track_remote_bookmark(new_remote_bookmark)
+            .await?;
+    }
+
+    // Warn about present+tracked remotes of the overwritten bookmark where the
+    // old bookmark was untracked on the same remote.
+    if args.overwrite_existing {
+        for (symbol, remote_ref) in base_view
+            .remote_bookmarks_matching(&StringMatcher::exact(new_bookmark), &remote_matcher)
+        {
+            if !remote_ref.is_tracked() || !remote_ref.is_present() {
+                continue;
+            }
+            let old_ref =
+                base_view.get_remote_bookmark(old_bookmark.to_remote_symbol(symbol.remote));
+            if old_ref.is_tracked() {
+                continue;
+            }
+            writeln!(
+                ui.warning_default(),
+                "Tracking of remote bookmark {new_bookmark}@{remote} was dropped.",
+                new_bookmark = new_bookmark.as_symbol(),
+                remote = symbol.remote.as_symbol(),
+            )?;
+            writeln!(
+                ui.hint_default(),
+                "Use `jj bookmark track` to re-track if needed.",
+            )?;
+        }
+    }
+
+    tx.finish(
+        ui,
+        format!(
+            "rename bookmark {old_bookmark} to {new_bookmark}",
+            old_bookmark = old_bookmark.as_symbol(),
+            new_bookmark = new_bookmark.as_symbol()
+        ),
+    )
+    .await?;
+
+    if tracked_present_old_remotes_exist {
+        writeln!(
+            ui.warning_default(),
+            "Tracked remote bookmarks for bookmark {old_bookmark} were not renamed.",
+            old_bookmark = old_bookmark.as_symbol(),
+        )?;
+        writeln!(
+            ui.hint_default(),
+            "To rename the bookmark on the remote, you can `jj git push --bookmark \
+             {old_bookmark}` first (to delete it on the remote), and then `jj git push --bookmark \
+             {new_bookmark}`. `jj git push --all --deleted` would also be sufficient.",
+            old_bookmark = old_bookmark.as_symbol(),
+            new_bookmark = new_bookmark.as_symbol()
+        )?;
+    }
+    if !args.overwrite_existing {
+        let has_existing_present_tracked = base_view
+            .remote_bookmarks_matching(&StringMatcher::exact(new_bookmark), &remote_matcher)
+            .any(|(_, remote_ref)| remote_ref.is_tracked() && remote_ref.is_present());
+        if has_existing_present_tracked {
+            // This isn't an error because bookmark renaming can't be propagated
+            // to the remote immediately. "rename old new && rename new old"
+            // should be allowed even if the original old bookmark had tracked
+            // remotes.
+            writeln!(
+                ui.warning_default(),
+                "Tracked remote bookmarks for bookmark {new_bookmark} exist.",
+                new_bookmark = new_bookmark.as_symbol()
+            )?;
+            writeln!(
+                ui.hint_default(),
+                "Run `jj bookmark untrack {new_bookmark}` to disassociate them.",
+                new_bookmark = new_bookmark.as_symbol()
+            )?;
+        }
+    }
+
+    Ok(())
+}

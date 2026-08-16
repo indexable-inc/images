@@ -256,6 +256,13 @@ fn read_scrollback(id: Uuid, terminal: &mut ix_vt::Terminal) -> Result<Vec<Strin
     }
 
     terminal.scroll_viewport(ix_vt::ScrollViewport::Top);
+    // The capacity is a hint only: a scrollback that does not fit usize could
+    // never be materialized as one Vec anyway, and under-reserving just costs
+    // reallocation, so an explicit floor is the honest spelling.
+    #[expect(
+        clippy::fallible_int_fallback,
+        reason = "capacity hint; an out-of-range total only forgoes the reservation"
+    )]
     let mut lines = Vec::with_capacity(usize::try_from(total).unwrap_or(0));
     for i in 0..total {
         if i > 0 {

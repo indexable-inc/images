@@ -24,13 +24,54 @@ mod _conformance {
     use unibind_runtime::UniStream;
 
     /// A plain-data record crossing the boundary by value.
+    ///
+    /// [`echo_record`] hands one back unchanged, so a coordinate that
+    /// survives the trip proves the by-value path in both directions.
     #[unibind::record]
     #[derive(Clone)]
     pub struct Point {
-        /// Horizontal coordinate.
+        /// Horizontal coordinate, paired with [`Self::y`].
         pub x: f64,
         /// Vertical coordinate.
         pub y: f64,
+    }
+
+    /// How severe a conformance probe's finding is; a closed set whose
+    /// members cross as `StrEnum` values, one to a [`Finding`].
+    #[unibind::enumeration]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Severity {
+        /// Routine.
+        Info,
+        /// Worth a look. [`escalate`] promotes it to [`Self::HardFailure`].
+        Warning,
+        /// Stop now.
+        HardFailure,
+    }
+
+    /// A frame kind spelled `PascalCase` on the wire, the shape
+    /// `MachineProgress.kind` has in the ix surface; proves `rename_all`
+    /// reaches the generated members without a second convention.
+    #[unibind::enumeration(rename_all = "PascalCase")]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum FrameKind {
+        /// The first frame.
+        Started,
+        /// The last one.
+        Finished,
+    }
+
+    /// A record carrying two enumerations, so the field path is covered as
+    /// well as the argument and return paths.
+    #[unibind::record]
+    #[derive(Clone)]
+    pub struct Finding {
+        /// How bad it is.
+        pub severity: Severity,
+        /// Which frame reported it.
+        pub kind: FrameKind,
+        /// Human text.
+        pub detail: String,
     }
 
     /// Boundary failures raised by the conformance surface.
@@ -94,6 +135,31 @@ mod _conformance {
     /// Round-trip a record.
     pub fn echo_record(point: Point) -> Point {
         point
+    }
+
+    /// Round-trip an enumeration: argument and return in one call.
+    pub fn echo_severity(value: Severity) -> Severity {
+        value
+    }
+
+    /// Round-trip an enumeration under `Option`, so the container path is
+    /// covered too.
+    pub fn echo_optional_kind(value: Option<FrameKind>) -> Option<FrameKind> {
+        value
+    }
+
+    /// Round-trip a record whose fields are enumerations.
+    pub fn echo_finding(finding: Finding) -> Finding {
+        finding
+    }
+
+    /// The next severity up, so the Rust side is observably matching on the
+    /// variant rather than passing a string through.
+    pub fn escalate(value: Severity) -> Severity {
+        match value {
+            Severity::Info => Severity::Warning,
+            Severity::Warning | Severity::HardFailure => Severity::HardFailure,
+        }
     }
 
     /// Add with a defaulted second operand, proving `#[unibind(default)]`.
@@ -238,6 +304,45 @@ mod _conformance {
             })
         }
 
+        /// Open a gate after an async hop: the shape `__new__` cannot take,
+        /// since a Python constructor is synchronous. Renders as a
+        /// `@staticmethod` returning a coroutine, and one object may carry
+        /// several of these, each keeping its own name.
+        ///
+        /// # Errors
+        ///
+        /// Raises [`ConformanceError::Deliberate`] on an empty label, the same
+        /// refusal [`Self::named_after`] makes.
+        #[unibind(associated)]
+        pub async fn opened(label: String) -> Result<Self, ConformanceError> {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            Self::new(label)
+        }
+
+        /// A sync one beside the async one, so both renderings and a
+        /// second associated function on one object are covered.
+        #[unibind(associated)]
+        pub fn named_after(other: String) -> Result<Self, ConformanceError> {
+            // Refuse here rather than leaning on `new`: `format!` would
+            // turn an empty label into "-copy", which is a valid label, so
+            // the error assertion in the runner would pass against a call
+            // that never failed.
+            if other.is_empty() {
+                return Err(ConformanceError::Deliberate {
+                    message: "gate label must not be empty".to_owned(),
+                });
+            }
+            Self::new(format!("{other}-copy"))
+        }
+
+        /// An associated function that answers about the type rather
+        /// than constructing it: a plain `@staticmethod` returning a
+        /// string, not the object.
+        #[unibind(associated)]
+        pub fn describe(label: String) -> String {
+            format!("gate:{label}")
+        }
+
         /// The label the gate was opened with.
         pub fn label(&self) -> String {
             self.label.clone()
@@ -261,7 +366,7 @@ mod _conformance {
         /// error into the exception hierarchy, and route the success value
         /// through `Shell`'s glue class. Every other object here is minted
         /// by a constructor or a sync call, so nothing else reaches that
-        /// combination.
+        /// combination. Its bytes come back through [`Shell::output`].
         ///
         /// # Errors
         ///
@@ -328,7 +433,9 @@ mod _conformance {
         ///
         /// Every chunk opens with NUL and `0xFF`. Neither survives a UTF-8
         /// round trip, so a codec that decoded items as text anywhere on
-        /// the path fails the assertion instead of passing quietly.
+        /// the path fails the assertion instead of passing quietly. What
+        /// follows the prefix is the command qualified by the label it was
+        /// opened under; see [the opening handle](Gate).
         pub fn output(&self, n: u64) -> UniStream<Vec<u8>> {
             let command = self.command.clone();
             UniStream::new(futures::stream::iter((0..n).map(move |index| {

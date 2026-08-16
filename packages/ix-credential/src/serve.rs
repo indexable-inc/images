@@ -94,8 +94,7 @@ pub fn run(path: &Path, allowed: &[String], resolver: &dyn Resolver) -> Result<(
 /// steal a running agent's socket.
 fn bind(path: &Path) -> Result<UnixListener> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .wrap_err_with(|| format!("creating {}", parent.display()))?;
+        fs::create_dir_all(parent).wrap_err_with(|| format!("creating {}", parent.display()))?;
         // Only meaningful where we own the directory. On a shared host the
         // directory is 1777 and provisioned by the host configuration.
         if let Ok(metadata) = fs::metadata(parent)
@@ -116,8 +115,8 @@ fn bind(path: &Path) -> Result<UnixListener> {
             .wrap_err_with(|| format!("removing the stale socket at {}", path.display()))?;
     }
 
-    let listener = UnixListener::bind(path)
-        .wrap_err_with(|| format!("binding {}", path.display()))?;
+    let listener =
+        UnixListener::bind(path).wrap_err_with(|| format!("binding {}", path.display()))?;
     // The umask decides the mode at bind time, so set it explicitly rather
     // than inheriting whatever the operator's shell happens to have.
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
@@ -243,7 +242,8 @@ mod tests {
 
     #[test]
     fn a_known_host_gets_the_token() {
-        let reply = answer(&github_get(), &allowed(), &Fixed(Some("ghp_example"))).expect("answers");
+        let reply =
+            answer(&github_get(), &allowed(), &Fixed(Some("ghp_example"))).expect("answers");
         assert_eq!(reply.get("username"), Some("x-access-token"));
         assert_eq!(reply.get("password"), Some("ghp_example"));
         assert_eq!(reply.get(ERROR_KEY), None);
@@ -252,7 +252,10 @@ mod tests {
     #[test]
     fn no_credential_is_its_own_refusal_not_a_resolver_error() {
         let reply = answer(&github_get(), &allowed(), &Fixed(None)).expect("answers");
-        assert_eq!(reply.get(ERROR_KEY), Some("the workstation has no credential for it"));
+        assert_eq!(
+            reply.get(ERROR_KEY),
+            Some("the workstation has no credential for it")
+        );
         assert_eq!(reply.get("password"), None);
     }
 
@@ -269,7 +272,9 @@ mod tests {
         let reply = answer(&message, &allowed(), &Fixed(Some("ghp_example"))).expect("answers");
         assert_eq!(reply.get("password"), None);
         assert!(
-            reply.get(ERROR_KEY).is_some_and(|e| e.contains("allow list")),
+            reply
+                .get(ERROR_KEY)
+                .is_some_and(|e| e.contains("allow list")),
             "{reply:?}"
         );
     }
@@ -320,10 +325,7 @@ mod tests {
 
         let _held = bind(&path).expect("first bind");
         let error = bind(&path).expect_err("second bind");
-        assert!(
-            format!("{error}").contains("already lending"),
-            "{error}"
-        );
+        assert!(format!("{error}").contains("already lending"), "{error}");
     }
 
     #[test]

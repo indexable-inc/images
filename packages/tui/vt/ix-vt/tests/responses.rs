@@ -10,7 +10,8 @@ use ix_vt::{Terminal, scrollback_bytes_for_lines};
 
 #[test]
 fn dsr_cursor_position_reply_is_drained() {
-    let mut terminal = Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
+    let mut terminal =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
     terminal.vt_write(b"hi");
     // "hi" moves the cursor to column 3 (1-indexed) on row 1.
     terminal.vt_write(b"\x1b[6n");
@@ -23,7 +24,8 @@ fn dsr_cursor_position_reply_is_drained() {
 
 #[test]
 fn da1_and_decrqm_get_replies() {
-    let mut terminal = Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
+    let mut terminal =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
     // DA1 (CSI c): the reply shape is CSI ? ... c; the feature list is
     // ghostty's to choose, so only the frame is asserted.
     terminal.vt_write(b"\x1b[c");
@@ -40,7 +42,8 @@ fn da1_and_decrqm_get_replies() {
 
 #[test]
 fn plain_output_produces_no_responses() {
-    let mut terminal = Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
+    let mut terminal =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(100, 80)).expect("terminal");
     terminal.vt_write(b"plain text, no queries\r\n");
     assert!(terminal.drain_responses().is_empty());
 }

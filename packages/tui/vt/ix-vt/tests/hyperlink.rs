@@ -16,7 +16,8 @@ fn osc8(uri: &str, text: &str) -> Vec<u8> {
 
 #[test]
 fn anchor_cells_carry_the_uri() {
-    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     term.vt_write(&osc8("https://example.com", "click me"));
 
     let snap = term.render().expect("render snapshot");
@@ -44,7 +45,8 @@ fn anchor_cells_carry_the_uri() {
 
 #[test]
 fn adjacent_distinct_links_stay_distinct() {
-    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     let mut bytes = osc8("https://a.example", "AA");
     bytes.extend_from_slice(&osc8("https://b.example", "BB"));
     term.vt_write(&bytes);
@@ -60,7 +62,8 @@ fn adjacent_distinct_links_stay_distinct() {
 
 #[test]
 fn plain_rows_have_no_links() {
-    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     term.vt_write(b"no links here, not even https://example.com as text");
 
     let snap = term.render().expect("render snapshot");
@@ -75,7 +78,8 @@ fn plain_rows_have_no_links() {
 
 #[test]
 fn snapshot_uri_is_owned_not_borrowed_from_the_terminal() {
-    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
     term.vt_write(&osc8("https://example.com", "link"));
     let snap = term.render().expect("render snapshot");
 

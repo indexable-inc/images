@@ -73,11 +73,7 @@ enum DescendantStreams {
 }
 
 impl DescendantFixture {
-    fn new(
-        timeout_secs: Option<u64>,
-        leader: LeaderBehavior,
-        streams: DescendantStreams,
-    ) -> Self {
+    fn new(timeout_secs: Option<u64>, leader: LeaderBehavior, streams: DescendantStreams) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let script_path = dir.path().join("process-tree.sh");
         let spec_path = dir.path().join("spec.json");
@@ -116,8 +112,11 @@ sh -c '
             node["timeout_secs"] = serde_json::json!(secs);
         }
         let spec = serde_json::json!({"nodes": {"process-tree": node}});
-        std::fs::write(&spec_path, serde_json::to_vec(&spec).expect("serialize spec"))
-            .expect("write spec");
+        std::fs::write(
+            &spec_path,
+            serde_json::to_vec(&spec).expect("serialize spec"),
+        )
+        .expect("write spec");
 
         Self {
             _dir: dir,
@@ -387,11 +386,7 @@ fn node_with_timeout_kills_long_sleeper_and_exits_124() {
 
 #[test]
 fn timeout_terminates_descendants_and_closes_captured_pipes() {
-    let fixture = DescendantFixture::new(
-        Some(1),
-        LeaderBehavior::Wait,
-        DescendantStreams::Both,
-    );
+    let fixture = DescendantFixture::new(Some(1), LeaderBehavior::Wait, DescendantStreams::Both);
     let mut runner = fixture.spawn();
     fixture.wait_until_ready();
 
@@ -454,11 +449,7 @@ fn sigint_cancels_running_nodes_with_exit_130() {
 
 #[test]
 fn sigint_terminates_descendants_and_closes_captured_pipes() {
-    let fixture = DescendantFixture::new(
-        None,
-        LeaderBehavior::Wait,
-        DescendantStreams::Both,
-    );
+    let fixture = DescendantFixture::new(None, LeaderBehavior::Wait, DescendantStreams::Both);
     let mut runner = fixture.spawn();
     let runner_pid = runner.id();
     fixture.wait_until_ready();
@@ -471,11 +462,7 @@ fn sigint_terminates_descendants_and_closes_captured_pipes() {
 
 #[test]
 fn sigint_after_leader_exit_terminates_descendant_and_closes_captured_pipes() {
-    let fixture = DescendantFixture::new(
-        None,
-        LeaderBehavior::Exit,
-        DescendantStreams::Stderr,
-    );
+    let fixture = DescendantFixture::new(None, LeaderBehavior::Exit, DescendantStreams::Stderr);
     let mut runner = fixture.spawn();
     let runner_pid = runner.id();
     fixture.wait_until_ready();
@@ -739,7 +726,10 @@ fn a_service_dying_mid_run_takes_the_group_down() {
         "the runner waited out the client's sleep instead of noticing its service had died \
          (took {elapsed:?})"
     );
-    assert!(!finished.exists(), "the client was left running to completion");
+    assert!(
+        !finished.exists(),
+        "the client was left running to completion"
+    );
 
     let events = parse_events(&output.stdout);
     let server = events
@@ -1032,6 +1022,9 @@ fn a_grandchild_holding_the_pipe_cannot_hide_a_dead_service() {
         server["outcome"], "failed",
         "a service that exited must not be reported as one the runner stopped: {events:?}"
     );
-    assert_eq!(server["exit_code"], 5, "the service's own code, not a signal");
+    assert_eq!(
+        server["exit_code"], 5,
+        "the service's own code, not a signal"
+    );
     assert_ne!(output.status.code(), Some(0), "the run must not exit clean");
 }

@@ -1,0 +1,34 @@
+# A "fast" ray-tracer in Haskell
+
+Original source: <https://gitlab.haskell.org/bgamari/ray>
+
+This is a parallel ray-tracing implementation written in GHC Haskell intended
+as an investigation into the performance characteristics of GHC on
+reasonably-written numerical code. The final version of the path tracer can
+throw around 1 Mray/second on a 16-core Ryzen 7 on a scene with approximately
+10k primitives.
+
+The commit history reflects the evolution of the project. The major steps were:
+
+ 1. e5e76fbb70146f6371c656cda2a1a04eb99a9dcf to 0dbac45823218ec418ca98e86b053e927f1d1e15:
+    Develop a naive ray-tracer similar to that described in [1][]. Sampling done via 
+ 2. ... to e1e86f9707877d627ddd2fe85730fa7ccadf6a66: Implement non-Lambertian materials
+ 3. ... to 5f31f0c3e25a87c5b5c4db7271ab1dd640e2916b: Optimise random double
+    generation and sampler monad. Try unboxed `SamplerM` representation (there
+    was little benefit to this).
+ 4. ... to 2c6a813f5ef4d4c51a8d359dd4b22d6281c826b8: Introduce Wyhash64 and Lehmer64
+    random number generators. The latter is quite a bit faster than the default
+    `splitmix` generator.
+ 5. ... to 50daaa2b58d17e79596a1f9487e2c4df7101ffe3: Introduce simple BVH
+    intersection acceleration.
+ 6. ... to 2a4c4405724a7cca68c7b289496d2fd64fa551ab: Microoptimisation of BVH.
+ 7. ... to b84a3393d44005107a3d2391c8697c3a7e29ce1e: More interesting test model.
+ 8. ... to 79596b91d3ab98a470dc4ed1e1b56dfcd6b8f9f9: A few more BVH optimisations.
+    Inline bounding box intersection test to eliminate calling convention overhead.
+ 9. ... to 55ee019a19399af2fd5317790683b22fe49a4960: Introduce a more efficient
+    unboxed BVH representation.
+10. ... to dc1fe5db83130f5efa5fb3387e347dc3c309c631: Introduce mutable RNG state.
+
+ [1]: https://raytracing.github.io/books/RayTracingInOneWeekend.html
+
+

@@ -16,19 +16,25 @@ pub enum Callee<'a> {
     Free,
     /// A method on `object`, whose name scopes the per-export stream class.
     Method { object: &'a str },
+    /// A function on `object` rather than on an instance. No receiver, but
+    /// it still scopes stream classes by the object, and it renders as a
+    /// static method.
+    Associated { object: &'a str },
 }
 
 impl<'a> Callee<'a> {
     const fn owner(self) -> Option<&'a str> {
         match self {
             Self::Free => None,
-            Self::Method { object } => Some(object),
+            Self::Method { object } | Self::Associated { object } => Some(object),
         }
     }
 
     fn receiver(self) -> TokenStream {
         match self {
-            Self::Free => TokenStream::new(),
+            // No receiver: one of these may be what runs before an
+            // instance exists at all.
+            Self::Free | Self::Associated { .. } => TokenStream::new(),
             Self::Method { .. } => quote!(&self,),
         }
     }
@@ -140,7 +146,21 @@ pub fn render_callable(
         ty::check(ret, &format!("the return type of `{}`", function.name))?;
     }
     let name = name_ident(&function.name)?;
-    let napi_attr = napi_attr(function.names.ts.as_deref());
+    // `factory` is napi's word for an associated function that builds an
+    // instance, and it is the only way to hand one back from an async
+    // static. One that returns anything else is an ordinary static, and
+    // marking it `factory` would tell napi to construct from a value that
+    // is not the class. The return type decides, so the author does not.
+    let napi_attr = match callee {
+        Callee::Associated { object }
+            if matches!(&function.ret, Some(ir::Type::Named(name)) if name == object) =>
+        {
+            factory_attr(function.names.ts.as_deref())
+        }
+        Callee::Free | Callee::Method { .. } | Callee::Associated { .. } => {
+            napi_attr(function.names.ts.as_deref())
+        }
+    };
     let docs = doc_attrs(&function.docs);
     let params = &wrapper.params;
     // A stream return crosses as the generated per-export handle class;
@@ -312,5 +332,16 @@ pub fn napi_attr(ts_name: Option<&str>) -> TokenStream {
     ts_name.map_or_else(
         || quote!(#[::napi_derive::napi]),
         |js_name| quote!(#[::napi_derive::napi(js_name = #js_name)]),
+    )
+}
+
+/// The `#[napi(factory)]` marker, for an associated function that returns
+/// the class. Unlike `constructor` napi accepts an async one, which is the
+/// whole reason this path exists: `Machine.oci(...)` has to await before it
+/// has an instance to hand back.
+fn factory_attr(ts_name: Option<&str>) -> TokenStream {
+    ts_name.map_or_else(
+        || quote!(#[::napi_derive::napi(factory)]),
+        |js_name| quote!(#[::napi_derive::napi(factory, js_name = #js_name)]),
     )
 }

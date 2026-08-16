@@ -1,0 +1,505 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  inherit (lib)
+    literalExpression
+    mkEnableOption
+    mkIf
+    mkOption
+    optionalString
+    types
+    mkMerge
+    mkOrder
+    ;
+
+  cfg = config.programs.kitty;
+
+  settingsValueType =
+    with types;
+    oneOf [
+      str
+      bool
+      int
+      float
+    ];
+
+  optionalPackage = opt: lib.optional (opt != null && opt.package != null) opt.package;
+
+  toKittyConfig = lib.generators.toKeyValue {
+    mkKeyValue =
+      key: value:
+      let
+        value' = (if lib.isBool value then lib.hm.booleans.yesNo else toString) value;
+      in
+      "${key} ${value'}";
+  };
+
+  toKittyKeybindings = lib.generators.toKeyValue {
+    mkKeyValue = key: command: "map ${key} ${command}";
+  };
+
+  toKittyMouseBindings = lib.generators.toKeyValue {
+    mkKeyValue = key: command: "mouse_map ${key} ${command}";
+  };
+
+  toKittyActionAliases = lib.generators.toKeyValue {
+    mkKeyValue = alias_name: action: "action_alias ${alias_name} ${action}";
+  };
+
+  toKittyEnv = lib.generators.toKeyValue {
+    mkKeyValue = name: value: "env ${name}=${value}";
+  };
+
+  shellIntegrationInit = {
+    bash = ''
+      if test -n "$KITTY_INSTALLATION_DIR"; then
+        export KITTY_SHELL_INTEGRATION="${cfg.shellIntegration.mode}"
+        source "$KITTY_INSTALLATION_DIR/shell-integration/bash/kitty.bash"
+      fi
+    '';
+    fish = ''
+      if set -q KITTY_INSTALLATION_DIR
+        set --global KITTY_SHELL_INTEGRATION "${cfg.shellIntegration.mode}"
+        source "$KITTY_INSTALLATION_DIR/shell-integration/fish/vendor_conf.d/kitty-shell-integration.fish"
+        set --prepend fish_complete_path "$KITTY_INSTALLATION_DIR/shell-integration/fish/vendor_completions.d"
+      end
+    '';
+    zsh = ''
+      if test -n "$KITTY_INSTALLATION_DIR"; then
+        export KITTY_SHELL_INTEGRATION="${cfg.shellIntegration.mode}"
+        autoload -Uz -- "$KITTY_INSTALLATION_DIR"/shell-integration/zsh/kitty-integration
+        kitty-integration
+        unfunction kitty-integration
+      fi
+    '';
+  };
+
+  mkShellIntegrationOption =
+    option:
+    option
+    // {
+      default =
+        (cfg.shellIntegration.mode != null)
+        && !(lib.elem "disabled" (lib.splitString " " cfg.shellIntegration.mode));
+      defaultText = literalExpression ''
+        (cfg.shellIntegration.mode != null)
+        && !(elem "disabled" (splitString " " config.programs.kitty.shellIntegration.mode))
+      '';
+    };
+in
+{
+  meta.maintainers = with lib.maintainers; [ khaneliman ];
+
+  imports = [
+    (lib.mkChangedOptionModule
+      [ "programs" "kitty" "theme" ]
+      [
+        "programs"
+        "kitty"
+        "themeFile"
+      ]
+      (
+        config:
+        let
+          value = lib.getAttrFromPath [ "programs" "kitty" "theme" ] config;
+        in
+        if value != null then
+          (
+            let
+              matching = lib.filter (x: x.name == value) (
+                lib.importJSON "${pkgs.kitty-themes}/share/kitty-themes/themes.json"
+              );
+            in
+            lib.throwIf (lib.length matching == 0) "kitty-themes does not contain a theme named ${value}"
+              lib.strings.removeSuffix
+              ".conf"
+              (lib.strings.removePrefix "themes/" (lib.head matching).file)
+          )
+        else
+          null
+      )
+    )
+  ];
+  options.programs.kitty = {
+    enable = mkEnableOption "Kitty terminal emulator";
+
+    package = lib.mkPackageOption pkgs "kitty" { nullable = true; };
+
+    darwinLaunchOptions = mkOption {
+      type = types.nullOr (types.listOf types.str);
+      default = null;
+      description = "Command-line options to use when launched by Mac OS GUI";
+      example = [
+        "--single-instance"
+        "--directory=/tmp/my-dir"
+        "--listen-on=unix:/tmp/my-socket"
+      ];
+    };
+
+    settings = mkOption {
+      type = types.attrsOf settingsValueType;
+      default = { };
+      example = {
+        scrollback_lines = 10000;
+        enable_audio_bell = false;
+        update_check_interval = 0;
+      };
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/kitty/kitty.conf`. See
+        <https://sw.kovidgoyal.net/kitty/conf.html>
+        for the documentation.
+      '';
+    };
+
+    themeFile = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Apply a Kitty color theme. This option takes the file name of a theme
+        in `kitty-themes`, without the `.conf` suffix. See
+        <https://github.com/kovidgoyal/kitty-themes/tree/master/themes> for a
+        list of themes.
+
+        Note that if any automatic themes are configured via
+        `programs.kitty.autoThemeFiles`, Kitty will prefer them based on the
+        OS color scheme and they will override other color and background image
+        settings.
+      '';
+      example = "SpaceGray_Eighties";
+    };
+
+    autoThemeFiles = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            light = mkOption {
+              type = types.str;
+              description = "Theme name for light color scheme.";
+            };
+            dark = mkOption {
+              type = types.str;
+              description = "Theme name for dark color scheme.";
+            };
+            noPreference = mkOption {
+              type = types.str;
+              description = "Theme name for no-preference color scheme.";
+            };
+          };
+        }
+      );
+      default = null;
+      description = ''
+        Configure Kitty automatic color themes. This creates
+        {file}`$XDG_CONFIG_HOME/kitty/light-theme.auto.conf`,
+        {file}`$XDG_CONFIG_HOME/kitty/dark-theme.auto.conf`, and
+        {file}`$XDG_CONFIG_HOME/kitty/no-preference-theme.auto.conf`.
+        Kitty applies these based on the OS color scheme, and they override
+        other color and background image settings.
+      '';
+      example = {
+        light = "GitHub";
+        dark = "TokyoNight";
+        noPreference = "OneDark";
+      };
+    };
+
+    font = mkOption {
+      type = types.nullOr lib.hm.types.fontType;
+      default = null;
+      description = "The font to use.";
+    };
+
+    actionAliases = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = "Define action aliases.";
+      example = {
+        "launch_tab" = "launch --cwd=current --type=tab";
+        "launch_window" = "launch --cwd=current --type=os-window";
+      };
+    };
+
+    keybindings = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = "Mapping of keybindings to actions.";
+      example = {
+        "ctrl+c" = "copy_or_interrupt";
+        "ctrl+f>2" = "set_font_size 20";
+      };
+    };
+
+    mouseBindings = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = "Mapping of mouse bindings to actions.";
+      example = literalExpression ''
+        {
+          "ctrl+left click" = "ungrabbed mouse_handle_click selection link prompt";
+          "left click" = "ungrabbed no-op";
+        };
+      '';
+    };
+
+    environment = mkOption {
+      type = types.attrsOf types.str;
+      default = { };
+      description = "Environment variables to set or override.";
+      example = {
+        "LS_COLORS" = "1";
+      };
+    };
+
+    shellIntegration = {
+      mode = mkOption {
+        type = types.nullOr types.str;
+        default = "no-rc";
+        example = "no-cursor";
+        apply = lib.mapNullable (
+          o:
+          let
+            modes = lib.splitString " " o;
+            filtered = lib.filter (m: m != "no-rc") modes;
+          in
+          lib.concatStringsSep " " (
+            lib.concatLists [
+              [ "no-rc" ]
+              filtered
+            ]
+          )
+        );
+        description = ''
+          Set the mode of the shell integration. This accepts the same options
+          as the `shell_integration` option of Kitty. Note that
+          `no-rc` is always implied, unless this set to `null`. See
+          <https://sw.kovidgoyal.net/kitty/shell-integration>
+          for more details.
+        '';
+      };
+
+      enableBashIntegration = mkShellIntegrationOption (
+        lib.hm.shell.mkBashIntegrationOption { inherit config; }
+      );
+
+      enableFishIntegration = mkShellIntegrationOption (
+        lib.hm.shell.mkFishIntegrationOption { inherit config; }
+      );
+
+      enableZshIntegration = mkShellIntegrationOption (
+        lib.hm.shell.mkZshIntegrationOption { inherit config; }
+      );
+    };
+
+    enableGitIntegration = lib.mkEnableOption "git integration";
+
+    extraConfig = mkOption {
+      default = "";
+      type = types.lines;
+      description = "Additional configuration to add to kitty.conf.";
+    };
+
+    quickAccessTerminalConfig = mkOption {
+      type = types.attrsOf settingsValueType;
+      default = { };
+      example = {
+        start_as_hidden = false;
+        hide_on_focus_loss = false;
+        background_opacity = 0.85;
+      };
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/kitty/quick-access-terminal.conf`. See
+        <https://sw.kovidgoyal.net/kitty/kittens/quick-access-terminal/>
+        for the documentation.
+      '';
+    };
+
+    diffConfig = {
+      settings = mkOption {
+        type = types.attrsOf settingsValueType;
+        default = { };
+        example = literalExpression ''
+          diff_cmd = "auto";
+          mark_moved_lines = true;
+        '';
+        description = ''
+          Configuration written to
+          {file}`$XDG_CONFIG_HOME/kitty/diff.conf`. See
+          <https://sw.kovidgoyal.net/kitty/kittens/diff/>
+          for the documentation.
+
+          Configuration set through the `extraConfig` option will take
+          greater priority.
+        '';
+      };
+      keybindings = mkOption {
+        type = types.attrsOf types.str;
+        default = { };
+        example = literalExpression ''
+          q = "quit";
+          j = "scroll_by 1";
+          k = "scroll_by -1";
+        '';
+        description = ''
+          Mapping of keybindings to use inside kitty's diff tool.
+
+          Configuration set through the `extraConfig` options will take
+          greater priority.
+        '';
+      };
+      extraConfig = mkOption {
+        default = "";
+        type = types.lines;
+        description = "Additional configuration to add kitty's diff.conf";
+      };
+    };
+  };
+
+  config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion =
+          !(
+            cfg.shellIntegration.mode == null
+            && (
+              cfg.shellIntegration.enableBashIntegration
+              || cfg.shellIntegration.enableFishIntegration
+              || cfg.shellIntegration.enableZshIntegration
+            )
+          );
+        message = "Cannot enable shell integration when `programs.kitty.shellIntegration.mode` is `null`";
+      }
+    ];
+
+    home.packages = (optionalPackage cfg) ++ (optionalPackage cfg.font);
+
+    programs.kitty.extraConfig = mkMerge [
+      (mkIf (cfg.font != null) (
+        mkOrder 510 ''
+          font_family ${cfg.font.name}
+          ${optionalString (cfg.font.size != null) "font_size ${toString cfg.font.size}"}
+        ''
+      ))
+      (mkIf (cfg.themeFile != null) (
+        mkOrder 520 ''
+          include ${pkgs.kitty-themes}/share/kitty-themes/themes/${cfg.themeFile}.conf
+        ''
+      ))
+      (mkIf (cfg.shellIntegration.mode != null) (
+        mkOrder 530 ''
+          # Shell integration is sourced and configured manually
+          shell_integration ${cfg.shellIntegration.mode}
+        ''
+      ))
+      (mkIf (cfg.settings != { }) (mkOrder 540 (toKittyConfig cfg.settings)))
+      (mkIf (cfg.actionAliases != { }) (mkOrder 550 (toKittyActionAliases cfg.actionAliases)))
+      (mkIf (cfg.keybindings != { }) (mkOrder 560 (toKittyKeybindings cfg.keybindings)))
+      (mkIf (cfg.mouseBindings != { }) (mkOrder 570 (toKittyMouseBindings cfg.mouseBindings)))
+      (mkIf (cfg.environment != { }) (mkOrder 580 (toKittyEnv cfg.environment)))
+    ];
+
+    programs.kitty.diffConfig.extraConfig = mkMerge [
+      (mkIf (cfg.diffConfig.settings != { }) (mkOrder 510 (toKittyConfig cfg.diffConfig.settings)))
+      (mkIf (cfg.diffConfig.keybindings != { }) (
+        mkOrder 520 (toKittyKeybindings cfg.diffConfig.keybindings)
+      ))
+    ];
+
+    xdg.configFile."kitty/kitty.conf" = {
+      text = ''
+        # Generated by Home Manager.
+        # See https://sw.kovidgoyal.net/kitty/conf.html
+        ${cfg.extraConfig}
+      '';
+      onChange =
+        let
+          prefix = if pkgs.stdenv.hostPlatform.isDarwin then "/usr" else pkgs.procps;
+        in
+        ''
+          ${prefix}/bin/pkill -USR1 -u $USER kitty || true
+        '';
+    };
+
+    xdg.configFile."kitty/quick-access-terminal.conf" = mkIf (cfg.quickAccessTerminalConfig != { }) {
+      text = ''
+        # Generated by Home Manager.
+        # See https://sw.kovidgoyal.net/kitty/kittens/quick-access-terminal/
+        ${toKittyConfig cfg.quickAccessTerminalConfig}
+      '';
+    };
+
+    xdg.configFile."kitty/diff.conf" = mkIf (cfg.diffConfig.extraConfig != "") {
+      text = ''
+        # Generated by Home Manager
+        # See https://sw.kovidgoyal.net/kitty/kittens/diff/
+        ${cfg.diffConfig.extraConfig}
+      '';
+    };
+
+    xdg.configFile."kitty/light-theme.auto.conf" = mkIf (cfg.autoThemeFiles != null) {
+      text = "include ${pkgs.kitty-themes}/share/kitty-themes/themes/${cfg.autoThemeFiles.light}.conf\n";
+    };
+
+    xdg.configFile."kitty/dark-theme.auto.conf" = mkIf (cfg.autoThemeFiles != null) {
+      text = "include ${pkgs.kitty-themes}/share/kitty-themes/themes/${cfg.autoThemeFiles.dark}.conf\n";
+    };
+
+    xdg.configFile."kitty/no-preference-theme.auto.conf" = mkIf (cfg.autoThemeFiles != null) {
+      text = "include ${pkgs.kitty-themes}/share/kitty-themes/themes/${cfg.autoThemeFiles.noPreference}.conf\n";
+    };
+
+    home.activation.checkKittyTheme = mkIf (cfg.themeFile != null || cfg.autoThemeFiles != null) (
+      let
+        themePath = name: "${pkgs.kitty-themes}/share/kitty-themes/themes/${name}.conf";
+        checkThemeFile = name: ''
+          if [[ ! -f "${themePath name}" ]]; then
+            errorEcho "kitty-themes does not contain the theme file ${themePath name}!"
+            exit 1
+          fi
+        '';
+      in
+      lib.hm.dag.entryBefore [ "writeBoundary" ] ''
+        ${lib.optionalString (cfg.themeFile != null) (checkThemeFile cfg.themeFile)}
+        ${lib.optionalString (cfg.autoThemeFiles != null) ''
+          ${checkThemeFile cfg.autoThemeFiles.light}
+          ${checkThemeFile cfg.autoThemeFiles.dark}
+          ${checkThemeFile cfg.autoThemeFiles.noPreference}
+        ''}
+      ''
+    );
+
+    xdg.configFile."kitty/macos-launch-services-cmdline" =
+      mkIf (cfg.darwinLaunchOptions != null && pkgs.stdenv.hostPlatform.isDarwin)
+        {
+          text = lib.concatStringsSep " " cfg.darwinLaunchOptions;
+        };
+
+    programs.bash.initExtra = mkIf cfg.shellIntegration.enableBashIntegration shellIntegrationInit.bash;
+
+    programs.fish.interactiveShellInit = mkIf cfg.shellIntegration.enableFishIntegration shellIntegrationInit.fish;
+
+    programs.zsh.initContent = mkIf cfg.shellIntegration.enableZshIntegration shellIntegrationInit.zsh;
+
+    programs.git.iniContent = lib.mkIf cfg.enableGitIntegration {
+      diff = {
+        tool = lib.mkDefault "kitty";
+        guitool = lib.mkDefault "kitty.gui";
+      };
+      difftool = {
+        prompt = lib.mkDefault false;
+        trustExitCode = lib.mkDefault true;
+        kitty = {
+          cmd = "kitten diff $LOCAL $REMOTE";
+        };
+        "kitty.gui" = {
+          cmd = "kitten diff $LOCAL $REMOTE";
+        };
+      };
+    };
+  };
+}

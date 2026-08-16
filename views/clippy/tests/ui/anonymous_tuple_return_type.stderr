@@ -1,0 +1,100 @@
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:13:22
+   |
+LL | fn direct_tuple() -> (u32, String) {
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+   = note: `-D clippy::anonymous-tuple-return-type` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::anonymous_tuple_return_type)]`
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:18:30
+   |
+LL | fn single_element_tuple() -> (u32,) {
+   |                              ^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:23:29
+   |
+LL | fn nested_tuple() -> Result<(u32, String), String> {
+   |                             ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:40:27
+   |
+LL | async fn async_tuple() -> (u32, String) {
+   |                           ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:45:41
+   |
+LL | fn function_pointer_return() -> fn() -> (u32, String) {
+   |                                         ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:51:22
+   |
+LL |     fn required() -> (u32, String);
+   |                      ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:54:29
+   |
+LL |     fn provided() -> Option<(u32, String)> {
+   |                             ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:63:20
+   |
+LL |     fn method() -> (u32, String) {
+   |                    ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:76:26
+   |
+LL |     let _closure = || -> (u32, String) {
+   |                          ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:118:44
+   |
+LL | fn fn_trait_sugar_output() -> impl Fn() -> (u32, String) {
+   |                                            ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:123:54
+   |
+LL | fn dyn_fn_trait_sugar_output() -> Box<dyn Fn(u32) -> (u32, String)> {
+   |                                                      ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: return type contains an anonymous tuple
+  --> tests/ui/anonymous_tuple_return_type.rs:129:55
+   |
+LL |     fn required_sugar_output() -> Box<dyn FnOnce() -> (u32, String)>;
+   |                                                       ^^^^^^^^^^^^^
+   |
+   = help: use a named struct to make the returned fields self-documenting
+
+error: aborting due to 12 previous errors
+

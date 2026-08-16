@@ -1,0 +1,70 @@
+name: binaries
+
+on:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  binaries:
+    strategy:
+      fail-fast: false
+
+      matrix:
+        # Linux only: this fork does not rent a macOS or Windows box to compile
+        # on. These artifacts are per-commit build products with no consumer we
+        # could find in this repo, and the fork has published no releases, so
+        # dropping the other four costs nothing anyone is using. Publishing an
+        # actual macOS or Windows release is a separate decision and lives in
+        # `release.yml`, which is untouched.
+        build: [linux-x86_64-musl, linux-x86_64-gnu, linux-aarch64-musl, linux-aarch64-gnu]
+        include:
+        - build: linux-x86_64-musl
+          os: ubuntu-24.04
+          target: x86_64-unknown-linux-musl
+        - build: linux-x86_64-gnu
+          os: ubuntu-24.04
+          target: x86_64-unknown-linux-gnu
+        - build: linux-aarch64-musl
+          os: ubuntu-24.04-arm
+          target: aarch64-unknown-linux-musl
+        - build: linux-aarch64-gnu
+          os: ubuntu-24.04-arm
+          target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # NOTE (aseipp): tests aren't run but sometimes builds take a while
+
+    name: Build binary artifacts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install packages (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xz-utils liblz4-tool musl-tools
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+      - name: Build release binary
+        shell: bash
+        run: cargo build --target ${{ matrix.target }} --verbose --release
+
+      - name: Set up artifact directory
+        shell: bash
+        run: |
+          outdir="target/${{ matrix.target }}/release"
+          BIN=$outdir/jj
+
+          mkdir -p target/out
+          cp $BIN target/out
+
+      - name: Publish binary artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: jj-${{ matrix.target }}
+          path: target/out

@@ -23,12 +23,45 @@
     fileset = fs.gitTracked paths.root;
   };
 
-  # Every tracked `.nix` outside the tests/ fork-syntax island. The
-  # stock-nix-parse shards below define the stock-parseable surface as
-  # exactly this tree (index#3635).
+  # Every tracked `.nix` outside the tests/ fork-syntax island and outside
+  # the vendored views' own test corpora. The stock-nix-parse shards below
+  # define the stock-parseable surface as exactly this tree (index#3635).
+  #
+  # views/*/tests holds upstream's suites, and a parser test suite's whole
+  # job is to carry inputs that must not parse (views/nix's
+  # tests/functional/lang/eval-fail-*.nix are the fixtures asserting the
+  # error message you get). They are data for the fork's tests, never
+  # imported by any surface this gate protects, so scanning them reports a
+  # failure for files that are correct exactly as they are. They arrived
+  # under the gate when #9905 moved the forks into views/ and turned main
+  # red (run 30997137503).
   stockParseFileset = fs.difference (
     fs.intersection (fs.gitTracked paths.root) (fs.fileFilter (file: file.hasExt "nix") paths.root)
-  ) (paths.root + "/tests");
+  ) (fs.unions ([(paths.root + "/tests")] ++ viewTestDirs));
+
+  # The views themselves stay in the gate: bootstrap builds
+  # views/nix#nix-cli with whatever client the runner already has, which
+  # may be stock, so that flake must parse everywhere.
+  #
+  # Only the fixture corpora come out, and only these two directory names.
+  # A view whose fixtures live somewhere else fails this gate the day it
+  # lands, with the offending path in the message, which is the loud
+  # failure this list is allowed to have. The version with nothing to keep
+  # correct is scanning each view's flake-reachable closure instead of
+  # every tracked .nix under it; that is a bigger change than a red main
+  # should wait for (ENG-12512).
+  viewsRoot = paths.root + "/views";
+  fixtureDirNames = ["tests" "test_data"];
+  viewTestDirs =
+    if builtins.pathExists viewsRoot
+    then
+      lib.pipe (builtins.readDir viewsRoot) [
+        (lib.filterAttrs (_name: type: type == "directory"))
+        lib.attrNames
+        (lib.concatMap (view: map (dir: viewsRoot + "/${view}/${dir}") fixtureDirNames))
+        (builtins.filter builtins.pathExists)
+      ]
+    else [];
 
   # The parse gate is sharded per top-level directory (#3929) so editing a
   # `.nix` file re-parses only its own subtree instead of every tracked
@@ -177,7 +210,7 @@ in
       # manifest is what cargo-fmt's `cargo metadata --no-deps` walks,
       # so this also proves the lane works from manifests alone (no
       # Cargo.lock, no dependency sources, no network).
-      violatingRust = pkgs.runCommand "rust-fixture" {} ''
+      violatingRust = pkgs.runCommand "rust-fixture" {__structuredAttrs = true;} ''
         mkdir -p "$out/src"
         cat > "$out/Cargo.toml" <<'EOF'
         [package]

@@ -5,7 +5,7 @@ title: "writing-style skill learns the AI tells"
 tags: [agent, skills, writing]
 links:
   - label: skill
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/writing-style/SKILL.md
+    href: https://github.com/indexable-inc/index/blob/main/skills/writing-style/SKILL.md
 ---
 
 The agent's writing-style skill now carries a catalog of the patterns readers use to spot AI prose, with an instruction to never produce them: the rule of three, "not X, but Y" parallelisms, em dashes, the delve/robust/seamless lexicon, "serves as" where the sentence means "is", synonym cycling, significance inflation ("plays a vital role"), hedging filler ("it's worth noting"), assistant chirp, bolded-phrase bullets, and closing summaries. The catalog is drawn from Wikipedia's Signs of AI writing field guide and the vocabulary studies it cites (Juzek and Ward on RLHF word overuse, Kobak on academic abstracts).

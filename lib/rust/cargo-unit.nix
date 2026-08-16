@@ -167,6 +167,21 @@
   in. Templating is what keeps this metadata file's closure its own size rather
   than the vendor dir's).
 
+  `testDiscovery` selects how the shared test manifest IFD learns #[test]
+  names: `"binary"` (default) builds and runs every test binary with
+  `--list --format terse`; `"dump-test-names"` compiles each harness test
+  target with the ix rustc fork's `-Zdump-test-names` flag
+  (rust-lang/rust#50297), which stops before codegen and linking, so a
+  cold-store discovery never links a test binary. Option-driven, not
+  feature-detected: probing the toolchain for the flag would itself cost an
+  eval-time IFD, which is the exact cost this mode exists to remove, and a
+  mis-selected upstream toolchain fails loudly ("unknown unstable option")
+  rather than silently. Select it together with a fork toolchain
+  (`rustToolchain = <rustc-ix package>`). Both modes produce byte-identical
+  manifest files (pinned by the fork-discovery fixtures in
+  tests/default.nix), and the choice never perturbs build-unit identity:
+  only the manifest and its discovery inputs differ.
+
   `testPolicyByPackage.<package>` accepts structured test-runner policy:
   `{ skip = [ "case_name" ]; testThreads = "1"; }`. `buildWorkspace` renders
   it to libtest args for cargo-unit's per-test runner and to cargo-nextest
@@ -235,6 +250,13 @@
     packageTestInputs = rawArgs.packageTestInputs or {};
     packageTestEnv = rawArgs.packageTestEnv or {};
     testRunPrelude = rawArgs.testRunPrelude or "";
+    # Validated here (not only in the rendered file) so a typo fails at the
+    # buildWorkspace call site with the caller's context, before any IFD.
+    testDiscovery = let
+      value = rawArgs.testDiscovery or "binary";
+    in
+      assert lib.assertMsg (elem value ["binary" "dump-test-names"])
+      "cargoUnit.buildWorkspace testDiscovery must be \"binary\" or \"dump-test-names\", got ${toString value}"; value;
 
     # Every per-package table below is consumed in the rendered units file as
     # `<table>.${packageName} or <empty>`, so a key that names no package in
@@ -650,6 +672,7 @@
             testArgsByPackage
             packageTestInputs
             packageTestEnv
+            testDiscovery
             ;
           inherit packageBuildEnv packageRustcArgs;
           inherit extraRustcArgsForPlatform extraLinkRustcArgsForPlatform;
@@ -1124,13 +1147,15 @@
   Build a library unit derivation from already-compiled artifacts instead of
   from source.
 
-  The result is byte-contract-identical to a library unit the renderer would
-  emit (`packages/nix-cargo-unit/src/render.rs:1375-1402`): `$out` carries
+  The result is contract-identical to a library unit the renderer would emit
+  (`packages/nix-cargo-unit/src/render.rs`, install phase): `$out` carries
   `$out/lib/lib<name>-<hash>.rlib`, the matching `.rmeta`, and
   `$out/nix-support/extern-path` holding the absolute path to the `.rlib`.
   A downstream unit therefore consumes it exactly like a from-source unit:
-  `-L dependency=$out/lib` and `--extern <crate>=$(cat $out/nix-support/extern-path)`
-  (`render.rs:1015-1047`).
+  `-L dependency=$out/lib` and `--extern <crate>=$(cat $out/nix-support/extern-path)`,
+  plus a second `--extern <crate>=<sibling .rmeta>` when the consuming
+  workspace compiles with `policy.compiler.embedMetadata = false` (the
+  staged `.rmeta` is what makes a thin prebuilt rlib consumable there).
 
   Pass the produced derivation through `buildWorkspace`'s `extraUnits` (keyed by
   `"<name>-<version>-<hash>"`). Because a unit's `<hash>` hashes package
@@ -1290,15 +1315,20 @@
       ''
         mkdir -p "$out/lib" "$out/nix-support"
         ${lib.optionalString (rlib != null) ''
-          cp ${lib.escapeShellArg (toString rlib)} "$out/lib/lib${libName}-${hash}.rlib"
+          cp ${lib.escapeShellArg (toString rlib)} "${rlibPath}"
         ''}
         ${lib.optionalString (dylib != null) ''
-          cp ${lib.escapeShellArg (toString dylib)} "$out/lib/lib${libName}-${hash}${dylibExtension}"
+          cp ${lib.escapeShellArg (toString dylib)} "${dylibPath}"
         ''}
         cp ${lib.escapeShellArg (toString rmeta)} "$out/lib/lib${libName}-${hash}.rmeta"
-        # Same artifact priority as the renderer's install phase: the rlib is the
-        # single preferred artifact, and `extern-paths` carries every linkable
-        # one in the same order, because only rustc can pick between them.
+        # Same artifact priority as the renderer's install phase: the rlib is
+        # the single preferred artifact, and `extern-paths` carries every
+        # linkable one in the same order, because only rustc can pick between
+        # them. When the consuming workspace runs with
+        # `policy.compiler.embedMetadata = false` (the default), its units
+        # add a second `--extern` for the sibling .rmeta staged above, so a
+        # thin prebuilt rlib (produced by a workspace with the same policy)
+        # still supplies full metadata to dependents.
         printf '%s\n' "${preferredExternPath}" > "$out/nix-support/extern-path"
         ${lib.optionalString (dylib != null) ''
           printf '%s\n' ${lib.concatMapStringsSep " " (path: ''"${path}"'') externPaths} > "$out/nix-support/extern-paths"

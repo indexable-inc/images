@@ -1,0 +1,2 @@
+dEQP-VK.subgroups.clustered.compute.subgroupclusteredmul_u64vec4_requiredsubgroupsize
+dEQP-VK.video.encode.h265.usage_layered_src_video_layout

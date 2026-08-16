@@ -1,0 +1,89 @@
+cabal-version:       >=1.10
+name:                nofib
+version:             0.1.0.0
+-- synopsis:
+-- description:
+-- bug-reports:
+license:             BSD3
+license-file:        LICENSE
+author:              Ben Gamari
+maintainer:          ben@smart-cactus.org
+-- copyright:
+-- category:
+build-type:          Simple
+
+library
+  exposed-modules:     Measurements
+  ghc-options:         -Wall
+  hs-source-dirs:      src
+  build-depends:       base >=4.5 && <4.19,
+                       aeson,
+                       these >= 0.8,
+                       containers,
+                       cassava,
+                       text,
+                       filepath,
+                       vector,
+                       bytestring
+  default-language:    Haskell2010
+
+executable nofib-run
+  main-is:             Main.hs
+  ghc-options:         -Wall -fno-worker-wrapper -threaded
+  hs-source-dirs:      runner
+  other-modules:
+      CachegrindParse
+    , PerfStatParse
+    , ParseResults
+    , RunnerTypes
+    , Utils
+  other-extensions:
+      RecordWildCards
+    , DeriveDataTypeable
+    , BangPatterns
+    , ScopedTypeVariables
+  build-depends:       base >=4.5 && <4.19,
+                       time >=1.4 && <1.10,
+                       containers,
+                       bytestring,
+                       directory >=1.1 && <1.4,
+                       filepath,
+                       process >=1.3 && <1.7,
+                       text,
+                       optparse-applicative,
+                       shake >= 0.17,
+                       nofib,
+                       deepseq
+  default-language:    Haskell2010
+
+executable nofib-compare
+  main-is:             Compare.hs
+  hs-source-dirs:      compare
+  ghc-options:         -Wall
+  other-modules:       LabelMatch
+  other-extensions:    RecordWildCards, DeriveDataTypeable
+  build-depends:       base >=4.5 && <4.19,
+                       these,
+                       containers,
+                       directory,
+                       filepath,
+                       text,
+                       aeson,
+                       ansi-wl-pprint,
+                       tabular >= 0.2.2.8,
+                       these,
+                       semialign,
+                       optparse-applicative,
+                       ansi-terminal,
+                       nofib
+  default-language:    Haskell2010
+
+executable nofib-merge
+  main-is:             Merge.hs
+  ghc-options:         -Wall
+  build-depends:       base >=4.5 && <4.19,
+                       optparse-applicative,
+                       cassava,
+                       bytestring,
+                       nofib
+  default-language:    Haskell2010

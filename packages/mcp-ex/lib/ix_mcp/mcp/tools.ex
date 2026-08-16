@@ -9,8 +9,10 @@ defmodule IxMcp.MCP.Tools do
   content envelope.
   """
 
+  alias IxMcp.Image
   alias IxMcp.Jobs
   alias IxMcp.UTF8
+  alias IxMcp.Workspace
 
   @budget_cap 120
 
@@ -22,62 +24,71 @@ defmodule IxMcp.MCP.Tools do
   # of magnitude smaller. 64KiB is far above a legitimate reply page.
   @max_output_bytes 65_536
 
+  # This guide's LINE ORDER is a user-visible contract, not a style preference:
+  # server.ex splices it into `instructions` and the exec tool description
+  # carries it, and both readers truncate around 50 lines, so a capability below
+  # the cut does not exist for its reader.
+  #
+  # mcp_test.exs freezes that budget already ("the exec guide names the fan-out
+  # surface inside the client's truncation budget"): Agents.spawn( below guide
+  # index 40, Cmd.run( and Edit.replace( below 50, each also asserted to still
+  # EXIST so a vanished marker fails too. Slack is thin -- 3 lines on Cmd.run as
+  # of this change -- so adding lines up here means removing the same number
+  # lower down. Run that test before believing an insertion is free.
+  #
+  # test/ix_mcp/mcp/surface_guide_test.exs covers the part that budget test does
+  # not: that the anti-Bash verdict OPENS the guide and precedes every Sh example
+  # line, so a future edit cannot slide the verdict past the cut while the
+  # capability ceilings still pass. Marker ceilings live in mcp_test.exs, not
+  # there; two gates freezing the same numbers is how they drift apart.
   @surface_guide """
+  STRONGLY PREFER exec OVER THE BASH TOOL. A Bash pipeline reports one exit
+  code out of N and discards every stage's stderr, so a SILENT FALSE NEGATIVE
+  is its default failure mode: `rg` exiting 2 on a broken pattern is
+  byte-identical to "no matches". Sh keeps every stage's rc and stderr as data,
+  argv lists never re-split on whitespace, mutations verify postconditions
+  against FRESH reads rather than their own output, and watchers refuse to arm
+  until shown to match a positive control and reject a negative one. Use Bash
+  only for an interactive one-off a dedicated tool already covers.
+
+      Sh.pipeline([~w(rg -n TODO .), ~w(cut -d: -f1), ~w(uniq -c)]) |> Sh.run()
+      Sh.ok?(result)  EVERY stage 0, not just the last    Sh.ok!(step)  stdout, or a raise + stage table
+      Sh.mutate "advance main" do <pipeline> verify <fresh reads of the world> end
+      Sh.watch("v", pattern: ~r/^gate: (PASS|FAIL)/m, must_match: "gate: FAIL 3", must_not_match: "..REFUSES")
+      Sh.run(Sh.cmd(~w(tee out.txt)), stdin: body)  bodies ride stdin, never argv (131072-byte word cap)
+
+  WORKSPACES (agent isolation): exec takes workspace: "name". Every agent
+  that might run concurrently with another -- every subagent, teammate, or
+  parallel task -- MUST pass its own name on EVERY exec call, and keep using
+  that same one. A workspace is its own persistent REPL: bindings set in one
+  are invisible to the rest, so concurrent agents cannot clobber each other.
+  Unnamed calls share "main"; a lone session may stay there, concurrent ones
+  must not. Workspace.list()/new("name")/drop("name") manage them. Modules,
+  processes, ETS and files stay BEAM-global; only bindings and env isolate.
+
   Everything beyond running code is in-language, pre-aliased in every cell:
 
       Jobs.tail("ab12", 20)   Jobs.await("ab12")   Jobs.cancel("ab12")   Jobs.history()
-      Jobs.watch("ab12") / Jobs.watch(session: 7)   announce another job's or
-                                            session's finishes here (own jobs
-                                            already announce; session ids:
-                                            Sessions.list())
-      Fleet.digest()                        expand the last fleet heartbeat window
-                                            into what it counted (host, level, unit,
-                                            sample message)
-      Fleet.heartbeat_period()              read the heartbeat period; pass seconds
-                                            to change it (default 3600, minimum 60).
-                                            Hourly is measured, not arbitrary: 87% of
-                                            minutes are non-empty, so a per-minute
-                                            line costs ~1,250/day where hourly costs
-                                            24. Anomalies do not wait for the hour;
-                                            they emit within a minute, ~10/day
-      Fleet.anomaly_threshold()             the count this clock hour has to exceed,
-                                            and the quantile it comes from -- answers
-                                            "why did that not fire"
-      Fleet.check()                         poll for discrete alert conditions now;
-                                            .errors non-empty means part of the
-                                            fleet could NOT be read, which is not
-                                            the same as healthy
-      Fleet.mute("anomaly")                 UNSUBSCRIBE, five shapes, all durable
-                                            across reconnects:
-                                              "heartbeat"       the hourly baseline
-                                              "anomaly"         the immediate
-                                                                out-of-band line
-                                              "digest"          both of those
-                                              "digest:warning"  keep the line, drop
-                                                                one category (also
-                                                                error, crit, alert,
-                                                                emerg)
-                                              "oom_burst"       one discrete alert
-                                            Fleet.unmute/1 undoes any of them,
-                                            Fleet.mutable() lists them all, and
-                                            Fleet.alerts() shows what is muted plus
-                                            what is standing. The MCP
-                                            logging/setLevel request raises the
-                                            severity floor for discrete alerts in
-                                            one go. Discrete ids: kernel_storage,
-                                            ci_oom_success, oom_burst,
-                                            observability_blind
-      Fleet.topology()                      which hosts the BEAM is on (also in
-                                            this server's connect instructions)
-      Read.file(path)                       a file; Read.file(path, first, last) slices
-                                            a 1-based inclusive line range
-      Edit.replace(path, old, new)          exact-string find/replace with native
-                                            Claude Code Edit semantics: raises on
-                                            zero or ambiguous matches (replace_all:
-                                            true replaces every one), returns a
-                                            numbered snippet of the edited region
-      Edit.write(path, content)             write a file, creating parent dirs;
-                                            the return names created vs updated
+      Jobs.spawn(code)                      start code as a background job, returning at once
+                                            (Jobs.start/2 same; Jobs.run(code, 30) waits 30s first)
+      Jobs.watch("ab12") / Jobs.watch(session: 7)   announce another job's or session's
+                                            finishes here (own jobs already do; Sessions.list())
+      Agents.spawn(brief, backend: :claude | :codex | :kimi)
+                                            FAN OUT: a real agent CLI as an async depth-1
+                                            subagent, id at once. Agents.send(id, text) steers,
+                                            Agents.await(id) blocks when you must; .status()
+                                            .events(id) .report() .graph() observe; finals announce
+      Fleet.multicall(Fleet.nodes(), code)  run Elixir across the fleet's server cores
+                                            (exec_least_loaded/2 for one; topology() names hosts)
+      Fleet.check()                         poll for alert conditions now; .errors non-empty means
+                                            part of the fleet could NOT be read, which is NOT healthy
+      Fleet.mute("anomaly")                 UNSUBSCRIBE durably; the five shapes, cadence and
+                                            threshold are under FLEET at the end of this guide
+      Read.file(path)                       a file; Read.file(path, first, last) slices a 1-based range
+      Edit.replace(path, old, new)          exact-string find/replace, native Claude Code Edit
+                                            semantics: raises on zero or ambiguous matches
+                                            (replace_all: true for all), returns a numbered snippet
+      Edit.write(path, content)             write a file, creating parent dirs (created vs updated)
       Cmd.run("rg", ["-n", "pat"], cd: dir) System.cmd/3 with stdin from /dev/null,
                                             so pathless rg/grep see EOF instead of
                                             hanging forever on the port's
@@ -86,13 +97,29 @@ defmodule IxMcp.MCP.Tools do
                                             pipeline with the same EOF stdin; both
                                             default cd: to the kernel's launch dir
                                             (never the movable OS cwd, #3902), so
-                                            pass cd: or -C to work elsewhere
+                                            pass cd: or -C to work elsewhere.
+                                            Both return {out, exit_status} -- CHECK
+                                            the status; a nonzero exit also lands
+                                            as a note on the reply. Cmd.run!/
+                                            Cmd.sh! raise on nonzero instead,
+                                            wanted whenever failure should fail
+                                            the cell. JSON needs no dep dance:
+                                            Jason.decode!/1 and OTP's :json are
+                                            both available in every cell
+      Image.read(path)                      a PNG/JPEG/GIF/WebP as a value; when a
+                                            cell's RESULT is (or contains) images,
+                                            the reply carries real MCP image
+                                            blocks the client renders as pictures.
+                                            Image.from_binary(bytes) wraps
+                                            generated bytes (charts, fetches)
       Ix.bindings()                         every bound name with the cell that bound it:
-                                            job, intent, value shape, time. This kernel's
-                                            bindings are shared by every agent riding its
-                                            connection -- a session and its subagents
-                                            alike -- so a cell taking over another cell's
-                                            variable is reported to both sides (#3967)
+                                            job, intent, value shape, time -- scoped to
+                                            the calling cell's own workspace
+                                            (Ix.bindings("name") asks about another).
+                                            Within one workspace a cell taking over
+                                            another cell's variable is reported to
+                                            both sides (#3967); across workspaces
+                                            there is nothing to take over
       Ix.trace()                            stack dump of every running job's processes,
                                             taken from outside with Process.info/2
       Ix.restart()                          cancel running jobs (sparing the calling
@@ -134,6 +161,20 @@ defmodule IxMcp.MCP.Tools do
                                             channel event, sender named, within
                                             seconds. Sessions.broadcast("text")
                                             reaches every session on the host
+      Web.search("query")                   web search, in-language, returning a
+                                            LIST of %{url:, title:, text:, ...} --
+                                            so filter it, pipe it into Web.fetch,
+                                            keep it in a binding. results: n,
+                                            text: false for URLs only
+      Web.fetch("https://...")              one URL as clean text (a list of URLs
+                                            gives a list of results). chars: :all
+                                            lifts the per-document cap; a clipped
+                                            document says so at the cut.
+                                            Both run against the exa API and need
+                                            EXA_API_KEY in the environment. This is
+                                            the whole web surface when the session
+                                            is kernelOnly -- one capability, one
+                                            door
       Tui.act(uri, send_keys)               drive a federated TUI resource (optional
                                             peer arg)
       TuiLocal.spawn(cmd, args)             spawn a local PTY program (vim, less, a
@@ -206,17 +247,6 @@ defmodule IxMcp.MCP.Tools do
                                             editing it, scope: "user:<name>" keeps one
                                             private. Memories.validate(slug, by:, how:)
                                             records a later re-check and clears staleness
-      Agents.spawn(brief, backend: :claude | :codex | :kimi)
-                                            spawn a real agent CLI as an async depth-1
-                                            subagent (Fable 5 card sec 8.15.3, #3700);
-                                            returns its id at once. Steer with
-                                            Agents.send(id, text); observe with
-                                            Agents.status(), .events(id), .report(),
-                                            .graph(); block only when necessary with
-                                            Agents.await(id). Finals arrive as
-                                            agent_finished notifications
-      Fleet.multicall(Fleet.nodes(), code)  run Elixir across the fleet's server cores
-                                            (Fleet.exec_least_loaded/2 for one node)
       Api.api("tail") / Api.help(Jobs, :tail)   discovery over this whole surface
 
   Each cell runs in its own BEAM process, so a blocking cell never delays
@@ -233,6 +263,24 @@ defmodule IxMcp.MCP.Tools do
   persist -- code ships as source strings), and darwin-specific behavior.
   Fleet.nodes() == [] means no fleet is configured (helpers return
   {:error, :no_nodes}); the remote env is minimal (shell-outs limited).
+
+  FLEET, in detail. Fleet.heartbeat_period() reads the baseline period and
+  takes seconds to change it (default 3600, minimum 60). Hourly is measured,
+  not arbitrary: 87% of minutes are non-empty, so a per-minute line costs
+  ~1,250/day where hourly costs 24. Anomalies do not wait for the hour --
+  they emit within a minute, ~10/day -- and Fleet.anomaly_threshold() gives
+  the count this clock hour has to exceed plus the quantile it came from,
+  which is what answers "why did that not fire". Fleet.mute/1 takes five
+  shapes, all durable across reconnects: "heartbeat" (the hourly baseline),
+  "anomaly" (the immediate out-of-band line), "digest" (both),
+  "digest:warning" (keep the line, drop one category -- also error, crit,
+  alert, emerg), and "<condition id>" for one discrete alert.
+  Fleet.unmute/1 undoes any of them, Fleet.mutable() lists every id (the
+  discrete ones come from the loaded policy catalog), and Fleet.alerts()
+  shows what is muted plus what is standing. The MCP logging/setLevel
+  request raises the severity floor for discrete alerts in one go.
+  Fleet.watch_warnings/1 opts in to edge notifications (usually only when
+  the human asks; one watcher per kernel).
 
   Fleet notifications (heartbeat, anomaly, discrete alerts) ride
   notifications/claude/channel, which is a Claude Code extension rather than
@@ -251,10 +299,17 @@ defmodule IxMcp.MCP.Tools do
       %{
         "name" => "exec",
         "description" => """
-        Run Elixir on the shared persistent workspace. Waits up to `budget`
+        Run Elixir on a persistent workspace (REPL). Waits up to `budget`
         seconds; if the code is still running it keeps going in the background
         as a job and this returns a job handle. Bindings persist across calls:
         variables, aliases, imports, and modules you define stay defined.
+
+        ISOLATION RULE: if you are a subagent, a teammate, or otherwise might
+        run concurrently with another agent on this connection, pass
+        workspace: "<your-agent-or-task-name>" on EVERY call -- your first
+        call creates it. Named workspaces are isolated REPLs; the default
+        "main" workspace is shared and concurrent agents in it clobber each
+        other's bindings.
         Jobs are durable: a backgrounded run's output, final status, and
         history survive even a crash or kill, readable later with
         Jobs.tail(id) / Jobs.output(id) / Jobs.history(). A backgrounded
@@ -300,6 +355,14 @@ defmodule IxMcp.MCP.Tools do
             "intent" => %{
               "type" => "string",
               "description" => "Short human description of what this run does (titles the run)"
+            },
+            "workspace" => %{
+              "type" => "string",
+              "description" =>
+                "Named REPL to run in (default \"main\", which is SHARED). " <>
+                  "Subagents and concurrent agents MUST pass their own name here " <>
+                  "on every call; same name = same bindings, new names are " <>
+                  "created on first use. Letters, digits, '.', '-', '_'."
             }
           },
           "required" => ["code", "intent"]
@@ -315,15 +378,34 @@ defmodule IxMcp.MCP.Tools do
   here (no job ever owns it); every other tool leaves it to the transport,
   which finalizes with the wire outcome.
   """
-  @spec call(String.t(), map(), integer() | nil) :: {:ok, String.t()} | {:error, String.t()}
+  @spec call(String.t(), map(), integer() | nil) ::
+          {:ok, String.t() | [map()]} | {:error, String.t()}
   def call(name, args, action_id \\ nil)
 
   def call("exec", %{"code" => code} = args, action_id) when is_binary(code) do
     budget = args |> Map.get("budget", 15) |> clamp_budget()
     intent = Map.get(args, "intent")
+    workspace = Map.get(args, "workspace", Workspace.main())
 
-    {summary, output} = Jobs.run(code, budget: budget, intent: intent, action_id: action_id)
-    reply = render_run(summary, output)
+    unless Workspace.valid_name?(workspace) do
+      if action_id, do: IxMcp.ActionLog.finish_action(action_id, "failed", true, 0)
+
+      throw(
+        {:invalid_workspace,
+         "invalid workspace name #{inspect(workspace)}: use letters, digits, " <>
+           "'.', '-' or '_' (max 64 chars)"}
+      )
+    end
+
+    {summary, output} =
+      Jobs.run(code,
+        budget: budget,
+        intent: intent,
+        action_id: action_id,
+        workspace: workspace
+      )
+
+    reply = render_run(summary, output, workspace)
 
     # The reply just rendered carries the job's outcome, so announcing the
     # finish on the channel would say everything twice (#3934). Ack strictly
@@ -333,7 +415,9 @@ defmodule IxMcp.MCP.Tools do
     # duplicate announce, which beats a lost reply.
     unless summary.running, do: ack_delivered(summary.id)
 
-    {:ok, reply}
+    {:ok, attach_images(reply, summary)}
+  catch
+    {:invalid_workspace, message} -> {:error, message}
   end
 
   def call("exec", _args, action_id) do
@@ -346,20 +430,64 @@ defmodule IxMcp.MCP.Tools do
   defp clamp_budget(budget) when is_number(budget) and budget > 0, do: min(budget, @budget_cap)
   defp clamp_budget(_), do: 15
 
+  # Design note, piggybacking announcements onto a tool reply (#3934).
+  # This is the seam: after `render_run/3` and before the reply is returned,
+  # `ActionLog.unacked_outbox(session)` minus this job's own row is exactly
+  # the set a client never rendered, and `Notifier`'s digest renderer already
+  # turns that set into one block. Acking is the easy half and is already
+  # safe: `ack_outbox_ref/3` returns a claim count, so the channel path and a
+  # piggyback cannot both render one row no matter which wins the race.
+  #
+  # What blocks it is the gate, not the drain. Draining unconditionally would
+  # double every announcement for a client that DOES render the channel, so
+  # the piggyback has to fire only for clients that do not, and this server
+  # discards `clientInfo`/`capabilities` at `initialize` -- nothing retains
+  # the negotiated `claude/channel` experimental capability, so there is
+  # nothing here to branch on. Implementing it therefore means storing that
+  # capability at initialize first, then reading it at this line.
+  #
+  # Note also what a piggyback can and cannot be: it only fires when the
+  # client next calls a tool, so its delivery latency is unbounded and it is
+  # a fallback for a client that never renders the channel at all, never a
+  # substitute for the durable row. The row is what makes a death recoverable.
   defp ack_delivered(job_id) do
-    IxMcp.ActionLog.ack_job_outbox(job_id)
+    IxMcp.ActionLog.ack_outbox_ref(:jobs, job_id)
   catch
     :exit, _reason -> 0
   end
 
-  defp render_run(summary, output) do
+  # A finished cell whose result value is (or contains) images answers with
+  # mixed MCP content: the text verdict first, then one image block per
+  # image, so the client renders the pictures instead of reading bytes. The
+  # raw value lives only in the resident job process; a value the ledger
+  # already flattened to text has no images to attach.
+  defp attach_images(reply, %{running: false, status: :done} = summary) do
+    with {:ok, value} <- Jobs.result(summary.id),
+         [_at_least_one | _] = images <- Image.collect(value) do
+      [%{"type" => "text", "text" => reply} | Enum.map(images, &Image.to_content/1)]
+    else
+      _no_images -> reply
+    end
+  catch
+    # The result read is a GenServer.call into the job's control process,
+    # which under ledger load can be parked past the call timeout (#4082).
+    # Losing the image blocks then is a degraded reply; losing the whole
+    # exec reply to an inherited exit would be a regression.
+    :exit, _reason -> reply
+  end
+
+  defp attach_images(reply, _summary), do: reply
+
+  defp render_run(summary, output, workspace) do
     header =
-      JSON.encode!(%{
+      %{
         "job" => summary.id,
         "status" => Atom.to_string(summary.status),
         "running" => summary.running,
         "elapsed_s" => Float.round(summary.elapsed_s, 2)
-      })
+      }
+      |> put_workspace(workspace)
+      |> JSON.encode!()
 
     sections =
       [header] ++
@@ -386,6 +514,17 @@ defmodule IxMcp.MCP.Tools do
       "[output truncated: showing first #{byte_size(kept)} of #{byte_size(output)} bytes; " <>
         "page the full output with Jobs.lines(id, first, last) or Jobs.tail(id, n)]"
     ]
+  end
+
+  # "main" stays implicit so unnamed sessions read exactly what they always
+  # did; a named workspace is stated on every reply, confirming which REPL
+  # the bindings landed in.
+  defp put_workspace(header, workspace) do
+    if workspace == Workspace.main() do
+      header
+    else
+      Map.put(header, "workspace", workspace)
+    end
   end
 
   defp result_section(%{running: true}) do

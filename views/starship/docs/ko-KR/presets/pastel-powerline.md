@@ -1,0 +1,21 @@
+[프리셋으로 돌아가기](./#pastel-powerline)
+
+# Pastel Powerline Preset
+
+This preset is inspired by [M365Princess](https://github.com/JanDeDobbeleer/oh-my-posh/blob/main/themes/M365Princess.omp.json). It also shows how path substitution works in starship.
+
+![Screenshot of Pastel Powerline preset](/presets/img/pastel-powerline.png)
+
+### 준비 사항
+
+- A [Nerd Font](https://www.nerdfonts.com/) installed and enabled in your terminal (the example uses Caskaydia Cove Nerd Font)
+
+### 설정
+
+```sh
+starship preset pastel-powerline -o ~/.config/starship.toml
+```
+
+[클릭하여 TOML 다운로드](/presets/toml/pastel-powerline.toml)
+
+<<< @/public/presets/toml/pastel-powerline.toml

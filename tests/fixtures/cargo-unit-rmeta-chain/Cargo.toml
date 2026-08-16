@@ -1,0 +1,17 @@
+# A 4-crate dependency chain (a <- b <- c <- d, d is the only bin) built to
+# demonstrate and pin content-addressed early cutoff under the ix rustc fork's
+# rmeta-stability flags: a comment edit in the leaf (chain-a) must leave every
+# crate's output store path unchanged, so no dependent recompiles.
+#
+# The release profile pins debuginfo off: line tables would legitimately
+# re-bind shifted line numbers into chain-a's rlib and turn a comment-line
+# insertion into a real artifact change, which is a debuginfo policy question,
+# not a metadata-stability one. The chain is also deliberately panic-free at
+# the leaf (no unwrap/index/arithmetic that can trap), because a panic
+# location bakes file:line into codegen and moves with the edit.
+[workspace]
+members = ["chain-a", "chain-b", "chain-c", "chain-d"]
+resolver = "2"
+
+[profile.release]
+debug = 0

@@ -19,7 +19,7 @@ use crate::{error, function, names, object, record};
 ///
 /// # Errors
 ///
-/// Fails for surface the elixir backend does not implement (data enums,
+/// Fails for surface the elixir backend does not implement (enumerations,
 /// binary payloads, async fns returning streams, async or stream object
 /// members, record field renames), and for renames that cannot become
 /// identifiers.
@@ -27,10 +27,13 @@ pub fn render(
     interface: &ir::Interface,
     crate_name: Option<&str>,
 ) -> Result<RenderedInterface, RenderError> {
-    if let Some(data_enum) = interface.enums.first() {
+    if let Some(declared) = interface.enums.first() {
         return Err(RenderError::new(format!(
-            "`{}` is a data enum, which the elixir backend does not render",
-            data_enum.name
+            "`{}` is an enumeration, which the elixir backend does not render \
+             yet; the idiom it owes is an atom per variant plus a guard, and \
+             there is no Elixir conformance case for one. Model the value as a \
+             String field until it lands.",
+            declared.name
         )));
     }
 

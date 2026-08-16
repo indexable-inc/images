@@ -34,7 +34,11 @@
     # wasm32-unknown-unknown ships no unwinder; the root manifest's
     # `wasm-plugin` profile is release plus panic=abort.
     profile = "wasm-plugin";
-    policy = ix.cargoUnit.policyPresets.pureBuild;
+    # `embedMetadata = true` because this graph pins a stable toolchain
+    # and `-Zembed-metadata=no` is nightly-only: leaving the default
+    # sends a `-Z` flag to a rustc that exits 1 on it (ENG-12992). The cost
+    # is a fatter rlib on a graph nothing links against twice.
+    policy = ix.cargoUnit.policyPresets.pureBuild // {compiler.embedMetadata = true;};
     contentAddressed = false;
   };
   unit = workspace.libraries.ix2nix_wasm;

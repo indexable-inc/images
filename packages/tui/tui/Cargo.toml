@@ -15,13 +15,13 @@ pyo3 = ["dep:pyo3"]
 # so a process that only publishes stays lightweight. Pulls `dashboard-core`,
 # which owns the wire types, the socket, and the serialization; this crate only
 # adapts a live manager into terminal panes.
-publish = ["dep:dashboard-core", "tokio/net"]
+publish = ["dep:dashboard-core", "dep:serde", "dep:serde_json", "tokio/net"]
 # A read-only web dashboard that streams every live terminal to the browser as
 # a Loro CRDT document over SSE. Off by default so the core PTY library stays
 # free of the HTTP and CRDT closure. The browser-facing server and the wire
 # types live in `dashboard-core`; this feature pulls that crate and drives it
 # from a live manager.
-dashboard = ["dep:dashboard-core", "tokio/net"]
+dashboard = ["dep:dashboard-core", "dep:serde", "dep:serde_json", "tokio/net"]
 
 [dependencies]
 ix-vt.workspace = true
@@ -29,6 +29,8 @@ ndarray.workspace = true
 parking_lot.workspace = true
 pty-process.workspace = true
 pyo3 = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
 snafu.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "process", "io-util", "time"] }
 dashboard-core = { workspace = true, optional = true }

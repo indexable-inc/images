@@ -1,0 +1,33 @@
+{
+  "run_id": "9d8c7b6a5f4e-1786543762957",
+  "repo": "fixture-repo",
+  "change_id": "f9e8d7c6b5a4930817263544352617f0",
+  "commit_id": "9d8c7b6a5f4e0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "target_bookmark": "main",
+  "status": "failed",
+  "started_at_ms": 1786543762957,
+  "updated_at_ms": 1786544150957,
+  "materialize": {
+    "files_total": 172518,
+    "files_done": 172518,
+    "seconds": 8.185446444
+  },
+  "nix": {
+    "drvs_total": 0,
+    "drvs_done": 0,
+    "drvs_failed": 1,
+    "building": [],
+    "recent_done": []
+  },
+  "trigger": {
+    "change_id": "f9e8d7c6b5a4930817263544352617f0",
+    "description": "fixture: a commit subject that is not a real one\n\nBody text.\n",
+    "author": "Fixture Author",
+    "changed_paths": [
+      "fixture/one.ex",
+      "fixture/two.ex"
+    ],
+    "invalidation": "fixture"
+  },
+  "log_tail": "fixture-check> fixture-check: 17 passed, 0 failed\nstage build: 46 changed check(s)\nfailing derivations OUTSIDE the baseline-tolerated set (fatal):\n  fixture-lint-check.drv\nalso failing but baseline-tolerated (not the reason for this Fail):\n  fixture-tolerated-check.drv\nstage build: FAIL rc=1 in 120s (log /fixture/gate-speed/runs/incr-1/build.log)\n==== incr-gate verdict: FAIL ====\nchecks: 911 total; inherited green from baseline: 865; built here: 46\nstage incr: FAIL in 307s\n\nfailing derivations:\n  /nix/store/0000000000000000000000000000000a-fixture-treefmt-check.drv\n  /nix/store/0000000000000000000000000000000b-fixture-lint-check.drv\n  /nix/store/0000000000000000000000000000000c-fixture-tolerated-check.drv   [also fails on the tip: tolerated, not the reason for this Fail]\n... failure detail truncated, full log: /fixture/logs/gate-20260101T000000Z-2.log\n\n==== gate verdict: FAIL ====\ngate: gate.sh v2 (lint + gate-eval + scoped build), materialized candidate tree as a path: source (no git)\nstages:\n  lint   pass (baseline-tolerated: fixture-tolerated-check) 34s\n  fmt    warn rc=1                                      20s\n  incr   FAIL rc=1                                      307s\n  fmt    ran\n  incr   FAIL in 307s\n  eval   not reached\nTOLERATED (already failing on the target tip; see /fixture/gate-baseline.txt):\n  fixture-tolerated-check\n  fixture-second-tolerated\nNOT run here (scope gap vs the required contexts lint/nix/build):\n  - required-ci-checks BUILD (the nix-shard jobs): EVALUATED only, not built\nlog: /fixture/logs/gate-20260101T000000Z-2.log\n"
+}

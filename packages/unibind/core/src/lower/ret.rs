@@ -60,6 +60,43 @@ fn lower_result(segment: &syn::PathSegment, declared: &Declared) -> Result<Retur
     })
 }
 
+/// An associated function's return, with `Self` resolved to the object it
+/// is declared on. Everything else is the ordinary return lowering, so an
+/// associated function may hand back the object it constructs, a record, a
+/// list, or nothing. Which of those it is decides how a backend renders
+/// it: napi needs `factory` to build an instance and plain `#[napi]`
+/// otherwise, and the author never has to say which.
+pub(super) fn lower_associated_return(
+    output: &syn::ReturnType,
+    object: &str,
+    declared: &Declared,
+) -> Result<Returned> {
+    let syn::ReturnType::Type(_, ty) = output else {
+        return lower_return(output, declared);
+    };
+    let named = ir::Type::Named(object.to_owned());
+    if is_object(ty, object) {
+        return Ok(Returned {
+            ty: Some(named),
+            throws: None,
+        });
+    }
+    if let syn::Type::Path(path) = &**ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Result"
+    {
+        let parts = result_parts(segment)?;
+        if is_object(parts.ok, object) {
+            let throws = error_name(parts.error, declared)?;
+            return Ok(Returned {
+                ty: Some(named),
+                throws: Some(throws),
+            });
+        }
+    }
+    lower_return(output, declared)
+}
+
 /// A constructor returns the object (or `Result` of it): the IR leaves
 /// `ret` empty because the object itself is implied.
 pub(super) fn lower_ctor_return(
@@ -114,13 +151,13 @@ fn result_parts(segment: &syn::PathSegment) -> Result<OkErr<'_>> {
             _ => None,
         })
         .collect();
-    let [ok, error]: [&syn::Type; 2] = types.as_slice().try_into().map_err(|_| {
-        LowerError::new(
+    let [ok, error] = types.as_slice() else {
+        return Err(LowerError::new(
             segment.span(),
             "spell the Result out as Result<T, YourError>; type aliases hide \
              the error type from the macro",
-        )
-    })?;
+        ));
+    };
     Ok(OkErr { ok, error })
 }
 

@@ -47,6 +47,7 @@
   #   features.cron = false;  false bakes CLAUDE_CODE_DISABLE_CRON (drops the scheduling/loop tools)
   #   features.fableFallback = true;  true is stock; false bakes CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK so a safety-flagged turn stops visibly instead of re-serving on Opus
   #   features.autoCompactWindow = 300000;  token count baked as CLAUDE_CODE_AUTO_COMPACT_WINDOW (the standard 300K working window); null bakes nothing
+  #   features.agentTeams = false;  true bakes CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (experimental mesh teammate sessions); off matches upstream, and subagent SendMessage works without it
   #   systemTools = { };  option systemTools; false renders the bare tool name into permissions.deny, dropping its schema from context
   #   systemTools.Agent = true;  subagent spawning
   #   systemTools.Artifact = false;  claude.ai artifact publishing; enabling surfaces Anthropic design-style skills
@@ -64,7 +65,7 @@
   #   systemTools.RemoteTrigger = true;  remote-control trigger surface
   #   systemTools.ReportFindings = true;  subagent findings reporting; the code-review skills render through it
   #   systemTools.ScheduleWakeup = false;  timed wakeups (cron orchestration surface)
-  #   systemTools.SendMessage = true;  agent-team teammate messaging; on because the Agent tool description names it, and it derives env CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+  #   systemTools.SendMessage = true;  agent-team teammate messaging; on because the Agent tool description names it; subagent continuation is stock and no longer implies the agent-teams env (decoupled 2026-08-04)
   #   systemTools.SendUserFile = true;  send a file to the user's device
   #   systemTools.ShareOnboardingGuide = true;  onboarding guide sharing
   #   systemTools.Skill = true;  skill invocation
@@ -78,6 +79,7 @@
   #   systemTools.WaitForMcpServers = true;  block a turn until MCP servers connect
   #   systemTools.Workflow = true;  workflow commands
   #   protectedMergeGuard = true;  false drops the protected-merge gh pr merge --admin/--force Bash denies (pair with omitting the forceMerge prompt rule)
+  #   kernelOnly = false;  option kernelOnly; strict mode: deny every built-in tool and every non-index MCP server, leaving the index Elixir kernel as the only tool surface
   #   addDirs = [ ];  option addDirs; --add-dir=<dir> flags: file access plus <dir>/.claude/skills and CLAUDE.md loading
   #   pluginDirs = [ ];  option pluginDirs; --plugin-dir=<dir> flags: namespaced plugin bundles (the house plugin rides this layer)
   #   primaryCheckouts = <"/home/*/index", "/home/*/ix">;  option primaryCheckouts; globs the PreToolUse worktree guard denies edits under
@@ -93,7 +95,7 @@
   #   updateScriptWriter = null;  plumbing: writer for passthru.updateScript (flake package set only)
   # END claude-code wrapper knob reference
 
-  # BEGIN claude-code env reference (extracted from Claude Code cli.js 2.1.220)
+  # BEGIN claude-code env reference (extracted from Claude Code cli.js 2.1.228)
   # Every documented environment variable the pinned CLI reads, one line
   # each: uncomment into a consuming machine's programs.claude-code.defaults
   # under `env` (settings env is read at CC startup even when the launch env
@@ -101,7 +103,7 @@
   # where the CLI or this wrapper bakes one; "" means unset. Vars owned by a
   # typed wrapper knob point at the knob instead of duplicating it. Sources:
   # the env-var registry inside the shipped cli.js, extracted mechanically
-  # to packages/claude-code/env-registry.tsv (all 830 names with
+  # to packages/claude-code/env-registry.tsv (all 844 names with
   # accessor types; regenerate with `nix build .#claude-code.envRegistry`),
   # cross-checked against https://code.claude.com/docs/en/env-vars. The
   # undocumented remainder in the TSV is internal experiment gates and
@@ -232,7 +234,7 @@
   #   CLAUDE_CODE_ENABLE_TASKS = "";  Controls whether sessions use the structured Task tools (`TaskCreate`, `TaskUpdate`, `TaskGet`, `TaskList`) or the legacy `TodoWrite` tool.
   #   CLAUDE_CODE_ENABLE_TELEMETRY = "";  Set to `1` to enable OpenTelemetry data collection for metrics and logging.
   #   CLAUDE_CODE_EXIT_AFTER_STOP_DELAY = "";  Time in milliseconds to wait after the query loop becomes idle before automatically exiting.
-  #   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "";  enable experimental agent teams; the wrapper already bakes this from the SendMessage systemTools row
+  #   CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "";  enable experimental agent teams (mesh teammate sessions); default off, opt in via features.agentTeams
   #   CLAUDE_CODE_EXTRA_BODY = "";  JSON object to merge into the top level of every API request body.
   #   CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS = "";  Override the default token limit for file reads.
   #   CLAUDE_CODE_FORCE_SESSION_PERSISTENCE = "";  Set to `1` to force transcript persistence, prompt history, and `claude agents` registration even when this `claude` was launched from inside another Claude Code session.
@@ -423,6 +425,7 @@
         dangerouslySkipPermissions
         extraSessionStart
         features
+        kernelOnly
         personalStartupContext
         primaryCheckouts
         systemTools
@@ -520,6 +523,28 @@ in {
         "/home/*/ix"
       ];
       description = "Shell globs protected by the shared worktree guard hook.";
+    };
+
+    kernelOnly = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Strict tool policy: deny every built-in tool and every non-index MCP
+        server, leaving the index Elixir kernel (`mcp__index__*`) as the
+        session's only tool surface.
+
+        The point is the kernel's persistent Elixir workspace. Bindings,
+        modules and jobs survive across cells, so work accumulates somewhere a
+        later cell can build on, where the same commands through Bash leave
+        nothing behind but transcript. Web search and fetch are not lost with
+        the exa server; they move in-language to `Web.search/1` and
+        `Web.fetch/1` against the same API.
+
+        This is all-or-nothing for the session it applies to: there is no
+        per-tool escape hatch, and an explicit `systemTools.<Tool> = true` is
+        deliberately overridden rather than honoured. Turn it off to get a
+        native tool back.
+      '';
     };
 
     personalStartupContext = lib.mkOption {

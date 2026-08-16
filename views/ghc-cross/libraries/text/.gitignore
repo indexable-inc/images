@@ -1,0 +1,14 @@
+/dist/
+/dist-boot/
+/dist-install/
+/dist-newstyle/
+/cabal-dev/
+/cabal.sandbox.config
+/ghc.mk
+/GNUmakefile
+/.ghc.environment.*
+/cabal.project.local
+/cabal.test.project.local
+
+# Test data repo ignored. Please see instruction in tests-and-benchmarks.markdown
+/benchmarks/text-test-data/

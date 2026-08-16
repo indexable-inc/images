@@ -33,7 +33,10 @@ pub enum Expr {
     /// `{ k = v; ... }`. Never recursive: `.ix` consts become `let`, not `rec`.
     AttrSet(Vec<Binding>),
     List(Vec<Self>),
-    Lambda { param: Param, body: Box<Self> },
+    Lambda {
+        param: Param,
+        body: Box<Self>,
+    },
     Let {
         bindings: Vec<LetBinding>,
         body: Box<Self>,
@@ -43,7 +46,10 @@ pub enum Expr {
         then: Box<Self>,
         otherwise: Box<Self>,
     },
-    Unary { op: UnaryOp, operand: Box<Self> },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Self>,
+    },
     Binary {
         op: BinaryOp,
         lhs: Box<Self>,

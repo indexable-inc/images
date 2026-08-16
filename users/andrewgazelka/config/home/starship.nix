@@ -54,7 +54,7 @@ in {
   # `$all` covers every module not named here, so the leading modules are
   # spelled out to keep `${custom.vcs}` where `git_branch` used to render:
   # right after the directory, ahead of the language and tooling segments.
-  format = "\${custom.submodule_chain}$username$hostname$localip$directory\${custom.vcs}$all$line_break$character";
+  format = "\${custom.submodule_chain}$username$hostname$localip$directory\${custom.physical_dir}\${custom.vcs}$all$line_break$character";
   aws = {
     disabled = true;
     symbol = " ";
@@ -427,6 +427,26 @@ in {
       style = "bold blue";
       when = "nu -n -c 'if (\"CLAUDE_CODE\" in $env) or (\"CLAUDE_SESSION\" in $env) { exit 0 } else { exit 1 }'";
     };
+    # The real location when the cwd is reached through a symlink, e.g.
+    # `~/.config/nix` -> `/Volumes/Projects/nix` (the config repo lives on its own
+    # APFS volume). The shell keeps the logical path in $PWD and sh preserves
+    # an inherited $PWD when it resolves to the same directory, so comparing
+    # it against `pwd -P` detects the symlink case; the module stays hidden
+    # on ordinary paths.
+    physical_dir = {
+      command = "pwd -P";
+      when = ''[ "$PWD" != "$(pwd -P)" ]'';
+      shell = [
+        "sh"
+        "-c"
+      ];
+      use_stdin = false;
+      ignore_timeout = true;
+      format = "[($output)]($style) ";
+      style = "dimmed";
+      description = "Physical path when the cwd is reached through a symlink";
+    };
+
     # The VCS segment, in place of the disabled `git_branch` and `git_status`:
     # `on 󱗆 lsurukvy ix-patched+2 *` in a jj workspace (working-copy change id,
     # nearest bookmark and the distance to it, then conflict / divergent /
@@ -456,13 +476,15 @@ in {
     };
 
     # Human-readable time since the latest commit (e.g. "2 hours ago"), shown
-    # to the left of newer custom modules. Runs under sh because when starship
-    # spawns `nu -c`, external commands in the pipeline don't inherit the
-    # working directory starship sets; sh passes it to all children.
-    # %cr is git's committer-date relative format; exits non-zero with no
-    # commits.
-    git_commit_age = {
-      command = "git log -1 --pretty=format:%cr";
+    # to the left of newer custom modules. `vcs-prompt age` rather than the
+    # `git log -1 --pretty=format:%cr` this used to run inline: the forked
+    # starship (index packages/starship) satisfies `require_repo` from a `.jj`
+    # too, so the module is now enabled inside a jj workspace, where git has no
+    # repository to read. vcs-prompt already owns "which VCS is this" for the
+    # `vcs` segment above and answers with `jj log -r @-` or `git log -1`
+    # accordingly.
+    commit_age = {
+      command = "vcs-prompt age";
       shell = [
         "sh"
         "-c"
@@ -471,9 +493,12 @@ in {
       require_repo = true;
       when = true;
       ignore_timeout = true;
-      format = "[$output]($style) ";
+      # Conditional group, like submodule_chain below: an empty `$output` alone
+      # does not hide a custom module, so a bare group would render a stray
+      # space wherever the age is unavailable (a checkout with no commits).
+      format = "([$output]($style) )";
       style = "italic dimmed";
-      description = "Relative time since the latest git commit";
+      description = "Relative time since the latest commit, jj or git";
     };
 
     # Breadcrumb of the git superproject chain, shown only when the cwd is
@@ -487,7 +512,7 @@ in {
     # non-repo dirs natively, and the conditional format group drops the
     # module when the walk prints nothing (empty output alone does not hide a
     # custom module; it would leave a stray chevron). Runs under sh for the
-    # same cwd-inheritance reason as git_commit_age above.
+    # same cwd-inheritance reason as commit_age above.
     submodule_chain = {
       command = ''sup=$(git rev-parse --show-superproject-working-tree 2>/dev/null); names=""; while [ -n "$sup" ]; do b=$(basename "$sup"); if [ -z "$names" ]; then names="$b"; else names="$b › $names"; fi; sup=$(git -C "$sup" rev-parse --show-superproject-working-tree 2>/dev/null); done; printf "%s" "$names"'';
       shell = [

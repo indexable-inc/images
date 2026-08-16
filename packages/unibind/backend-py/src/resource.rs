@@ -5,27 +5,40 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use unibind_core::ir;
 
+use unibind_core::render::RenderError;
+
 use crate::function::doc_attrs;
 
 /// The generated `close`, `__aenter__`, and `__aexit__` pymethods.
-pub fn surface(object: &ir::Object) -> TokenStream {
-    let close = user_close(object);
+///
+/// # Errors
+///
+/// Fails for a resource object carrying no conforming `close()`. Lowering
+/// rejects that shape, so this is a backend/lowering disagreement rather than
+/// user error — but a proc macro must report it as a diagnostic, not panic.
+pub fn surface(object: &ir::Object) -> Result<TokenStream, RenderError> {
+    let close = user_close(object).ok_or_else(|| {
+        RenderError::new(format!(
+            "`{}` is a resource but declares no close() taking no arguments \
+             and returning nothing",
+            object.name
+        ))
+    })?;
     let close_wrapper = close_method(close);
     let aenter = aenter();
     let aexit = aexit(close);
-    quote! {
+    Ok(quote! {
         #close_wrapper
         #aenter
         #aexit
-    }
+    })
 }
 
-fn user_close(object: &ir::Object) -> &ir::Function {
+fn user_close(object: &ir::Object) -> Option<&ir::Function> {
     object
         .methods
         .iter()
         .find(|method| method.name == "close" && method.args.is_empty() && method.ret.is_none())
-        .expect("lowering guarantees resources declare close()")
 }
 
 /// The statement invoking the user's close on `receiver`, awaiting and

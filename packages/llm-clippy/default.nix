@@ -13,24 +13,14 @@ let
   # `ix.buildRustPackage` is curried on the full package set; read `pkgs` from
   # `ix` rather than taking a `pkgs` callPackage formal (unreachable by `override`).
   inherit (ix) pkgs;
-  # `clippy-src` is the indexable-inc/rust-clippy jj megamerge (upstream base
-  # plus the LLM-tuned lint patch DAG); the shared patched-src util only
-  # appends the fork's nix-derived patches declared in lib/fork-packages.nix
-  # `derivedPatches` (matched by the registry name, "clippy"). The patched
-  # tree carries the toolchain file and Cargo.lock the build reads below,
-  # exactly as the old fork tree did.
+  # The view carries the fork commits plus the repo-owned Cargo metadata and
+  # lock file, so every consumer reads one source tree.
   source =
     if clippy-src == null
     then throw "llm-clippy: clippy-src is required"
-    else
-      ix.patchedSrc {
-        name = "clippy";
-        src = clippy-src;
-      };
-  # Drive the toolchain from the patched tree's `rust-toolchain.toml` so the
-  # base bump + regenerated series advance the rustc/rustc_private ABI in
-  # lockstep. clippy is nightly-coupled: `clippy-src` is pinned by rev and must
-  # move with the pinned nightly, never free-float (see flake.nix).
+    else clippy-src;
+  # Drive the toolchain from the view's `rust-toolchain.toml` so a view update
+  # advances the rustc/rustc_private ABI with the source.
   toolchain = pkgs.rust-bin.fromRustupToolchainFile (source + "/rust-toolchain.toml");
 
   rustcLibPathVar =
@@ -44,9 +34,7 @@ in
 
     src = source;
     rustToolchain = toolchain;
-    # Read the lockfile straight from the patched tree (the `cargo-lock`
-    # derived patch tracks ./patches/derived/Cargo.lock) so a base bump +
-    # refreshed lockfile brings dependency changes along with the source.
+    # The view owns the lock file alongside its manifests.
     cargoLock.lockFile = source + "/Cargo.lock";
 
     nativeBuildInputs = [makeWrapper];

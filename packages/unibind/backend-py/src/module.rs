@@ -6,23 +6,16 @@ use unibind_core::ir;
 use unibind_core::render::{self, RenderError, RenderedInterface};
 
 use crate::ctx::Ctx;
-use crate::{error, function, object, record, stream};
+use crate::{error, function, object, record, stream, unit_enum};
 
 /// Render `pyo3` glue for one interface.
 ///
 /// # Errors
 ///
-/// Fails for surface the backend does not implement (data enums), for
-/// unsupported `py(base = ...)` exception bases, and for renames that
-/// cannot become identifiers.
+/// Fails for unsupported `py(base = ...)` exception bases and for renames
+/// that cannot become identifiers. Data-carrying enums never reach here:
+/// lowering refuses them.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
-    if let Some(data_enum) = interface.enums.first() {
-        return Err(RenderError::new(format!(
-            "`{}` is a data enum, which unibind does not render yet",
-            data_enum.name
-        )));
-    }
-
     let user = render::name_ident(&interface.name)?;
     let module_name = interface
         .names
@@ -40,6 +33,11 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         .errors
         .iter()
         .map(|err| error::render_error(err, &module_ident, &user))
+        .collect::<Result<Vec<_>, _>>()?;
+    let unit_enums = interface
+        .enums
+        .iter()
+        .map(|declared| unit_enum::render_enum(declared, &user))
         .collect::<Result<Vec<_>, _>>()?;
     let constructors = interface
         .records
@@ -61,7 +59,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
         .iter()
         .map(|export| stream::render(export, &ctx))
         .collect();
-    let registration = registration(&ctx, &streams)?;
+    let registration = registration(&ctx, &module_name, &streams)?;
     let module_docs = function::doc_attrs(&interface.docs);
 
     let glue = quote! {
@@ -71,6 +69,7 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
             use ::pyo3::types::PyModuleMethods as _;
 
             #(#exceptions)*
+            #(#unit_enums)*
             #(#constructors)*
             #(#wrappers)*
             #(#objects)*
@@ -91,8 +90,12 @@ pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderErro
     Ok(RenderedInterface { glue, records })
 }
 
+/// `module_name` is the Python name the `#[pymodule]` registers under; the
+/// enum classes take it as their `__module__`, which is what makes their
+/// members picklable and what `repr` shows.
 fn registration(
     ctx: &Ctx<'_>,
+    module_name: &str,
     streams: &[render::StreamExport<'_>],
 ) -> Result<TokenStream, RenderError> {
     let interface = ctx.interface;
@@ -103,6 +106,12 @@ fn registration(
         statements.push(quote! {
             module.add_function(::pyo3::wrap_pyfunction!(#ident, module)?)?;
         });
+    }
+    // The enum classes come first: a record's `__init__` annotation names
+    // one, and a caller reading `module.MachineStatus` should not depend on
+    // which record mentioned it.
+    for declared in &interface.enums {
+        statements.push(unit_enum::registration(declared, module_name));
     }
     for rec in &interface.records {
         let ident = Ident::new(&rec.name, Span::call_site());

@@ -57,12 +57,8 @@
             # the patched tree is upstream tag mesa-26.1.2 plus the venus
             # commits, so nixpkgs' recipe and patches still apply.
             #
-            # De-forked (index#1894): the delta is an in-repo patch series
-            # (./mesa/patches) applied to the upstream `mesa-src` input through
-            # `ix.patchedSrc`, replacing the old `indexable-inc/mesa` snapshot
-            # fork tarball. A jj rebase of indexable-inc/mesa moves the delta on a
-            # base bump; `checks.<system>.patched-src-mesa` gates that it still
-            # applies. `hardware.graphics.enable` in ./nixos.nix consumes
+            # The Mesa view carries the Venus delta on its upstream anchor.
+            # `hardware.graphics.enable` in ./nixos.nix consumes
             # `pkgs.mesa`, so this override is what /run/opengl-driver (and the
             # container ICDs) get.
             mesa = prev.mesa.overrideAttrs (old: {
@@ -72,7 +68,7 @@
               # patch set applying against the pinned tree; the assert catches
               # the version skew, the build failure catches the patch skew.
               src = assert lib.assertMsg (old.version == "26.1.2")
-              "panes-guest-image: the mesa fork is pinned at 26.1.2 (mesa-src input) but nixpkgs mesa is ${old.version}; jj-rebase indexable-inc/mesa onto the matching tag, repin mesa-src, and boot-validate the panes guest on a linux GPU host";
+              "panes-guest-image: the Mesa view is 26.1.2 but nixpkgs mesa is ${old.version}; update the view to the matching tag and boot-validate the panes guest on a linux GPU host";
                 ix.mesaSrc;
             });
           })

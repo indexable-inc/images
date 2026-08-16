@@ -1,0 +1,70 @@
+#!/bin/sh
+set -eux
+
+ghcflags="-rtsopts -threaded -Werror -Wwarn=deprecations ${GHC_FLAGS-}"
+testflags="CreateDirectoryIfMissing001.num-repeats=100000 +RTS -N2"
+stack="stack --no-terminal ${STACK_FLAGS-}"
+
+# overridable hook
+before_prepare() {
+    :
+}
+
+prepare() {
+    before_prepare
+    if [ -f configure.ac ]; then
+        autoreconf -i
+    fi
+    if [ "${STACK_RESOLVER-}" ]; then
+
+        cat >stack.yaml <<EOF
+resolver: $STACK_RESOLVER
+packages: [.]
+extra-deps: [${STACK_EXTRA_DEPS-}]
+flags: ${STACK_PACKAGE_FLAGS-}
+EOF
+        $stack ghc -- --version
+        $stack --version
+        $stack ls dependencies
+
+    else
+
+        cat >cabal.project <<EOF
+packages: *.cabal
+package directory
+  ghc-options: $ghcflags
+  flags: ${CABAL_PACKAGE_FLAGS-}
+EOF
+        ghc --version
+        cabal --version
+        tools/retry cabal update
+        cabal v2-configure -v2 --enable-tests
+        cabal v2-freeze
+        cat cabal.project.freeze
+
+    fi
+}
+
+build() {
+    if [ "${STACK_RESOLVER-}" ]; then
+        $stack test --haddock --no-haddock-deps --keep-going \
+            --ghc-options "$ghcflags" \
+            --test-arguments "$testflags"
+        $stack sdist
+    else
+        testflags=`printf " %s" "$testflags" | sed "s/ / --test-option=/g"`
+        cabal v2-test --keep-going --test-show-details=streaming $testflags
+        cabal check
+        cabal v2-sdist
+        cabal v1-install --force-reinstalls --run-tests dist-newstyle/sdist/*-*.tar.gz
+    fi
+
+    version=`sed -n 's/^version:[[:space:]]*//p' directory.cabal`
+    grep -q "## $version (" changelog.md || {
+        echo >&2 "Error: Please describe version $version in changelog.md."
+        return 1
+    }
+}
+
+eval "${TESTSCRIPT_OVERRIDES-}"
+"$@"

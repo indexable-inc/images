@@ -75,6 +75,11 @@ fn unsupported_surface_is_named() {
         ),
         ("mod m { pub fn go(class: bool) {} }", "a Java keyword"),
         (
+            "mod m { #[unibind::enumeration] pub enum Severity { Info } \
+             pub fn go() -> Severity { Severity::Info } }",
+            "a Kotlin `enum class` over the wire strings",
+        ),
+        (
             "mod m { pub fn go(status: bool) {} }",
             "the generated method bodies reserve",
         ),

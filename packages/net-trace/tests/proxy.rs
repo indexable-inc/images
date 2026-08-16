@@ -43,8 +43,7 @@ fn connect_tunnel_records_host_and_bytes() {
     let recorder = Arc::new(Recorder::new());
     let proxy_port = spawn(Arc::clone(&recorder)).expect("spawn proxy");
 
-    let mut client =
-        TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
+    let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
     client
         .write_all(format!("CONNECT 127.0.0.1:{upstream_port} HTTP/1.1\r\n\r\n").as_bytes())
         .expect("send CONNECT");
@@ -74,14 +73,11 @@ fn absolute_form_http_is_forwarded_verbatim() {
     let recorder = Arc::new(Recorder::new());
     let proxy_port = spawn(Arc::clone(&recorder)).expect("spawn proxy");
 
-    let mut client =
-        TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
+    let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
     client
         .write_all(
-            format!(
-                "GET http://127.0.0.1:{upstream_port}/x HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n"
-            )
-            .as_bytes(),
+            format!("GET http://127.0.0.1:{upstream_port}/x HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n")
+                .as_bytes(),
         )
         .expect("send absolute-form GET");
     let mut reply = Vec::new();
@@ -108,8 +104,7 @@ fn refused_upstream_is_recorded_as_failed() {
     let recorder = Arc::new(Recorder::new());
     let proxy_port = spawn(Arc::clone(&recorder)).expect("spawn proxy");
 
-    let mut client =
-        TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
+    let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, proxy_port)).expect("connect proxy");
     client
         .write_all(format!("CONNECT 127.0.0.1:{dead_port} HTTP/1.1\r\n\r\n").as_bytes())
         .expect("send CONNECT");

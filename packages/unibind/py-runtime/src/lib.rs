@@ -65,6 +65,10 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// the iterator, so the stream sits behind a `tokio::sync::Mutex`: the
 /// lock serializes polls and keeps the returned future `Send`.
 pub struct SharedStream<T> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the guard is held across the inner `.await`: `next()` locks, then awaits the stream while still holding it, which parking_lot cannot do"
+    )]
     inner: Arc<tokio::sync::Mutex<UniStream<T>>>,
 }
 
@@ -81,6 +85,10 @@ impl<T> Clone for SharedStream<T> {
 impl<T> SharedStream<T> {
     /// Wrap `stream` for shared consumption.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "constructs the `inner` field, whose tokio::Mutex is justified there"
+    )]
     pub fn new(stream: UniStream<T>) -> Self {
         Self {
             inner: Arc::new(tokio::sync::Mutex::new(stream)),
@@ -90,6 +98,10 @@ impl<T> SharedStream<T> {
     /// Pull the next item. The future owns its own `Arc`, so it outlives
     /// the `&self` borrow that produced it (pyo3 futures must be
     /// `'static`).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the guard is held across `next().await`, so the lock must be the async one"
+    )]
     pub fn next(&self) -> impl Future<Output = Option<T>> + Send + 'static + use<T>
     where
         T: Send + 'static,

@@ -1,0 +1,5 @@
+# New failures with VK CTS 1.4.4.0
+dEQP-VK.spirv_assembly.instruction.compute.untyped_pointers.vulkan_memory_model.cooperative_matrix.type_punning.load.accumulator.col_major.int32_to_float32,Crash
+dEQP-VK.spirv_assembly.instruction.compute.untyped_pointers.vulkan_memory_model.cooperative_matrix.type_punning.load.accumulator.row_major.int32_to_float32,Crash
+dEQP-VK.spirv_assembly.instruction.compute.untyped_pointers.vulkan_memory_model.cooperative_matrix.type_punning.load.accumulator.col_major.uint32_to_float32,Crash
+dEQP-VK.spirv_assembly.instruction.compute.untyped_pointers.vulkan_memory_model.cooperative_matrix.type_punning.load.accumulator.row_major.uint32_to_float32,Crash

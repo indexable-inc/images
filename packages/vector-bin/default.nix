@@ -37,6 +37,9 @@ in
 
     passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
+    # Upstream release binary; nothing to test at build time.
+    doCheck = false;
+
     nativeBuildInputs = [autoPatchelfHook];
     buildInputs = [
       stdenv.cc.cc.lib

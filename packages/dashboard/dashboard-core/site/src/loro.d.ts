@@ -94,6 +94,15 @@ declare module 'https://esm.sh/loro-crdt@1' {
     free(): void;
   }
 
+  // A mergeable text container. The hub declares one per terminal pane under
+  // `inputs` (the shared compose draft, hub.rs apply_scope); `update` diffs the
+  // current content against `text` and emits minimal insert/delete ops, so two
+  // viewers typing concurrently merge instead of overwriting each other.
+  export class LoroText {
+    toString(): string;
+    update(text: string): void;
+  }
+
   // A root or nested map. Values are LWW per key, which is exactly the semantics
   // a single-answer input control wants.
   export interface LoroMap {

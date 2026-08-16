@@ -14,9 +14,10 @@ struct PlumbPrompt {
 impl Prompt for PlumbPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
         let cwd = self.shell.cwd();
-        let short = cwd
-            .file_name()
-            .map_or_else(|| cwd.display().to_string(), |name| name.to_string_lossy().into_owned());
+        let short = cwd.file_name().map_or_else(
+            || cwd.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         Cow::Owned(format!("plumb {short}"))
     }
 
@@ -47,7 +48,8 @@ impl Prompt for PlumbPrompt {
 
 /// Run the REPL until `exit` or ctrl-d.
 pub fn run(shell: &Shell) -> ExitCode {
-    let mut editor = Reedline::create().with_history(Box::new(FileBackedHistory::new(1000).unwrap_or_default()));
+    let mut editor =
+        Reedline::create().with_history(Box::new(FileBackedHistory::new(1000).unwrap_or_default()));
     let prompt = PlumbPrompt {
         shell: shell.clone(),
     };
@@ -171,11 +173,17 @@ fn summarize(report: &Report) {
         );
     }
     let id = report.id;
-    println!("run {id}: exit {}  ${{o[{id}]}} ${{e[{id}]}} ${{s[{id}]}}", report.status);
+    println!(
+        "run {id}: exit {}  ${{o[{id}]}} ${{e[{id}]}} ${{s[{id}]}}",
+        report.status
+    );
 }
 
 fn human_bytes(count: u64) -> String {
-    #[expect(clippy::cast_precision_loss, reason = "a rounded size label needs no exact mantissa")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a rounded size label needs no exact mantissa"
+    )]
     let bytes = count as f64;
     if count >= 1024 * 1024 {
         format!("{:.1}MB", bytes / (1024.0 * 1024.0))

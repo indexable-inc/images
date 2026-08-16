@@ -231,7 +231,7 @@ only to make the plan's inputs body-independent.
   # hard-fails on a vmlinux with no __ex_table; x86 entries are 3 ints on
   # both widths). Assembled for each ELF class the shim may link
   # (x86 tinyconfig is a 32-bit kernel, defconfig 64-bit).
-  planLdPlaceholders = pkgs.runCommand "kbuild-unit-ld-placeholders" {} ''
+  planLdPlaceholders = pkgs.runCommand "kbuild-unit-ld-placeholders" {__structuredAttrs = true;} ''
     mkdir -p $out
     # sorttable also patches main_extable_sort_needed (kernel/extable.c in
     # real builds) through the symtab, so it needs backing storage here, not
@@ -789,7 +789,7 @@ only to make the plan's inputs body-independent.
     # The exit gate: the unit-composed vmlinux must be byte-identical to the
     # monolithic vmlinux from the reference build (the plan build itself for
     # ccache/full, the dedicated referenceKernel for skeleton).
-    vmlinuxEquivalence = pkgs.runCommand "kbuild-unit-vmlinux-equivalence" {} ''
+    vmlinuxEquivalence = pkgs.runCommand "kbuild-unit-vmlinux-equivalence" {__structuredAttrs = true;} ''
       cmp ${imported.vmlinux}/vmlinux ${reference}/vmlinux
       sha256sum ${imported.vmlinux}/vmlinux ${reference}/vmlinux > $out
     '';
@@ -801,12 +801,12 @@ only to make the plan's inputs body-independent.
     modulesEquivalence =
       if imported.moduleSymvers == null
       then
-        pkgs.runCommand "kbuild-unit-modules-equivalence" {} ''
+        pkgs.runCommand "kbuild-unit-modules-equivalence" {__structuredAttrs = true;} ''
           test ! -e ${reference}/reference-modules
           echo "no modules (CONFIG_MODULES=n)" > $out
         ''
       else
-        pkgs.runCommand "kbuild-unit-modules-equivalence" {} ''
+        pkgs.runCommand "kbuild-unit-modules-equivalence" {__structuredAttrs = true;} ''
           cd ${reference}/reference-modules
           # Same module set on both sides, then byte-compare each member.
           diff <(find . -name '*.ko' | sort) \

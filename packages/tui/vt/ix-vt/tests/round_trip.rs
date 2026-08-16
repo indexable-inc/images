@@ -9,7 +9,8 @@ use ix_vt::{CursorVisualStyle, StyleColor, Terminal, scrollback_bytes_for_lines}
 
 #[test]
 fn sgr_cursor_and_cell_round_trip() {
-    let mut term = Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 80, scrollback_bytes_for_lines(1000, 80)).expect("create terminal");
 
     // ESC[1;31m "RED" ESC[0m " " ESC[4m "under" ESC[0m
     term.vt_write(b"\x1b[1;31mRED\x1b[0m \x1b[4munder\x1b[0m");
@@ -65,7 +66,8 @@ fn sgr_cursor_and_cell_round_trip() {
 
 #[test]
 fn resize_changes_viewport_dimensions() {
-    let mut term = Terminal::new(10, 20, scrollback_bytes_for_lines(100, 20)).expect("create terminal");
+    let mut term =
+        Terminal::new(10, 20, scrollback_bytes_for_lines(100, 20)).expect("create terminal");
     let before = term.render().expect("render before resize");
     assert_eq!((before.rows, before.cols), (10, 20));
 

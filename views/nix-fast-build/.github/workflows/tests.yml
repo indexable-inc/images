@@ -1,0 +1,46 @@
+name: "Tests"
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+jobs:
+  self-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        nom: ["", "--no-nom"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Nix Flakes doesn't work on shallow clones
+          fetch-depth: 0
+      - uses: NixOS/nix-installer-action@main
+      - uses: Mic92/hestia/action@main
+      - name: Self-test
+        run: nix shell --inputs-from . nixpkgs#coreutils -c timeout --verbose 600 nix run . -- ${{ matrix.nom }}
+
+      - name: Self-test (should fail)
+        run: |
+          if nix shell --inputs-from . nixpkgs#coreutils -c timeout --verbose 600 nix run . -- --flake .#legacyPackages ${{ matrix.nom }}; then
+            echo "expect this to fail"
+            false
+          fi
+  tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Nix Flakes doesn't work on shallow clones
+          fetch-depth: 0
+      - uses: NixOS/nix-installer-action@main
+      - uses: Mic92/hestia/action@main
+      - name: Install nix-eval-jobs for remote test
+        run: nix profile install --inputs-from . nixpkgs#nix-eval-jobs
+      - run: command -v nix-eval-jobs && nix-eval-jobs --help
+      - name: Run tests
+        run: nix develop -c pytest ./tests

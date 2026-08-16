@@ -45,9 +45,9 @@ in
   (parser, screen model) is deliberately renderer- and app-independent.
 
   Consequence: `packages/ghostty`, index#3768's vendored fork, builds and
-  validates this same VT-only subtree from the *patchable* fork source. It
+  validates this same VT-only subtree from the checked Ghostty view. It
   does not reach the `Surface`/`apprt` process-lifecycle code the follow-up
-  teardown-fix patch touches -- getting there is real, separate follow-up work
+  teardown fix touches -- getting there is real, separate follow-up work
   (likely: patch `build.zig` to route its tool calls through `PATH` so a
   future Nix recipe can substitute `xcrun`/`ranlib`, which unblocks the second
   bullet above but not the first; the Metal compiler has no substitute short of
@@ -55,19 +55,19 @@ in
 
   Arguments:
   - `pkgs`: package set to build against; the artifact is host-system specific.
-  - `ghosttySource`: ghostty source tree (in this repo the `ghostty-src`
-    jj megamerge fork input). Must ship `build.zig`, `build.zig.zon`, and
+  - `ghosttySource`: Ghostty source tree from the checked `views.ghostty`
+    path. Must ship `build.zig`, `build.zig.zon`, and
     `build.zig.zon.nix` (the zon2nix output that vendors every lazy Zig
     dependency with SRI hashes for a network-free build).
   - `baseSource`: optional. When set, zig's own `--cache-dir` (a
     content-addressed cache keyed by each file's digest, its `Manifest`
     system) is warmed once from this UNPATCHED base and copied into the real
-    build as a starting point, so a patch-series edit to `ghosttySource`
+    build as a starting point, so a view change to `ghosttySource`
     recompiles only what it touches instead of the whole tree -- the same
     "small delta, small rebuild" property cargo-unit gets by splitting Cargo
     builds per-crate, without needing a per-translation-unit Nix decomposition
     zig's build graph has no boundary for. `warmCache` is keyed on `baseSource`
-    alone, so it survives every patch-series change and rebuilds only when the
+    alone, so it survives every view change and rebuilds only when the
     upstream pin moves. Omit (the default) only when `ghosttySource` never
     diverges from `baseSource`, where warming a separate cache buys nothing.
   - `version`: derivation version. Defaults to the value in `build.zig.zon`.
@@ -84,7 +84,7 @@ in
     inherit (pkgs) stdenv;
 
     # zon2nix output checked into the ghostty tree. Keyed on `baseSource` (equal
-    # to `ghosttySource` when the caller omits it) so a patch-series edit never
+    # to `ghosttySource` when the caller omits it) so a view change never
     # invalidates the dependency fetch, matching `warmCache` below.
     deps = pkgs.callPackage (baseSource + "/build.zig.zon.nix") {
       inherit (pkgs) zig_0_15;
@@ -208,6 +208,10 @@ in
 
             dontConfigure = true;
             dontBuild = true;
+
+            # This derivation IS the test run (`zig build test-lib-vt` in
+            # installPhase); there is no separate checkPhase to switch on.
+            doCheck = false;
 
             installPhase = ''
               # shell

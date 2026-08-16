@@ -50,7 +50,7 @@ defmodule IxMcp.NotifierTest do
 
     # The sibling's row was neither delivered nor acked: it waits, durable,
     # for the sibling's own transport to replay it.
-    assert Enum.any?(ActionLog.unacked_outbox(other), &(&1.job_id == foreign))
+    assert Enum.any?(ActionLog.unacked_outbox(other), &(&1.ref == foreign))
   end
 
   test "a job that finishes within its exec budget is not announced" do
@@ -62,7 +62,7 @@ defmodule IxMcp.NotifierTest do
     # The reply carried the outcome, so the reply path acked the outbox row
     # and the coalesce flush finds nothing to say.
     %{"job" => id} = reply |> String.split("\n") |> hd() |> JSON.decode!()
-    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == id))
+    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.ref == id))
     refute_receive {:mcp_send, _}, 600
   end
 
@@ -103,7 +103,7 @@ defmodule IxMcp.NotifierTest do
     refute_receive {:mcp_send, _}, 400
 
     # Delivered means acked: neither row replays later.
-    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id in [a, b]))
+    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.ref in [a, b]))
   end
 
   test "an await wrapper announces nothing of its own" do
@@ -132,7 +132,7 @@ defmodule IxMcp.NotifierTest do
                end
              end)
 
-    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.job_id == wrapper.id))
+    refute Enum.any?(ActionLog.unacked_outbox(), &(&1.ref == wrapper.id))
     refute_receive {:mcp_send, _}, 600
   end
 
@@ -153,7 +153,7 @@ defmodule IxMcp.NotifierTest do
     assert meta["severity"] == "info"
 
     # The row is the owning session's to deliver and ack, not the watcher's.
-    assert Enum.any?(ActionLog.unacked_outbox(other), &(&1.job_id == id))
+    assert Enum.any?(ActionLog.unacked_outbox(other), &(&1.ref == id))
   end
 
   test "Jobs.watch(session: id) announces that session's future finishes only" do

@@ -21,6 +21,11 @@ defmodule IxMcp.Jobs do
   load can sit parked in a ledger write far past the default call timeout.
   """
 
+  # `spawn/1` (code only) would otherwise clash with Kernel's auto-imported
+  # spawn/1; cells always call this module qualified, so the exclusion is
+  # invisible to them.
+  import Kernel, except: [spawn: 1]
+
   alias IxMcp.ActionLog
   alias IxMcp.Jobs.Job
   alias IxMcp.MCP.Notifier
@@ -41,17 +46,24 @@ defmodule IxMcp.Jobs do
   @doc """
   Start `code` as a new job and wait up to `budget_s` seconds. Finished or
   not, returns `{summary, output}` -- when still running, the job continues
-  in the background under its returned id.
+  in the background under its returned id. A bare number as the second
+  argument is the budget in seconds: `Jobs.run(code, 30)` and
+  `Jobs.run(code, budget: 30)` mean the same thing. `workspace: "name"`
+  targets a named workspace instead of "main".
   """
-  @spec run(String.t(), keyword()) :: {Job.summary(), String.t()}
-  def run(code, opts \\ []) when is_binary(code) do
+  @spec run(String.t(), keyword() | number()) :: {Job.summary(), String.t()}
+  def run(code, budget_s) when is_binary(code) and is_number(budget_s) do
+    run(code, budget: budget_s)
+  end
+
+  def run(code, opts) when is_binary(code) and is_list(opts) do
     budget_s = Keyword.get(opts, :budget, 15)
     id = generate_id()
 
     {:ok, pid} =
       DynamicSupervisor.start_child(
         IxMcp.Jobs.Supervisor,
-        {Job, {id, code, Keyword.take(opts, [:intent, :action_id, :watch])}}
+        {Job, {id, code, Keyword.take(opts, [:intent, :action_id, :watch, :workspace])}}
       )
 
     # Read back by id, not by 5s GenServer calls into the control process
@@ -63,6 +75,26 @@ defmodule IxMcp.Jobs do
       {:ok, summary} -> {summary, output(id)}
       :timeout -> {get(id), output(id)}
     end
+  end
+
+  @spec run(String.t()) :: {Job.summary(), String.t()}
+  def run(code), do: run(code, [])
+
+  @doc """
+  Start `code` in the background and return immediately with its running
+  summary -- `Jobs.run/2` with a zero budget, under the name agents reach
+  for first. `Jobs.start/2` is the same function. Read it later with
+  `Jobs.tail(id)` / `Jobs.await(id)`.
+  """
+  @spec spawn(String.t(), keyword()) :: {Job.summary(), String.t()}
+  def spawn(code, opts \\ []) when is_binary(code) and is_list(opts) do
+    run(code, Keyword.put(opts, :budget, 0))
+  end
+
+  @doc "Alias of `spawn/2`: start `code` as a background job, return at once."
+  @spec start(String.t(), keyword()) :: {Job.summary(), String.t()}
+  def start(code, opts \\ []) when is_binary(code) and is_list(opts) do
+    run(code, Keyword.put(opts, :budget, 0))
   end
 
   @doc "Look up a job process by id."

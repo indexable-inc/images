@@ -1,0 +1,40 @@
+dEQP-VK.api.external.memory.dma_buf.dedicated.buffer.info,Fail
+dEQP-VK.api.external.memory.opaque_fd.dedicated.buffer.info,Fail
+dEQP-VK.api.external.memory.opaque_fd.suballocated.buffer.info,Fail
+
+dEQP-VK.draw.renderpass.basic_draw.misc.maintenance5,Crash
+dEQP-VK.pipeline.monolithic.timestamp.misc_tests.consistent_results,Fail
+
+# New fails in 1.4.1.0
+dEQP-VK.pipeline.pipeline_library.multisample.sample_rate_a2c.static_a2c,Fail
+dEQP-VK.pipeline.fast_linked_library.multisample.sample_rate_a2c.static_a2c,Fail
+
+# New fails in 1.4.3.3
+dEQP-VK.pipeline.monolithic.multisample.sample_rate_a2c.static_a2c,Fail
+
+# From venus-lavapipe-full
+dEQP-VK.draw.renderpass.multiple_interpolation.structured.with_sample_decoration.4_samples,Fail
+
+# Failed with native lavapipe as well with "Non-standard block shape used"
+dEQP-VK.sparse_resources.image_block_shapes.2d.g8b8g8r8_422_unorm.samples_1,Fail
+dEQP-VK.sparse_resources.image_block_shapes.2d.b8g8r8g8_422_unorm.samples_1,Fail
+dEQP-VK.sparse_resources.image_block_shapes.2d_array.g8b8g8r8_422_unorm.samples_1,Fail
+dEQP-VK.sparse_resources.image_block_shapes.2d_array.b8g8r8g8_422_unorm.samples_1,Fail
+
+# Failed with native lavapipe as well
+dEQP-VK.mesh_shader.ext.misc.emit_in_control_flow_bad_emit_last,Fail
+dEQP-VK.mesh_shader.ext.smoke.fast_lib.depth_only_points_position_components,Fail
+dEQP-VK.mesh_shader.ext.smoke.fast_lib.depth_only_triangles_position_components,Fail
+dEQP-VK.mesh_shader.ext.smoke.monolithic.depth_only_points_position_components,Fail
+dEQP-VK.mesh_shader.ext.smoke.monolithic.depth_only_triangles_position_components,Fail
+dEQP-VK.mesh_shader.ext.smoke.optimized_lib.depth_only_points_position_components,Fail
+dEQP-VK.mesh_shader.ext.smoke.optimized_lib.depth_only_triangles_position_components,Fail
+
+dEQP-VK.memory.allocation.random.66,Crash
+dEQP-VK.renderpasses.dynamic_rendering.primary_cmd_buff.suballocation.formats.r8g8b8a8_unorm.input.dont_care.store.self_dep_clear_draw,Fail
+dEQP-VK.renderpasses.dynamic_rendering.primary_cmd_buff.suballocation.formats.r8g8b8a8_unorm.input.load.store.self_dep_clear_draw,Fail
+
+# CTS bug
+# https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/40520
+dEQP-VK.spirv_assembly.instruction.graphics.float_controls2.fp32.input_args.reflect_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_deco_vert,Fail
+dEQP-VK.spirv_assembly.instruction.graphics.float_controls2.fp64.input_args.reflect_testedWithout_NSZ_arg1_minusZero_arg2_one_res_minusZero_exec_vert,Fail

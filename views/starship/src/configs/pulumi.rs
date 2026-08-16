@@ -1,0 +1,30 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize, Serialize)]
+#[cfg_attr(
+    feature = "config-schema",
+    derive(schemars::JsonSchema),
+    schemars(deny_unknown_fields)
+)]
+#[serde(default)]
+pub struct PulumiConfig<'a> {
+    pub format: &'a str,
+    pub version_format: &'a str,
+    pub symbol: &'a str,
+    pub style: &'a str,
+    pub disabled: bool,
+    pub search_upwards: bool,
+}
+
+impl Default for PulumiConfig<'_> {
+    fn default() -> Self {
+        Self {
+            format: "via [$symbol($username@)$stack]($style) ",
+            version_format: "v${raw}",
+            symbol: " ",
+            style: "bold 5",
+            disabled: false,
+            search_upwards: true,
+        }
+    }
+}

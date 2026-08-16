@@ -1,0 +1,16 @@
+{
+  "name": "@indexable/unibind-conformance-wasm",
+  "version": "0.1.0",
+  "description": "Conformance browser package for the unibind wasm backend; test-only, never published.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "schemas.ts",
+    "wasm"
+  ]
+}

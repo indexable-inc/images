@@ -6,7 +6,7 @@
 # narinfo round-trip, so on the platform that produced it substitution is a net
 # loss. That default is wrong for any such derivation that lands in the darwin
 # cross lane's eval-time IFD closure (the cargo-unit `vendorDir` / `unitGraphJson`
-# / `unitsNix` roots, and the de-forked `patchedSrcFor` sources they pull in):
+# / `unitsNix` roots, and the source views they pull in):
 #
 #   - The derivation is `x86_64-linux`, so an aarch64-darwin consumer cannot
 #     build it. It is forced at *eval time* (`import unitsNix` reaches the whole

@@ -24,7 +24,11 @@
       src = self;
     };
   in {
-    ix.default = vm;
+    # No `ix.default`. `mkDev` layers over `mkFleet`, so `vm` is a fleet result
+    # and has no `config`. A bare `ix apply` prefers a flake's `ix.default` and
+    # builds `ix.default.config.system.build.toplevel` from it, so binding the
+    # fleet result here fails the apply on a missing attribute instead of
+    # converging the nodes below.
     inherit (vm) nixosConfigurations;
   };
 }

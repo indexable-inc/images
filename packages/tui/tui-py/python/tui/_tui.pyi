@@ -51,6 +51,12 @@ class TuiInstance:
         cols: int | None = ...,
         scrollback_lines: int | None = ...,
         env: dict[str, str] | None = ...,
+        agent_kind: str | None = ...,
+        busy_marker: str | None = ...,
+        gate_markers: list[str] | None = ...,
+        session_log: str | None = ...,
+        agent_cwd: str | None = ...,
+        agent_log_root: str | None = ...,
     ) -> None: ...
     @staticmethod
     def list_all() -> list[TuiInstance]: ...

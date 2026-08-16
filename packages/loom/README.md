@@ -21,11 +21,19 @@ ix shell loom
 loom
 ```
 
-`loom` is a normal interactive Claude Code session. There is no Elixir console
-in the user flow. When the lead delegates through `Agents.spawn`, the bundled
-index MCP snapshots the control VM, restores one child VM for that agent, runs
-headless Claude in the child, returns its result to the lead, syncs the guest,
-and stops it. Parallel agents get parallel VMs; the lead stays interactive.
+`loom` opens one deterministic zellij workspace (session name `loom`,
+layout committed as `layout.kdl`): the lead Claude Code session in the
+left pane, and `ix ls --watch` - the live fleet TUI - in the right pane,
+so every fork VM is visible spinning up and down next to the agent that
+spawned it. Arguments to `loom` are forwarded to the lead claude;
+rerunning `loom` while the session lives attaches to it instead of
+starting a second copy. There is no Elixir console in the user flow.
+When the lead delegates through `Agents.spawn`, the bundled index MCP
+snapshots the control VM, restores one child VM for that agent, runs
+headless Claude in the child, returns its result to the lead, syncs the
+guest, and stops it. Parallel agents get parallel VMs; the lead stays
+interactive, and each one appears as a `loom-<id>` row in the watch
+pane.
 
 The target is an ordinary template per the ix template contract: a plain
 `nixosConfiguration` in the index flake, no ix imports. Inside, you work
@@ -44,11 +52,14 @@ does, in order:
 2. `ix new <snapshot-id> --name loom-a1 --no-shell` - warm restore into
    a fresh VM. The fork carries the workspace byte-exact as of the
    spawn: uncommitted changes, build caches, credentials on disk.
-3. The fork demotes itself: a `loom-fork-guard` systemd unit baked into
-   the template compares the recorded VM identity with the current one
-   on every boot, and on mismatch kills the cloned kernel, dashboard,
-   and user session, and scrubs `/run/secrets`. Control never has to
-   repair a fork imperatively; forks are safe by construction.
+3. The fork demotes itself: a warm restore resumes the control VM's
+   processes inside the child, so every interactive entrypoint runs
+   under an identity watcher (`loom` kills the cloned zellij session,
+   `loom-lead` the cloned claude; both compare the VM's global
+   addresses to a startup baseline once a second), and the kernel's
+   own `ForkGuard` halts a cloned BEAM before it can spawn. Control
+   never has to repair a fork imperatively; forks demote themselves
+   by construction.
 4. `ix shell loom-a1 --noninteractive -- claude -p <brief>
    --output-format stream-json --verbose` - the child process runs in
    the fork, but the process handle and the output stream live on the

@@ -235,6 +235,48 @@ refusal names the offending token and the worktree recipe, and the kill switch
 allows silently. The unit tests in `packages/claude-hooks/src/guards.rs` drive
 `write_guard_decision` against a tempdir checkout and worktree directly.
 
+## kernel-only-guard (PreToolUse, every tool)
+
+Armed only when the wrapper sets `kernelOnly = true`
+(`packages/agent/policy/permissions.nix`). Denies every tool call that is not an
+index Elixir kernel call, so the agent's whole surface is the kernel's
+persistent Elixir workspace (`kernel_only_guard`, `src/guards.rs`). Declared
+with no matcher, which is what makes it see every tool.
+
+Allowlist, not deny list: `mcp__index__*` and `mcp__own-kernel__*` pass,
+everything else is refused. Two names for one server, both legitimate — sessions
+bind it as `index`, and a subagent that needs its own serve process must bind an
+inline copy under a different name or the CLI silently shares the parent's
+connection instead (index#2382), which is the name `packages/agent/subagents.nix`
+settled on. The allowlist shape is the reason the mode is a guarantee: a deny
+list of tool names would need re-enumerating every time the CLI grows a tool or
+a wrapper bakes a server, and a stale list fails silently in the direction of a
+hole.
+
+The deny reason is the feature, not a courtesy. A model reads a refusal as an
+instruction, so it names the destination:
+
+```
+elixir-only mode: use the index kernel (exec). `Bash` is denied because this
+agent runs with `kernelOnly = true` (packages/agent/policy/permissions.nix),
+which makes the index Elixir kernel the only tool surface. Run the work in a
+kernel cell instead: Cmd.run("git", ["-C", dir, "status"]) for commands,
+Read.file(path) and Edit.write(path, body) for files ... (kernel-only-guard hook)
+```
+
+**This guard fails CLOSED**, alone among the guards here. The others block a
+known-bad call, so an unreadable payload should let a presumed-good one proceed.
+This one enforces a boundary the operator opted into, and a boundary that
+dissolves whenever stdin is malformed is not a boundary. An unreadable payload
+denies with the same message, so a wedged hook is loud and one config flip
+undoes it.
+
+The settings `permissions.deny` list rendered alongside it is the other half:
+it strips the schemas of the tools the repo can name, which the hook cannot do
+and which is where the token saving comes from. Neither half is sufficient — the
+deny list cannot carry a message or cover an unenumerated tool, and the hook
+cannot keep a tool out of the context window.
+
 ## prompt-priors (UserPromptSubmit)
 
 Injects score-gated ambient priors from the corpus store, but only after passing

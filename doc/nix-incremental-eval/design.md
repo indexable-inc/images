@@ -56,6 +56,98 @@ whether the rest is worth anything: after a realistic edit, what fraction of
 the 33.8M thunks is genuinely invalidated? Every estimate below is conditional
 on that number, and I could not obtain it without building the instrumentation.
 
+## Measured corrections, 2026-08-04
+
+Phase 2 (nix#41, merged `33706b88e`) re-measured this document's phase 1 claims
+on a fresh pair: ix `d70890a649`, the same host attribute, a one-character edit
+to that host's inventory entry, 70,896 entries, ground truth 22 of 66,017
+derivations moved. Four corrections; the sections below are left as written and
+marked where they overclaim.
+
+1. **The analyzer behind the 12.5% and 40.1% keyed inputs on a per-run tree
+   id** (ENG-12211). The fix, `pair_trees`, pairs trees by root and fingerprint
+   with order pairing as a last resort, and is on `ix-patched` in `33706b88e`.
+   The original figures came from a different tree, host and edit, so they
+   cannot be restated; only a re-run of that exact pair can. On the new pair the
+   honest figures are **4.3% direct, 4.7% with edge propagation**, with
+   lazy-trees off.
+
+2. **Lazy trees inverts from prerequisite to cache-keying breaker.** This
+   document's opening claim was that lazy trees is a prerequisite; phase 1 then
+   measured it changing whole-tree fan-out by nothing. The new pair goes
+   further: with lazy-trees on, sound keying reports **99.2% invalidated**
+   under both the broken and the fixed analyzer, because 5 of 29 tree records
+   in one run (5 of 28 in the other) carry neither a root nor a fingerprint,
+   the record sets differ in size, and nothing can pair them, renaming 16,905
+   inputs. Until anonymous tree records carry a cross-run identity, phase 2's
+   cache requires lazy-trees **off**, which is the default.
+
+3. **Recall, not percentage, is the phase 2 headline.** Read sets alone reach
+   **2 of the 22** derivations the edit moves; a cache on them serves stale
+   results for the other 20. Dependency-edge propagation (598,924 edges over
+   90.1% of entries: demand, cache reuse, and inputDrvs) reaches **15 of 22**
+   for 0.4 points of extra invalidation and two extra false positives. The 7
+   still missed took a plain string from the inventory, which is neither a
+   derivation output nor a boundary crossing: value-level provenance is the
+   open requirement.
+
+4. **"No cost measurable at that granularity" overstates what was shown.**
+   Both phase 1's four wall-clock runs and phase 2's five-pair cpuTime
+   comparison bound the off path under about 1%; neither shows it free. The
+   allocation half is settled exactly (thunk, avoided and lookup counts
+   identical to the digit across arms); the sub-percent timing question needs
+   roughly thirty pairs and remains open (harness and binaries staged on
+   dev-compute-6).
+
+## What the persistent evaluator measured, 2026-08-04
+
+Phase 3 was built far enough to price the rest of it (nix#43 `0d2a10906`,
+nix#44 `e2c75f598`), on dev-compute-1 against ix main `96e14957a479`, one host's
+`config.system.build.toplevel.drvPath` through one `nix eval-persistent`
+process. Every number was checked against a `drvPath` from a fresh process.
+**Full write-up, including the tables and what it did not verify: ENG-12311.**
+
+1. **Sharing across hosts is real and free.** A second host in the same
+   unedited tree costs **25.0%** of the first. Three quarters of an evaluation
+   is work a live evaluator already reuses, with no read sets and no
+   invalidation graph. Decision 1 is worth building for this alone.
+
+2. **A one character edit takes all of it back**, to **112.7%** of cold, against
+   the 4.3% direct invalidation correction 1 above reports. Identity is what is
+   lost: an edited tree is a new `SourceAccessor`, `SourcePath` compares on the
+   accessor's serial number, so every `Expr` under the tree is reparsed and
+   every `Env` chain reached through `self` is new.
+
+3. **Files are not the lever, so Decision 2's boundary set is aimed at the wrong
+   boundary.** The warm request after the edit asks `evalFile` for **32,278**
+   files and is **already answered 31,592** times, so 97.9% of file evaluation
+   is reused today, and the 686 files left bound the rest at about 3.1s of a
+   28.6s run. Edit-stable file identity was built to check this and reached its
+   key four times; it is not landed, being unsound by construction and worth
+   nothing even if it were sound.
+
+4. **The remaining boundary is the function application.** `pkgs` and the module
+   fixpoint are applications whose arguments derive from the edited tree, Nix
+   memoises no application anywhere, and no file-level naming reaches them.
+   Unstarted by decision (ENG-12311). Decision 3's warning that argument
+   identity is the likeliest place for a soundness bug stands unchanged; what
+   has moved is that correction 3 above puts value-level provenance at 22 of 22
+   recall, so the invalidation side could now check it.
+
+None of this was measurable until two process-lifetime caches were fixed, since
+a process that evaluates twice otherwise reads its own stale state: without them
+a request made after a one character edit answered in **11ms with the pre-edit
+derivation** (nix#43).
+
+Two traps hit on the way, both the same failure as correction 4 above, which
+makes three in this document: a measurement that cannot tell "nothing happened"
+from "not measured". A probe that short-circuits at the root `flake.nix` serves
+the previous evaluation's whole outputs value, so the run reads as a clean
+ceiling on reuse while measuring nothing. A `Counter` counts only under
+`NIX_SHOW_STATS`, so the file identity counters read zero hits and zero misses
+while the probe was demonstrably changing the answer. A counter read to decide
+whether a mechanism did anything has to count unconditionally.
+
 ## The measured anchor
 
 From `hil-compute-1` in ix, evaluating `config.system.build.toplevel.drvPath`
@@ -466,7 +558,8 @@ from each entry to the entries whose values flowed into it, which is Adapton's
 demanded-computation graph rather than anything in the input model, and it is
 unbuilt and unmeasured.
 
-With all of the above, the eval-time-weighted invalidation for a one-character
+With all of the above (but see Measured corrections, 2026-08-04: these two
+figures came from a pre-`pair_trees` analyzer and could not be restated), the eval-time-weighted invalidation for a one-character
 string edit to one host's config is **12.5%**, against **40.1%** for the same
 edit with inputs named by absolute path. The 12.5% is two entries: the one that
 read the edited bytes, and the root entry whose whole-tree serialisation
@@ -955,7 +1048,8 @@ re-decide on phase 3 with its results in hand.
 
 **Status: three of the four numbers exist, for one host only.** Invalidation is
 **12.5%** with the input model above and 40.1% without it, so the go/no-go is
-proceed. Whole-tree fan-out is 835 entries of 91,758 at 32.0% to 34.9% of
+proceed. (Measured corrections, 2026-08-04: on the re-measured pair the figures
+are 4.3% and 4.7% with edges, and the go/no-go remains proceed.) Whole-tree fan-out is 835 entries of 91,758 at 32.0% to 34.9% of
 attributed cpu, unchanged by lazy trees. The fork-snapshot prefix is 1% to 3%.
 **The retained set was not measured**, and it is the one the estimate section
 names as the second most likely underestimate: the boundaries phase 1 tracks are
@@ -1026,6 +1120,12 @@ than per attribute access. Doubled for the correctness bar, the lazy-trees
 interaction and the shadow-comparison harness.
 
 ### Phase 3: persistent evaluator
+
+**Partly built and measured on 2026-08-04; the build list and the estimate
+below are stale.** Keeping the process alive is worth 75% of a second host's
+evaluation and costs nothing, but the boundary retention this section budgets
+six months for is aimed at files, and files are already 97.9% reused. See "What
+the persistent evaluator measured".
 
 **What it buys:** the single-host case, which phase 2 does not help at all. One
 host after a one-line edit goes from 22s to whatever the invalidated fraction

@@ -30,6 +30,12 @@ defmodule IxMcp.Cmd do
   """
 
   alias IxMcp.GitGuard
+  alias IxMcp.Jobs
+
+  defmodule Error do
+    @moduledoc "A subprocess exited nonzero under `Cmd.run!/3` or `Cmd.sh!/2`."
+    defexception [:message, :status, :output]
+  end
 
   @launch_cwd_key {__MODULE__, :launch_cwd}
 
@@ -62,7 +68,23 @@ defmodule IxMcp.Cmd do
   def run(cmd, args \\ [], opts \\ []) do
     opts = validate_cd!(opts)
     GitGuard.check!(cmd, args, opts[:cd])
-    run_unguarded(cmd, args, opts)
+
+    cmd
+    |> run_unguarded(args, opts)
+    |> note_nonzero(label(cmd, args))
+  end
+
+  @doc """
+  `run/3` that raises `IxMcp.Cmd.Error` on a nonzero exit and returns the
+  output alone on success. stderr is folded into the output unless the
+  caller said otherwise, so the raise carries the command's own diagnostic.
+  Reach for this when a failure should fail the cell -- the default `run/3`
+  returns `{out, status}` and only attaches a note to the job.
+  """
+  @spec run!(binary(), [binary()], keyword()) :: Collectable.t()
+  def run!(cmd, args \\ [], opts \\ []) do
+    {out, status} = run(cmd, args, Keyword.put_new(opts, :stderr_to_stdout, true))
+    raise_nonzero(label(cmd, args), out, status)
   end
 
   @doc false
@@ -90,6 +112,57 @@ defmodule IxMcp.Cmd do
 
     System.cmd("/bin/sh", ["-c", "exec </dev/null\n" <> script], opts)
     |> guard_cd_race(opts[:cd])
+    |> note_nonzero(label(script, []))
+  end
+
+  @doc "`sh/2` that raises `IxMcp.Cmd.Error` on a nonzero exit; returns output alone."
+  @spec sh!(binary(), keyword()) :: Collectable.t()
+  def sh!(script, opts \\ []) do
+    {out, status} = sh(script, Keyword.put_new(opts, :stderr_to_stdout, true))
+    raise_nonzero(label(script, []), out, status)
+  end
+
+  defp raise_nonzero(_label, out, 0), do: out
+
+  defp raise_nonzero(label, out, status) do
+    shown = if is_binary(out), do: String.slice(out, -2048, 2048), else: inspect(out)
+
+    raise Error,
+      message: "`#{label}` exited #{status}:\n#{shown}",
+      status: status,
+      output: out
+  end
+
+  # A nonzero exit must be part of the verdict the agent reads: `status:
+  # done` on the exec reply says only that the cell returned, and the report
+  # found whole classes of failed searches riding green replies because the
+  # `{out, 2}` tuple was never looked at. When the caller is a cell, attach
+  # the exit as a note on its job (best effort, a cast); anywhere else --
+  # server internals, tests -- there is no job and nothing to attach to.
+  defp note_nonzero({_out, 0} = result, _label), do: result
+
+  defp note_nonzero({_out, status} = result, label) when is_integer(status) do
+    with id when is_binary(id) <- Process.get(:ix_job_id),
+         {:ok, pid} <- Jobs.lookup(id) do
+      Jobs.Job.note(
+        pid,
+        "note: `#{label}` exited #{status} (the cell kept running; " <>
+          "ignore if the nonzero exit was handled)"
+      )
+    else
+      _not_in_a_cell -> :ok
+    end
+
+    result
+  end
+
+  defp note_nonzero(result, _label), do: result
+
+  defp label(cmd, args) do
+    [cmd | args]
+    |> Enum.join(" ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.slice(0, 80)
   end
 
   # Default `cd:` to the launch dir and refuse to spawn into a directory

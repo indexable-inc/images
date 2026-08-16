@@ -5,7 +5,7 @@
 }:
 # Incremental build lane for the patched nix fork via nix-ninja (#3655):
 # `nix run .#nix-ninja-build-nix` materializes the patched source (the same
-# `ix.patchedSrc` tree packages/nix ships), configures it with meson
+# Nix view packages/nix ships), configures it with meson
 # inside upstream's own dev shell, and hands the ninja graph to nix-ninja,
 # which turns every compilation unit into its own content-addressed
 # derivation. A warm rerun after touching one .cc file recompiles only that
@@ -22,11 +22,8 @@ let
   inherit (ix) pkgs;
   inherit (repoPackages) nix-ninja nix-ix;
 
-  # The identical patched tree the fork package builds: since the jj
-  # megamerge migration the nix-src input IS the patched tree (the
-  # indexable-inc/nix megamerge commit, see lib/fork-packages.nix), so there
-  # is no patch application step left and this lane can never drift from
-  # packages/nix.
+  # The identical view the fork package builds. There is no patch application
+  # step, so this lane cannot drift from packages/nix.
   patchedSrc = ix.nixSrc;
 
   # Run under the fork client, not stock pkgs.nix: the generated derivations

@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 futures.workspace = true
+# The pull slot's mutex. parking_lot per the workspace's disallowed-types
+# policy: no poisoning, so `slot()` needs no PoisonError recovery.
+parking_lot.workspace = true
 # `sync` for the pull gate and closed flag, `macros` for the `select!`
 # racing a pull against close.
 tokio = { workspace = true, features = ["macros", "sync"] }

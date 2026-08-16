@@ -16,7 +16,7 @@
   pin = pins.loadPin ./pins.json "macos-sdk";
   tarball = pkgs.fetchurl {inherit (pin) url hash;};
 in
-  pkgs.runCommand "MacOSX${pin.version}.sdk" {} ''
+  pkgs.runCommand "MacOSX${pin.version}.sdk" {__structuredAttrs = true;} ''
     mkdir -p "$out"
     tar xf ${tarball} --strip-components=1 -C "$out"
   ''

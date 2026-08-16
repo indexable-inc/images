@@ -8,7 +8,10 @@ shape, and the shared identity volume. `mkDev` reads these options to plan the
 fleet; the per-node build consumes `ix.dev.agents` to install the agent CLIs.
 
 Declared in `lib/dev/` (not `modules/`) so it is only in scope where the dev
-base imports it. It must not add `claude-code` to every image in the repo.
+base imports it. The sandbox-wrapped `claude` binary itself also ships in the
+shared base profile (`modules/profiles/base`, next to codex), so every image
+carries the agent CLIs; what stays dev-only is this option surface and the
+managed-settings policy in `agents.nix`.
 */
 {
   lib,

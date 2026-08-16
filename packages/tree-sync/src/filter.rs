@@ -92,7 +92,9 @@ impl Filter {
             });
         }
 
-        let matcher = builder.build().wrap_err("could not build the exclude set")?;
+        let matcher = builder
+            .build()
+            .wrap_err("could not build the exclude set")?;
         Ok(Self {
             matcher,
             rules,

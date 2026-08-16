@@ -12,13 +12,19 @@ use ix_vt::{CellWide, Terminal, scrollback_bytes_for_lines};
 /// the program ended with a newline is not.
 #[test]
 fn soft_wrapped_rows_are_marked_and_hard_ones_are_not() {
-    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     // 25 characters across a 10 column grid: two full rows that continue,
     // then five characters that do not.
     term.vt_write(b"abcdefghijklmnopqrstuvwxy");
 
     let snap = term.render().expect("render snapshot");
-    let wrapped: Vec<bool> = snap.viewport.iter().take(3).map(|row| row.wrapped).collect();
+    let wrapped: Vec<bool> = snap
+        .viewport
+        .iter()
+        .take(3)
+        .map(|row| row.wrapped)
+        .collect();
     assert_eq!(
         wrapped,
         vec![true, true, false],
@@ -29,7 +35,8 @@ fn soft_wrapped_rows_are_marked_and_hard_ones_are_not() {
 /// A line the program ended itself is never marked, however full it is.
 #[test]
 fn an_exactly_full_row_ended_by_a_newline_is_not_wrapped() {
-    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     term.vt_write(b"0123456789\r\nnext");
 
     let snap = term.render().expect("render snapshot");
@@ -46,11 +53,16 @@ fn an_exactly_full_row_ended_by_a_newline_is_not_wrapped() {
 /// it, so a reader knows the pair is one character.
 #[test]
 fn a_double_width_character_tags_its_two_cells() {
-    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     term.vt_write("漢字".as_bytes());
 
     let snap = term.render().expect("render snapshot");
-    let tags: Vec<CellWide> = snap.viewport[0].iter().take(5).map(|cell| cell.wide).collect();
+    let tags: Vec<CellWide> = snap.viewport[0]
+        .iter()
+        .take(5)
+        .map(|cell| cell.wide)
+        .collect();
     assert_eq!(
         tags,
         vec![
@@ -69,7 +81,8 @@ fn a_double_width_character_tags_its_two_cells() {
 /// says the program printed a space, and the tag is what says so.
 #[test]
 fn a_double_width_character_that_does_not_fit_leaves_a_spacer_head() {
-    let mut term = Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
+    let mut term =
+        Terminal::new(24, 10, scrollback_bytes_for_lines(1000, 10)).expect("create terminal");
     // Nine narrow characters leave one column, which a kanji cannot use.
     term.vt_write("123456789漢".as_bytes());
 

@@ -724,7 +724,10 @@ async fn run(
     // task is. A spec with no tasks in it never trips this, which is how a
     // pure supervision group stays up until the operator stops it.
     let remaining_tasks = Arc::new(AtomicUsize::new(
-        spec.nodes.values().filter(|node| !node.is_service()).count(),
+        spec.nodes
+            .values()
+            .filter(|node| !node.is_service())
+            .count(),
     ));
 
     let mut ready: HashMap<String, watch::Receiver<Option<Readiness>>> =
@@ -860,7 +863,10 @@ fn never_ran(ctx: &NodeContext, reason: Option<Reason>) -> NodeRecord {
     );
     let mut stderr = OutputTail::new();
     if let Some(reason) = reason {
-        stderr.push(format!("dag-runner: never started: {}\n", reason.describe()));
+        stderr.push(format!(
+            "dag-runner: never started: {}\n",
+            reason.describe()
+        ));
     }
     NodeRecord {
         outcome: Outcome::Skipped,
@@ -941,12 +947,8 @@ impl PipeCapture {
                     result = stdout_task => PipeTaskCompletion::Stdout(result),
                     result = stderr_task => PipeTaskCompletion::Stderr(result),
                 },
-                (Some(stdout_task), None) => {
-                    PipeTaskCompletion::Stdout(stdout_task.await)
-                }
-                (None, Some(stderr_task)) => {
-                    PipeTaskCompletion::Stderr(stderr_task.await)
-                }
+                (Some(stdout_task), None) => PipeTaskCompletion::Stdout(stdout_task.await),
+                (None, Some(stderr_task)) => PipeTaskCompletion::Stderr(stderr_task.await),
                 (None, None) => return,
             };
             match completion {
@@ -1049,7 +1051,9 @@ impl OwnedProcessGroup {
 
 impl Drop for OwnedProcessGroup {
     fn drop(&mut self) {
-        if self.armed && let Err(error) = self.id.signal(libc::SIGKILL) {
+        if self.armed
+            && let Err(error) = self.id.signal(libc::SIGKILL)
+        {
             eprintln!(
                 "dag-runner: failed to kill process group {} during cleanup: {error}",
                 self.id.0
@@ -1113,7 +1117,15 @@ async fn execute(ctx: &NodeContext, ready_tx: &watch::Sender<Option<Readiness>>)
     };
 
     if ctx.node.is_service() {
-        run_service(ctx, &mut child, &mut group, &mut capture, ready_tx, &mut hit_rx).await
+        run_service(
+            ctx,
+            &mut child,
+            &mut group,
+            &mut capture,
+            ready_tx,
+            &mut hit_rx,
+        )
+        .await
     } else {
         run_task(ctx, &mut child, &mut group, &mut capture).await
     }
@@ -2115,9 +2127,9 @@ mod tests {
 
     #[test]
     fn already_gone_covers_the_zombie_group_darwin_reports_as_eperm() {
-        assert!(ProcessGroupId::means_already_gone(&io::Error::from_raw_os_error(
-            libc::ESRCH
-        )));
+        assert!(ProcessGroupId::means_already_gone(
+            &io::Error::from_raw_os_error(libc::ESRCH)
+        ));
         let eperm = io::Error::from_raw_os_error(libc::EPERM);
         assert_eq!(
             ProcessGroupId::means_already_gone(&eperm),
@@ -2157,7 +2169,10 @@ mod tests {
         for i in 0..=OutputTail::DEFAULT_LIMIT {
             tail.push(format!("line-{i}\n"));
         }
-        assert!(tail.render().starts_with("dag-runner: 1 earlier line dropped"));
+        assert!(
+            tail.render()
+                .starts_with("dag-runner: 1 earlier line dropped")
+        );
     }
 
     #[test]

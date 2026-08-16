@@ -54,11 +54,17 @@ pub(super) fn spawn_tui(
     config: SpawnConfig,
 ) -> Result<TuiInstance> {
     let id = Uuid::new_v4();
+    // Stamped before the child exists, not after: the transcript resolver
+    // uses this as the floor a session log must have been born after, and a
+    // floor taken after the exec can land past the moment the CLI created its
+    // own log file (transcript::resolve).
+    let spawned_at = SystemTime::now();
     let SpawnConfig {
         rows,
         cols,
         scrollback_lines,
         env,
+        agent,
     } = config;
     let display = format!("{command} {}", args.join(" "));
 
@@ -117,7 +123,8 @@ pub(super) fn spawn_tui(
         id,
         command,
         args,
-        spawned_at: SystemTime::now(),
+        spawned_at,
+        agent: agent.map(Arc::new),
         scrollback_limit: scrollback_lines,
         size: Arc::new(parking_lot::RwLock::new((rows, cols))),
         cursor_shape,

@@ -1,0 +1,6 @@
+[missing-upper-bounds] On library, these packages miss upper bounds:
+  - somelib
+  - alphalib
+  - betalib
+  - deltalib
+Please add them. There is more information at https://pvp.haskell.org/

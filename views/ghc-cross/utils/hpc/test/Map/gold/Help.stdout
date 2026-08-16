@@ -1,0 +1,15 @@
+Usage: hpc map [OPTION] .. <TIX_FILE> 
+Map a function over a single .tix file
+
+
+Options:
+
+    --exclude=[PACKAGE:][MODULE]  exclude MODULE and/or PACKAGE
+    --include=[PACKAGE:][MODULE]  include MODULE and/or PACKAGE
+    --output=FILE                 output FILE
+    --function=FUNCTION           apply function to .tix files, default = ID
+                                  FUNCTION = ID | INV | ZERO
+    --union                       use the union of the module namespace (default is intersection)
+    --verbosity=[0-2]             verbosity level, 0-2
+                                  default 1
+

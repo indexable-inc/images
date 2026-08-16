@@ -8,8 +8,8 @@ links:
     href: https://github.com/indexable-inc/index/issues/3627
   - label: sparseNodes plan (NixOS/nix#7730)
     href: https://github.com/NixOS/nix/issues/7730
-  - label: patch 0024
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0024-libflake-defer-to-the-child-lock-for-relative-path-f.patch
+  - label: nix fork commit
+    href: https://github.com/indexable-inc/nix/commit/9de6ff13b581d180f51271ad13091adf65048e26
 ---
 
 Nix patch 0024 makes the child's own `flake.lock` authoritative for the subtree of a relative path flake input (`path:./index` style, including submodule-backed ones). Upstream copies the child's entire lock subtree into the parent's lock and, because a relative flakeref never changes, reuses the copy forever: after a submodule bump the parent silently evaluates with stale transitive pins, and a child that gained a new input fails with `function 'outputs' called without required argument '<name>'` until a manual `nix flake update <input>`. Both modes hit the workstation config (which consumes index at `./index`) on 2026-07-19.

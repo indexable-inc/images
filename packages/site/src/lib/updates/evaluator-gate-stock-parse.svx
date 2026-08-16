@@ -10,7 +10,7 @@ links:
     href: https://github.com/indexable-inc/index/issues/3635
 ---
 
-The repo pins its own Nix evaluator: the fork source lives in-tree (`lib/fork-packages.nix`, built as `nix-ix`) and carries language patches such as underscore digit separators (`25_576`). `tests/default.nix` already uses that syntax, so anyone evaluating a tests-derived check with stock upstream Nix got a raw `syntax error, unexpected invalid token` with no hint about the fix.
+The repo pins its own Nix evaluator: the source lives in `views/nix`, is built as `nix-ix`, and carries language patches such as underscore digit separators (`25_576`). `tests/default.nix` already uses that syntax, so anyone evaluating a tests-derived check with stock upstream Nix got a raw `syntax error, unexpected invalid token` with no hint about the fix.
 
 Two additions make the boundary explicit:
 

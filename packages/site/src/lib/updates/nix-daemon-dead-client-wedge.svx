@@ -6,10 +6,10 @@ tags: [nix, daemon, fork, reliability]
 links:
   - label: issue 3752
     href: https://github.com/indexable-inc/index/issues/3752
-  - label: patch 0033
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0033-libstore-wake-the-goal-loop-when-the-process-is-inte.patch
-  - label: patch 0034
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0034-libstore-prove-build-status-writers-alive-with-a-lif.patch
+  - label: interrupt wakeup fork commit
+    href: https://github.com/indexable-inc/nix/commit/984bd6a08c870b063f60040cbd391c424201df0f
+  - label: writer lifetime fork commit
+    href: https://github.com/indexable-inc/nix/commit/0d79cd18172791f8afce82e2fbcfd1c6420979c5
 ---
 
 On hydra this morning, `nix store builds` reported 33 builds "in

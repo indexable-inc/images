@@ -110,7 +110,7 @@
     Fortify must stay on for release: that artifact ships, and `-O` satisfies
     glibc there, so there is nothing to compensate for.
   '';
-    pkgs.runCommand "dev-profile-fortify-wiring" {} "touch $out";
+    pkgs.runCommand "dev-profile-fortify-wiring" {__structuredAttrs = true;} "touch $out";
 in {
   inherit premiseStillHolds wiringReachesUnits;
 }

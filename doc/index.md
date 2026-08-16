@@ -111,6 +111,7 @@ User-facing guides for the hosted `ix` platform. Start at
 | [source](source/overview.md) | `packages/source` is the workspace of source adapters that turn each data source (a code checkout's neighbors: Slack, Linear, GitHub, git history, Claude/Codex transcripts, shell history,... |
 | [spark-gluten](spark-gluten/overview.md) | `packages/spark-gluten` packages the Apache Gluten Velox-backend bundle for Spark 3.5, patched so its native libraries load on NixOS. |
 | [spark-hive](spark-hive/overview.md) | `packages/spark-hive` packages Apache Spark 3.5, the official complete (hadoop3 + Hive) binary distribution, self-contained for NixOS and pinned to JDK 17. |
+| [starship](starship/overview.md) | `packages/starship` repackages starship, the cross-shell prompt, from a repo-owned fork whose one commit resolves the repository root through jj as well as git, so a non-colocated jj workspace truncates to its name instead of printing an absolute path. |
 | [terminal-theme](terminal-theme/overview.md) | `packages/terminal-theme` owns one decision shared across the repo's terminal tools: is the terminal background light or dark. |
 | [tmux](tmux/overview.md) | `packages/tmux` repackages tmux with a modern default config baked in (truecolor, undercurl, mouse, vi copy mode, sane history and escape-time). |
 | [tonbo-artifacts](tonbo-artifacts/overview.md) | `packages/tonbo-artifacts` packages the Tonbo Artifacts CLI, a prebuilt binary served from Tonbo's release host. |

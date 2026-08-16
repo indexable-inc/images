@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["nix-eval-rs", "ix-kernel", "nix-eval-driver"]
+
+[workspace.package]
+edition = "2024"
+license = "LGPL-2.1-or-later"
+
+# Mirrored from the index monorepo workspace lints so the same bar applies
+# here before the ciCheck derivations arrive. Stock clippy aborts (E0602) on
+# the two llm-clippy-only lints, so those two are added when the forked
+# toolchain is wired into CI rather than now.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+# Thin-LTO, one codegen unit: 84.3/83.9 -> 83.2/80.8s cpu (~2.6%) on the
+# hil-compute-2 toplevel drvPath eval (dev-compute-6, ENG-13148), on top of
+# mimalloc's 13%; output sha 156bf4df4ef1 unchanged across all four runs.
+# Cost: slower release builds (codegen serialized); dev/test profiles keep
+# cargo defaults, so the edit-test loop is unaffected.
+[profile.release]
+lto = "thin"
+codegen-units = 1

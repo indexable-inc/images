@@ -156,6 +156,9 @@ class Agent:
     busy_marker: ClassVar[str | None] = None
     #: Onboarding screens to auto-clear on launch, in priority order.
     gates: ClassVar[Sequence[Gate]] = ()
+    #: Which session-log family this agent writes ("claude"/"codex"), so the
+    #: dashboard producer tails the agent's own transcript. `None` skips it.
+    session_log: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -171,6 +174,16 @@ class Agent:
         cmd = binary if binary is not None else self.binary
         if not cmd:
             raise ValueError("no binary: set the class `binary` or pass binary=")
+        self._ready = ready if ready is not None else self.ready
+        self._busy = busy_marker if busy_marker is not None else self.busy_marker
+        self._gates = tuple(gates) if gates is not None else tuple(self.gates)
+        # The dashboard-facing agent declaration: the busy marker and the
+        # string-shaped gate patterns feed the producer's status inference
+        # (a regex gate stays harness-local -- the Rust matcher is a plain
+        # case-insensitive substring); the session-log family lets it tail
+        # this agent's own transcript, keyed by the session cwd.
+        agent_kind = type(self).__name__.lower()
+        string_gates = [g.pattern for g in self._gates if isinstance(g.pattern, str)]
         # cwd is delivered by spawning through `sh -c 'cd … && exec …'` rather
         # than chdir of this process: several agents often run in different repos
         # at once, and a process-global chdir would race.
@@ -182,12 +195,24 @@ class Agent:
                 f"cd {_shquote(cwd)} && exec {quoted}",
                 size=size,
                 scrollback_lines=scrollback_lines,
+                agent_kind=agent_kind,
+                busy_marker=self._busy,
+                gate_markers=string_gates,
+                session_log=self.session_log,
+                agent_cwd=cwd,
             )
         else:
-            self._tui = Tui(cmd, *args, size=size, scrollback_lines=scrollback_lines)
-        self._ready = ready if ready is not None else self.ready
-        self._busy = busy_marker if busy_marker is not None else self.busy_marker
-        self._gates = tuple(gates) if gates is not None else tuple(self.gates)
+            self._tui = Tui(
+                cmd,
+                *args,
+                size=size,
+                scrollback_lines=scrollback_lines,
+                agent_kind=agent_kind,
+                busy_marker=self._busy,
+                gate_markers=string_gates,
+                session_log=self.session_log,
+                agent_cwd=cwd,
+            )
         self._started = False
         self.keyboard = Keyboard(self._tui)
 
@@ -508,6 +533,7 @@ class Claude(Agent):
     #: The empty input prompt at the bottom of a ready Claude TUI.
     ready = re.compile(r"^❯\s*$", re.MULTILINE)
     busy_marker = "esc to interrupt"
+    session_log = "claude"
     gates = (
         # A fresh / untrusted cwd opens on a trust prompt whose default
         # selection is "1. Yes, I trust this folder"; Enter accepts it.
@@ -543,6 +569,7 @@ class Codex(Agent):
     binary = "codex"
     ready = re.compile(r"[›❯>]\s*$", re.MULTILINE)
     busy_marker = None
+    session_log = "codex"
     #: Defaults shared by the TUI constructor and the headless one-shot.
     default_model: ClassVar[str] = "gpt-5.6-sol"
     default_reasoning_effort: ClassVar[str] = "low"

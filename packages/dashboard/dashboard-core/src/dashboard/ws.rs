@@ -176,12 +176,11 @@ enum Wake {
 }
 
 /// Speak the protocol on one connection until the client goes away.
-#[allow(clippy::match_same_arms, reason = "each arm documents a distinct cause; merging them would delete the comment that explains why")]
-pub async fn serve_socket(
-    mut socket: WebSocket,
-    hub: Arc<Hub>,
-    relay: broadcast::Sender<Frames>,
-) {
+#[allow(
+    clippy::match_same_arms,
+    reason = "each arm documents a distinct cause; merging them would delete the comment that explains why"
+)]
+pub async fn serve_socket(mut socket: WebSocket, hub: Arc<Hub>, relay: broadcast::Sender<Frames>) {
     let mut session = Session {
         joined: None,
         batches: HashMap::new(),
@@ -269,7 +268,10 @@ async fn handle(
 }
 
 /// Decode one binary frame and act on it.
-#[allow(clippy::match_same_arms, reason = "each arm documents a distinct cause; merging them would delete the comment that explains why")]
+#[allow(
+    clippy::match_same_arms,
+    reason = "each arm documents a distinct cause; merging them would delete the comment that explains why"
+)]
 async fn protocol(
     socket: &mut WebSocket,
     session: &mut Session,

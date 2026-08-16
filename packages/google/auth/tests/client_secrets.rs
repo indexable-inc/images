@@ -90,11 +90,17 @@ fn rejects_an_empty_client_id() {
     let dir = TempDir::new().expect("temp dir");
     // A truncated download, which otherwise parses and then fails much
     // later inside the consent flow with an opaque Google error.
-    let path = write(&dir, r#"{"installed":{"client_id":"","client_secret":"s"}}"#);
+    let path = write(
+        &dir,
+        r#"{"installed":{"client_id":"","client_secret":"s"}}"#,
+    );
 
     let error = expect_error(&path, "empty is not present");
 
-    assert!(matches!(error, Error::ParseClientSecrets { .. }), "got: {error:?}");
+    assert!(
+        matches!(error, Error::ParseClientSecrets { .. }),
+        "got: {error:?}"
+    );
 }
 
 #[test]
@@ -104,7 +110,10 @@ fn rejects_a_file_that_is_not_json() {
 
     let error = expect_error(&path, "rejects non-JSON");
 
-    assert!(matches!(error, Error::ParseClientSecrets { .. }), "got: {error:?}");
+    assert!(
+        matches!(error, Error::ParseClientSecrets { .. }),
+        "got: {error:?}"
+    );
 }
 
 #[test]
@@ -114,5 +123,8 @@ fn reports_a_missing_file_as_a_read_error() {
 
     let error = expect_error(&path, "no such file");
 
-    assert!(matches!(error, Error::ReadClientSecrets { .. }), "got: {error:?}");
+    assert!(
+        matches!(error, Error::ReadClientSecrets { .. }),
+        "got: {error:?}"
+    );
 }

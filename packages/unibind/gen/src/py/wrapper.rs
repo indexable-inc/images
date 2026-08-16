@@ -51,14 +51,16 @@ pub fn render(interface: &ir::Interface, module_name: &str) -> String {
         for record in &records {
             writeln!(out, "    {record},").expect("write to string");
         }
-        out.push_str("):\n    _collections_abc.Mapping.register(_record)\ndel _collections_abc, _record\n");
+        out.push_str(
+            "):\n    _collections_abc.Mapping.register(_record)\ndel _collections_abc, _record\n",
+        );
     }
     out
 }
 
 /// Every name the extension module registers: functions, record classes,
-/// object classes, per-export stream classes, and the error base plus its
-/// variant subclasses (Python names throughout).
+/// enumeration classes, object classes, per-export stream classes, and the
+/// error base plus its variant subclasses (Python names throughout).
 fn public_names(interface: &ir::Interface) -> Vec<String> {
     let mut names = Vec::new();
     for function in &interface.functions {
@@ -66,6 +68,9 @@ fn public_names(interface: &ir::Interface) -> Vec<String> {
     }
     for record in &interface.records {
         names.push(types::py_name(&record.names, &record.name).to_owned());
+    }
+    for declared in &interface.enums {
+        names.push(types::py_name(&declared.names, &declared.name).to_owned());
     }
     for object in &interface.objects {
         names.push(types::py_name(&object.names, &object.name).to_owned());

@@ -38,6 +38,7 @@ members = [
   "packages/linear-file",
   "packages/ix-credential",
   "packages/claude-stories",
+  "packages/loom/launch",
   "packages/subagent-cache",
   "packages/submodule-sync-test",
   "packages/audio/app",
@@ -177,10 +178,12 @@ members = [
   "packages/unibind/backend-jvm",
   "packages/unibind/backend-py",
   "packages/unibind/backend-ts",
+  "packages/unibind/backend-wasm",
   "packages/unibind/conformance",
   "packages/unibind/conformance-ex",
   "packages/unibind/conformance-jvm",
   "packages/unibind/conformance-ts",
+  "packages/unibind/conformance-wasm",
   "packages/unibind/core",
   "packages/unibind/ex-runtime",
   "packages/unibind/gen",
@@ -189,7 +192,6 @@ members = [
   "packages/unibind/py-runtime",
   "packages/unibind/runtime",
   "packages/unibind/test-support",
-  "packages/upstream-sync",
   "packages/usage/cli",
   "packages/usage/core",
   "packages/usage/wrap",
@@ -345,6 +347,7 @@ ignore = "0.4"
 indexmap = "2"
 indicatif = "0.18"
 insta = { version = "1.42", features = ["json"] }
+js-sys = "0.3"
 lazy-regex = "3.4"
 libc = "0.2"
 libloading = "0.8"
@@ -385,7 +388,7 @@ objc2-foundation = "0.3"
 objc2-quartz-core = "0.3"
 objc2-security = "0.3"
 objc2-web-kit = "0.3"
-object = { version = "0.39", default-features = false, features = ["read"] }
+object = { version = "0.39", default-features = false, features = ["read", "wasm"] }
 object_store = { version = "0.14", features = ["aws"] }
 ix2nix = { path = "packages/ix2nix" }
 # JavaScript-syntax parser for ix2nix (packages/ix2nix): .ix modules are
@@ -430,7 +433,10 @@ lettre = { version = "0.11", default-features = false, features = [
   "tokio1",
   "tokio1-rustls",
   "rustls",
-  "ring",
+  # aws-lc-rs, not ring: lettre's `rustls_crypto` picks the provider from these
+  # features, and only aws-lc-rs has ML-KEM. Keeping ring here would keep SMTP
+  # STARTTLS on classical X25519 and keep the ring crate in the graph.
+  "aws-lc-rs",
   "rustls-native-certs",
   "hostname",
 ] }
@@ -445,13 +451,22 @@ rodio = { version = "0.22", default-features = false, features = ["playback", "v
 rusqlite = { version = "0.40", features = ["bundled"] }
 rustc-hash = "2.1"
 rustler = "0.38"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# aws_lc_rs, not ring: only aws-lc-rs implements ML-KEM. `prefer-post-quantum`
+# puts the X25519MLKEM768 hybrid group first in `DEFAULT_KX_GROUPS` instead of
+# last, and servers follow the client's order.
+rustls = { version = "0.23", default-features = false, features = [
+  "aws_lc_rs",
+  "prefer-post-quantum",
+  "std",
+  "tls12",
+] }
 rustls-native-certs = "0.8"
 scip = "0.9"
 scipql-core = { path = "packages/scipql/core" }
 search-core = { path = "packages/search-core" }
 source-meta = { path = "packages/source/meta" }
 serde = "1"
+serde-wasm-bindgen = "0.6"
 serde_json = "1"
 serde_norway = "0.9"
 sha1 = "0.10"
@@ -530,6 +545,7 @@ unibind-backend-ex = { path = "packages/unibind/backend-ex" }
 unibind-backend-jvm = { path = "packages/unibind/backend-jvm" }
 unibind-backend-py = { path = "packages/unibind/backend-py" }
 unibind-backend-ts = { path = "packages/unibind/backend-ts" }
+unibind-backend-wasm = { path = "packages/unibind/backend-wasm" }
 unibind-core = { path = "packages/unibind/core" }
 unibind-test-support = { path = "packages/unibind/test-support" }
 unibind-ex-runtime = { path = "packages/unibind/ex-runtime" }
@@ -540,9 +556,13 @@ ureq = "3"
 url = { version = "2.5.8", default-features = false }
 uuid = "1"
 webpki-roots = "1"
-# `transparent` is a non-default feature: without it `with_transparent(true)`
-# is a silent no-op and the webview paints an opaque canvas, hiding the
-# ix-windows blur behind a flat card.
+# LOCKSTEP: the `=0.2.123` pin must equal packages/wasm-bindgen-cli/pins.json.
+# The crate and the CLI share a generated-schema contract that is not stable
+# across patch releases, and a mismatch hard-fails at bind time with both
+# versions named. Bump the two together, nothing else accepts a float.
+wasm-bindgen = "=0.2.123"
+wasm-bindgen-futures = "0.4"
+
 # Sandboxed deterministic runtime for shared-audio instrument modules
 # (packages/audio/instrument). Minimal feature set: Cranelift JIT, the
 # runtime itself, WAT text support for built-in/demo instruments, and the
@@ -555,6 +575,9 @@ wasmtime = { version = "46", default-features = false, features = [
   "std",
   "parallel-compilation",
 ] }
+# `transparent` is a non-default feature: without it `with_transparent(true)`
+# is a silent no-op and the webview paints an opaque canvas, hiding the
+# ix-windows blur behind a flat card.
 wry = { version = "0.55", features = ["transparent"] }
 x509-parser = "0.18"
 xxhash-rust = { version = "0.8", default-features = false }

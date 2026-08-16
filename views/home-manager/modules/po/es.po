@@ -1,0 +1,187 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR Home Manager contributors
+# This file is distributed under the same license as the Home Manager Modules package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Home Manager Modules\n"
+"Report-Msgid-Bugs-To: https://github.com/nix-community/home-manager/issues\n"
+"POT-Creation-Date: 2026-01-21 09:53+0100\n"
+"PO-Revision-Date: 2026-05-27 11:11+0000\n"
+"Last-Translator: Tomas Rivera <tomas.riveral@icloud.com>\n"
+"Language-Team: Spanish <https://hosted.weblate.org/projects/home-manager/"
+"modules/es/>\n"
+"Language: es\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=n != 1;\n"
+"X-Generator: Weblate 2026.6.dev0\n"
+
+#: modules/files.nix:214
+msgid "Creating home file links in %s"
+msgstr "Creando vínculos del directorio de inicio en %s"
+
+#: modules/files.nix:227
+msgid "Cleaning up orphan links from %s"
+msgstr "Limpiando vínculos huérfanos de %s"
+
+#: modules/home-environment.nix:680
+msgid "Creating new profile generation"
+msgstr "Creando nueva generación de perfil"
+
+#: modules/home-environment.nix:683
+msgid "No change so reusing latest profile generation"
+msgstr "No hubo cambio, así que reusando la última generación de perfil"
+
+#: modules/home-environment.nix:732
+msgid ""
+"Oops, Nix failed to install your new Home Manager profile!\n"
+"\n"
+"Perhaps there is a conflict with a package that was installed using\n"
+"\"%s\"? Try running\n"
+"\n"
+"    %s\n"
+"\n"
+"and if there is a conflicting package you can remove it with\n"
+"\n"
+"    %s\n"
+"\n"
+"Then try activating your Home Manager configuration again."
+msgstr ""
+"Nix no pudo instalar el nuevo perfil de Home Manager!\n"
+"\n"
+"Tal vez haya un conflicto con algún paquete instalado con \"%s\"?\n"
+"Intente ejecutar\n"
+"\n"
+"    %s\n"
+"\n"
+"y si hay algún paquete en conflicto bórrelo con:\n"
+"\n"
+"    %s\n"
+"\n"
+"Y después reintente activar su configuración de Home Manager."
+
+#: modules/home-environment.nix:768
+msgid "Activating %s"
+msgstr "Activando %s"
+
+#: modules/home-environment.nix:840
+msgid "%s: unknown option '%s'"
+msgstr "%s: opción desconocida '%s'"
+
+#: modules/lib-bash/activation-init.sh:22
+msgid "Migrating profile from %s to %s"
+msgstr "Migrando el perfil de %s a %s"
+
+#: modules/lib-bash/activation-init.sh:54
+msgid "Could not find suitable profile directory, tried %s and %s"
+msgstr ""
+"No se ha podido encontrar un directorio de perfiles adecuado, se ha probado "
+"con %s y %s"
+
+#. translators: For example: HOME is "/home/foo", expected "/home/bar"
+#: modules/lib-bash/activation-init.sh:109
+#: modules/lib-bash/activation-init.sh:121
+msgid "%s is \"%s\", expected \"%s\""
+msgstr "%s es \"%s\", se esperaba \"%s\""
+
+#: modules/lib-bash/activation-init.sh:138
+msgid "Starting Home Manager activation"
+msgstr "Comenzando activación de Home Manager"
+
+#: modules/lib-bash/activation-init.sh:142
+msgid "Sanity checking Nix"
+msgstr "Chequeando Nix"
+
+#: modules/lib-bash/activation-init.sh:155
+msgid "This is a dry run"
+msgstr "Ejecución de simulacro"
+
+#: modules/lib-bash/activation-init.sh:159
+msgid "This is a live run"
+msgstr "Ejecución en vivo"
+
+#: modules/lib-bash/activation-init.sh:165
+msgid "Using Nix version: %s"
+msgstr "Usando Nix versión %s"
+
+#: modules/lib-bash/activation-init.sh:168
+msgid "Activation variables:"
+msgstr "Variables de activación:"
+
+#~ msgid "Error: USER is set to \"%s\" but we expect \"%s\""
+#~ msgstr "Error: USER está configurado en \"%s\" pero esperamos \"%s\""
+
+#~ msgid "Error: HOME is set to \"%s\" but we expect \"%s\""
+#~ msgstr "Error: HOME está configurado en \"%s\" pero esperamos \"%s\""
+
+#~ msgid "Creating profile generation %s"
+#~ msgstr "Creando generación de perfil %s"
+
+#~ msgid "No change so reusing latest profile generation %s"
+#~ msgstr ""
+#~ "No hay cambios, reutilizando la generación más reciente del perfil: %s"
+
+#~ msgid "Sanity checking oldGenNum and oldGenPath"
+#~ msgstr "Chequeando oldGenNum y oldGenPath"
+
+#~ msgid ""
+#~ "The previous generation number and path are in conflict! These\n"
+#~ "must be either both empty or both set but are now set to\n"
+#~ "\n"
+#~ "    '%s' and '%s'\n"
+#~ "\n"
+#~ "If you don't mind losing previous profile generations then\n"
+#~ "the easiest solution is probably to run\n"
+#~ "\n"
+#~ "   rm %s/home-manager*\n"
+#~ "   rm %s/current-home\n"
+#~ "\n"
+#~ "and trying home-manager switch again. Good luck!"
+#~ msgstr ""
+#~ "¡El número y la ruta de la generación anterior están en conflicto! Estos\n"
+#~ "ambos deben estar vacíos o ambos configurados pero ahora configurados "
+#~ "como\n"
+#~ "\n"
+#~ "    '%s' y '%s'\n"
+#~ "\n"
+#~ "Si no le importa perder las generaciones de perfiles anteriores, "
+#~ "entonces\n"
+#~ "la solución más fácil es probablemente ejecutar\n"
+#~ "\n"
+#~ "   rm %s/home-manager*\n"
+#~ "   rm %s/current-home\n"
+#~ "\n"
+#~ "y probando el cambio de administrador de casa nuevamente. ¡Buena suerte!"
+
+#~ msgid "Migrating profiles from %s to %s"
+#~ msgstr "Migrando perfiles de %s a %s"
+
+#~ msgid ""
+#~ "Oops, nix-env failed to install your new Home Manager profile!\n"
+#~ "\n"
+#~ "Perhaps there is a conflict with a package that was installed using\n"
+#~ "\"nix-env -i\"? Try running\n"
+#~ "\n"
+#~ "    nix-env -q\n"
+#~ "\n"
+#~ "and if there is a conflicting package you can remove it with\n"
+#~ "\n"
+#~ "    nix-env -e {package name}\n"
+#~ "\n"
+#~ "Then try activating your Home Manager configuration again."
+#~ msgstr ""
+#~ "nix-env no pudo instalar el nuevo perfil de Home Manager!\n"
+#~ "\n"
+#~ "Tal vez haya un conflicto con algún paquete instalado con \"nix-env -i\"? "
+#~ "Intente ejecutar\n"
+#~ "\n"
+#~ "    nix-env -q\n"
+#~ "\n"
+#~ "y si hay algún paquete en conflicto bórrelo con:\n"
+#~ "\n"
+#~ "    nix-env -e {paquete}\n"
+#~ "\n"
+#~ "Y después reintente activar su configuración de Home Manager."

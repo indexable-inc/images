@@ -27,6 +27,12 @@ export interface PaneRecord {
   cursor_col?: number;
   cursor_visible?: boolean;
   cursor_shape?: string;
+  // terminal-only: the inferred agent activity (working | awaiting_input |
+  // gate | completed). Absent from a producer built before status inference.
+  status?: string;
+  // terminal-only: the agent kind label ("claude", "codex"), absent for a
+  // terminal nobody declared to be an agent.
+  agent?: string;
   // exec-only: the source behind the run, its captured streams, and its status
   source?: string;
   stdout?: string;

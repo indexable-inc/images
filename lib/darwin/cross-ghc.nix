@@ -7,20 +7,19 @@
 # standalone clang lane as the target toolchain and llvm binutils as the
 # Mach-O tool set. The boot compiler, alex/happy and the pure hadrian
 # bootstrap all come from the pinned nixpkgs, so the compiler version always
-# matches `haskellPackages.ghc` and the only novel inputs are the in-tree
-# patches under ./cross-ghc-patches (host-vs-target confusions in the aarch64
-# NCG, plus Cabal's `osx` OS spelling).
+# matches `haskellPackages.ghc`. The source view carries the aarch64 host versus
+# target fixes, Cabal's `osx` OS spelling, and the cross-compatible libffi bundle
+# as ordinary commits.
 #
 # The stage1 compiler this produces runs on the Linux build host and emits
 # Mach-O arm64; ld64.lld ad-hoc signs output, so binaries run on Apple
 # Silicon unmodified. Template Haskell splice *execution* is impossible in
 # this lane (no Darwin iserv on Linux); the nom closure needs none (#3606).
-{
+{ghcSrc}: {
   autoconf,
   automake,
   haskellPackages,
   lib,
-  libffi,
   lld,
   llvmPackages,
   # `pkgs.path`: the pinned nixpkgs source tree, for its pure hadrian
@@ -28,6 +27,8 @@
   nixpkgsPath,
   perl,
   python3,
+  ripgrep,
+  runCommand,
   stdenv,
   target,
   # ix.appleSdkToolchain instance for `target`; supplies the standalone
@@ -44,7 +45,7 @@
       bootPkgs = haskellPackages;
       inherit lib;
     } {
-      ghcSrc = bootGhc.src;
+      inherit ghcSrc;
       ghcVersion = bootGhc.version;
     };
 
@@ -53,27 +54,20 @@
 in
   assert lib.assertMsg (target == "aarch64-apple-darwin")
   "ix.crossGhc: only aarch64-apple-darwin is wired up (the NCG patch set is aarch64-specific)";
+  assert lib.assertMsg (bootGhc.version == "9.10.3")
+  "ix.crossGhc: nixpkgs moved GHC from 9.10.3 to ${bootGhc.version}; update index/views/ghc-cross and its build metadata together";
     stdenv.mkDerivation {
       pname = "ghc-cross-${target}";
-      inherit (bootGhc) src version;
+      inherit (bootGhc) version;
+      src = ghcSrc;
 
-      patches = [
-        # Reasons live as headers inside each patch file.
-        ./cross-ghc-patches/aarch64-ncg-target-reloc-syntax.patch
-        ./cross-ghc-patches/aarch64-x18-always-reserved.patch
-        ./cross-ghc-patches/convert-os-cabal-osx-spelling.patch
-      ];
+      # A cross GHC cannot run its own testsuite on the build host; the
+      # cross-darwin-ghc-smoke check exercises the result instead.
+      doCheck = false;
 
       postPatch = ''
         # shell
         patchShebangs --build .
-        # GHC 9.10 bundles libffi 3.4.6, whose aarch64 sysv.S places
-        # cfi_startproc before the function label; on Mach-O the label starts
-        # a new atom and LLVM's assembler rejects the cross-atom CFI
-        # advance_loc. libffi >= 3.5 reordered label-first (and is what GHC
-        # master bundles), so swap in the pinned nixpkgs libffi source.
-        rm libffi-tarballs/libffi-*.tar.gz
-        cp ${libffi.src} "libffi-tarballs/libffi-${libffi.version}.tar.gz"
       '';
 
       strictDeps = true;
@@ -158,6 +152,27 @@ in
         inherit target toolchain;
         # `<triple>-ghc` etc.; consumers build tool paths with this.
         targetPrefix = "${target}-";
+        tests.rtsCabalOsxConfigure =
+          runCommand "ghc-rts-cabal-osx-configure" {
+            nativeBuildInputs = [
+              ripgrep
+              stdenv.cc
+            ];
+          } ''
+            mkdir build
+            cd build
+            CC=cc ${ghcSrc}/rts/configure \
+              --build=x86_64-unknown-linux \
+              --host=aarch64-unknown-osx
+
+            cat > expected-host-os <<'EOF'
+            #define darwin_HOST_OS  1
+            #define HOST_OS  "darwin"
+            EOF
+            rg '^#define (darwin_HOST_OS|HOST_OS)' ghcplatform.h.top > actual-host-os
+            diff -u expected-host-os actual-host-os
+            touch "$out"
+          '';
       };
 
       meta = {

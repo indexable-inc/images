@@ -1,0 +1,13 @@
+cabal-version: 3.8
+name: p
+version: 0.1
+build-type: Simple
+
+test-suite p1
+  main-is:  P1.hs
+  build-depends: base
+
+test-suite p2
+  type: exitcode-stdio-1.0
+  main-is:  P2.hs
+  build-depends: base

@@ -19,7 +19,10 @@ fn diagnostic(source: &str) -> ix2nix::Error {
 #[test]
 fn parameter_annotation_lowers_to_arg_check() {
     let out = nix("export default (a: string) => a;\n");
-    assert_eq!(out, "a: __ixTy.arg \"1:17 argument `a`\" __ixTy.string a a\n");
+    assert_eq!(
+        out,
+        "a: __ixTy.arg \"1:17 argument `a`\" __ixTy.string a a\n"
+    );
 }
 
 #[test]
@@ -40,7 +43,10 @@ fn as_cast_checks_but_as_unknown_erases() {
 fn type_alias_becomes_a_checker_binding() {
     let out = nix("type P = \"a\" | \"b\";\nexport default (x: P) => x;\n");
     assert!(out.contains("ty'P = __ixTy.enum [ \"a\" \"b\" ]"), "{out}");
-    assert!(out.contains("__ixTy.arg \"2:17 argument `x`\" ty'P x"), "{out}");
+    assert!(
+        out.contains("__ixTy.arg \"2:17 argument `x`\" ty'P x"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -68,7 +74,10 @@ fn destructured_annotation_must_be_inline_and_bound() {
     // only that it is wrong leaves them guessing.
     assert!(error.message().contains("(params: Params)"), "{error}");
     let error = diagnostic("export default ({ a }: { b: int }) => a;\n");
-    assert!(error.message().contains("not bound by the pattern"), "{error}");
+    assert!(
+        error.message().contains("not bound by the pattern"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -98,7 +107,12 @@ fn bool_and_boolean_both_lower() {
 #[test]
 fn lib_types_refinements_lower_to_runtime_checkers() {
     let out = nix("export default (p: port, d: path, s: nonEmptyStr, u: u32) => p;\n");
-    for checker in ["__ixTy.port", "__ixTy.path", "__ixTy.nonEmptyStr", "__ixTy.u32"] {
+    for checker in [
+        "__ixTy.port",
+        "__ixTy.path",
+        "__ixTy.nonEmptyStr",
+        "__ixTy.u32",
+    ] {
         assert!(out.contains(checker), "{checker} missing in {out}");
     }
 }
@@ -109,7 +123,10 @@ fn destructured_optional_must_pair_with_a_nix_default() {
     // annotation says -- and the generated schema, reading only the `?`, would
     // have told a caller it was optional.
     let error = diagnostic("export default ({ a, b }: { a: int; b?: string }) => a;\n");
-    assert!(error.message().contains("needs a default in the pattern"), "{error}");
+    assert!(
+        error.message().contains("needs a default in the pattern"),
+        "{error}"
+    );
     // The mirror spelling lies the other way: the default binds and then fails
     // the field's own check.
     let error = diagnostic("export default ({ a, b = null }: { a: int; b: string }) => a;\n");
@@ -160,16 +177,25 @@ fn readonly_property_signatures_are_rejected() {
     // No Nix meaning, and accepting it silently shifted a destructured field's
     // reported column from the key to the `readonly` keyword.
     let error = diagnostic("export default ({ a }: { readonly a: int }) => a;\n");
-    assert!(error.message().contains("`readonly` has no Nix equivalent"), "{error}");
+    assert!(
+        error.message().contains("`readonly` has no Nix equivalent"),
+        "{error}"
+    );
 }
 
 #[test]
 fn float_literals_that_overflow_to_infinity_are_rejected() {
     // `inf.0` is not Nix syntax, and it serializes into a JSON Schema as
     // `null`. One check at the parse covers both positions.
-    for source in ["export default 1e999;\n", "export default (x: 1e999 | 2) => x;\n"] {
+    for source in [
+        "export default 1e999;\n",
+        "export default (x: 1e999 | 2) => x;\n",
+    ] {
         let error = diagnostic(source);
-        assert!(error.message().contains("overflows to infinity"), "{source}: {error}");
+        assert!(
+            error.message().contains("overflows to infinity"),
+            "{source}: {error}"
+        );
     }
 }
 
@@ -195,7 +221,10 @@ fn each_parameter_checks_inside_its_own_lambda() {
 #[test]
 fn const_annotations_lower_to_ret_checks() {
     let out = nix("const x: int = 1;\nexport default x;\n");
-    assert!(out.contains("x = __ixTy.ret \"1:8 const `x`\" __ixTy.int 1"), "{out}");
+    assert!(
+        out.contains("x = __ixTy.ret \"1:8 const `x`\" __ixTy.int 1"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -213,7 +242,10 @@ fn optional_parameters_are_rejected_even_unannotated() {
 #[test]
 fn call_site_type_arguments_are_rejected() {
     let error = diagnostic("export default f<int>(2);\n");
-    assert!(error.message().contains("call-site type arguments"), "{error}");
+    assert!(
+        error.message().contains("call-site type arguments"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -277,7 +309,10 @@ fn non_const_top_level_statement_is_rejected() {
 
 #[test]
 fn top_level_consts_become_a_let() {
-    assert_eq!(nix("const a = 1;\nexport default a;\n"), "let\n  a = 1;\nin\na\n");
+    assert_eq!(
+        nix("const a = 1;\nexport default a;\n"),
+        "let\n  a = 1;\nin\na\n"
+    );
 }
 
 #[test]
@@ -340,9 +375,15 @@ fn undefined_is_rejected_with_null_fix() {
 #[test]
 fn nix_keyword_identifiers_are_rejected() {
     let error = diagnostic("export default then;");
-    assert!(error.message().contains("not a valid Nix identifier"), "{error}");
+    assert!(
+        error.message().contains("not a valid Nix identifier"),
+        "{error}"
+    );
     let error = diagnostic("export default $money;");
-    assert!(error.message().contains("not a valid Nix identifier"), "{error}");
+    assert!(
+        error.message().contains("not a valid Nix identifier"),
+        "{error}"
+    );
 }
 
 // --- functions ---

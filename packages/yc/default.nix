@@ -91,6 +91,9 @@ in
     inherit version src;
     dontUnpack = true;
 
+    # Upstream release binary; nothing to test at build time.
+    doCheck = false;
+
     # The Linux binaries are dynamically linked against a generic libc; patch their
     # interpreter to the Nix store. Darwin binaries need no patching.
     nativeBuildInputs = lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;

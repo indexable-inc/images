@@ -136,20 +136,25 @@ fn read_loop(read: Box<dyn Read + Send>) {
 fn write_loop(write: Box<dyn Write + Send>, rx: SendQueueReceiver) {
     let mut writer = BufWriter::new(write);
     while let Some(msg) = rx.recv() {
-        if write_msg(&mut writer, &msg).is_err() {
-            return;
-        }
-        // Drain whatever queued while we were writing so one flush covers the
-        // burst (a frame's worth of input events, acks, configures).
-        while let Some(next) = rx.try_recv() {
-            if write_msg(&mut writer, &next).is_err() {
-                return;
-            }
-        }
-        if writer.flush().is_err() {
+        if write_burst(&mut writer, &rx, msg).is_err() {
             return;
         }
     }
+}
+
+/// Write `first` plus whatever queued while we were writing, then flush, so
+/// one flush covers the burst (a frame's worth of input events, acks,
+/// configures).
+fn write_burst(
+    writer: &mut impl Write,
+    rx: &SendQueueReceiver,
+    first: ToGuest,
+) -> Result<(), WireError> {
+    write_msg(writer, &first)?;
+    while let Some(next) = rx.try_recv() {
+        write_msg(writer, &next)?;
+    }
+    Ok(writer.flush()?)
 }
 
 fn post(event: Event) {

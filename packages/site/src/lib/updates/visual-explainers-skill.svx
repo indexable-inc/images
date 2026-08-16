@@ -5,7 +5,7 @@ title: "`visual-explainers` skill: interactive, explanation-first visualization"
 tags: [agent, skills]
 links:
   - label: visual-explainers skill
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/visual-explainers/SKILL.md
+    href: https://github.com/indexable-inc/index/blob/main/skills/visual-explainers/SKILL.md
   - label: "#3660"
     href: https://github.com/indexable-inc/index/issues/3660
 ---

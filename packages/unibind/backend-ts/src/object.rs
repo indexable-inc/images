@@ -41,6 +41,11 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
         .map(|ctor| render_constructor(ctor, object, ctx))
         .transpose()?;
 
+    let mut associated = Vec::new();
+    for function in &object.associated {
+        associated.push(render_associated(function, object, ctx)?);
+    }
+
     let mut methods = Vec::new();
     for method in &object.methods {
         // The resource surface owns `close`: the generic path would render
@@ -77,6 +82,7 @@ pub fn render_object(object: &ir::Object, ctx: &TyCtx<'_>) -> Result<TokenStream
         #[::napi_derive::napi]
         impl #handle {
             #constructor
+            #(#associated)*
             #(#methods)*
             #resource_surface
         }
@@ -108,6 +114,41 @@ fn render_method(
         },
     };
     render_callable(method, ctx, &wrapper, &call, Callee::Method { object })
+}
+
+/// A `#[unibind(associated)]` function, rendered as a napi static.
+///
+/// The shared callable path does the work, including the error mapping,
+/// the `Result` shape, and wrapping an object return into its handle; only
+/// the call target differs from a method's, since there is no instance to
+/// call through.
+fn render_associated(
+    factory: &ir::Function,
+    object: &ir::Object,
+    ctx: &TyCtx<'_>,
+) -> Result<TokenStream, RenderError> {
+    let user = ctx.user;
+    let object_ident = name_ident(&object.name)?;
+    let factory_name = name_ident(&factory.name)?;
+    let wrapper = wrapper_parts(factory, ctx)?;
+    let exprs = &wrapper.exprs;
+    // No receiver to clone into the future: an associated function owns
+    // its arguments and the object does not exist yet.
+    let call = match factory.asyncness {
+        ir::Asyncness::Sync => quote!(#user::#object_ident::#factory_name(#(#exprs),*)),
+        ir::Asyncness::Async => quote! {
+            async move { #user::#object_ident::#factory_name(#(#exprs),*).await }
+        },
+    };
+    render_callable(
+        factory,
+        ctx,
+        &wrapper,
+        &call,
+        Callee::Associated {
+            object: &object.name,
+        },
+    )
 }
 
 /// The napi constructor over the user's `#[unibind(constructor)]` function.

@@ -43,7 +43,7 @@ import contextlib
 import os
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from html import escape as _html_escape
@@ -567,6 +567,12 @@ class Tui:
         cols: int | None = None,
         scrollback_lines: int | None = None,
         env: dict[str, str] | None = None,
+        agent_kind: str | None = None,
+        busy_marker: str | None = None,
+        gate_markers: Sequence[str] | None = None,
+        session_log: str | None = None,
+        agent_cwd: str | None = None,
+        agent_log_root: str | None = None,
     ) -> None:
         # `size=(rows, cols)` mirrors the `.size` accessor (a `Size` is also a
         # (rows, cols) iterable), so the shape can be read and set with the same
@@ -578,7 +584,25 @@ class Tui:
                 raise TypeError("pass either size=(rows, cols) or rows=/cols=, not both")
             rows, cols = size
         _ensure_autopublish()
-        self._raw = _RawTuiInstance(command, list(args), rows, cols, scrollback_lines, env)
+        # The `agent_*` group declares this terminal as an agent on the
+        # dashboard: `agent_kind` labels it, `busy_marker`/`gate_markers` feed
+        # status inference, `session_log` ("claude"/"codex") tails the agent's
+        # own session file into a transcript pane, keyed by `agent_cwd` (and
+        # `agent_log_root` when the child gets a redirected config dir).
+        self._raw = _RawTuiInstance(
+            command,
+            list(args),
+            rows,
+            cols,
+            scrollback_lines,
+            env,
+            agent_kind,
+            busy_marker,
+            list(gate_markers) if gate_markers is not None else None,
+            session_log,
+            agent_cwd,
+            agent_log_root,
+        )
 
     @classmethod
     def _from_raw(cls, raw: _RawTuiInstance) -> Self:

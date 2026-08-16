@@ -86,6 +86,7 @@ defmodule IxMcp.Jobs.Job do
     :session,
     :topic,
     :watch,
+    :workspace,
     :buffer,
     :counter,
     :io_proxy,
@@ -116,6 +117,7 @@ defmodule IxMcp.Jobs.Job do
           session: String.t() | nil,
           topic: String.t() | nil,
           watch: boolean(),
+          workspace: String.t(),
           buffer: :ets.tid() | nil,
           counter: :counters.counters_ref() | nil,
           io_proxy: pid() | nil,
@@ -177,6 +179,16 @@ defmodule IxMcp.Jobs.Job do
   @doc "The evaluation process and IO proxy (for tracing from outside)."
   @spec procs(GenServer.server()) :: {pid(), pid()}
   def procs(server), do: GenServer.call(server, :procs)
+
+  @doc """
+  Attach a one-line diagnostic to a running job, shown with the job's
+  diagnostics in its reply and summary. How `Cmd` reports a subprocess's
+  nonzero exit: `status: done` says the cell returned, and this line is
+  what keeps an inner command's failure from looking green (the report's
+  silent `rg` exit 2). A cast, so a note can never block or crash a cell.
+  """
+  @spec note(GenServer.server(), String.t()) :: :ok
+  def note(server, message) when is_binary(message), do: GenServer.cast(server, {:note, message})
 
   @doc """
   Wait until the job finishes, up to `timeout_ms`. Returns the final summary
@@ -354,6 +366,7 @@ defmodule IxMcp.Jobs.Job do
       intent: Keyword.get(opts, :intent),
       action_id: Keyword.get(opts, :action_id),
       watch: Keyword.get(opts, :watch, false),
+      workspace: Keyword.get(opts, :workspace) || Workspace.main(),
       session_id: session_id,
       session: session.name,
       topic: session.topic,
@@ -395,6 +408,7 @@ defmodule IxMcp.Jobs.Job do
     job = self()
     code = state.code
     id = state.id
+    workspace = state.workspace
     writer = writer(state)
 
     {eval_pid, eval_ref} =
@@ -404,8 +418,11 @@ defmodule IxMcp.Jobs.Job do
         # a quiet wrapper through this, #3934). Process dictionary, not a
         # closure: the id must be readable from inside the running cell.
         Process.put(:ix_job_id, id)
+        # ... and which workspace it targets, so Workspace/Ix calls made
+        # from inside the cell default to the cell's own REPL (#3967).
+        Process.put(:ix_workspace, workspace)
 
-        outcome = evaluate(code, writer)
+        outcome = evaluate(code, writer, workspace)
 
         send(job, {:eval_finished, self(), outcome})
       end)
@@ -426,7 +443,8 @@ defmodule IxMcp.Jobs.Job do
       job: state.id,
       intent: state.intent,
       session_id: state.session_id,
-      session: state.session
+      session: state.session,
+      started_at: state.started_at
     }
   end
 
@@ -435,20 +453,22 @@ defmodule IxMcp.Jobs.Job do
   # once after, about the variables this cell took from somebody else. The
   # first has to come before evaluation, because the cell holding a clobbered
   # value is usually the cell that raises, and a raising cell never merges.
-  defp evaluate(code, writer) do
+  defp evaluate(code, writer, workspace) do
     case Evaluator.scan(code) do
       {:ok, quoted, refs} ->
         # One visit to the workspace, so the warnings describe exactly the
         # values this cell was handed rather than whatever a concurrent cell
         # merged between the snapshot and the question.
-        {binding, env, before} = Workspace.begin_cell(refs, writer)
+        {binding, env, before} = Workspace.begin_cell(refs, writer, workspace)
+        hints = Map.get(refs, :hints, [])
 
         case Evaluator.eval_quoted(quoted, binding, env) do
           {:ok, value, binding, env, diags} ->
-            {:done, value, before ++ diags ++ Workspace.merge(binding, env, refs, writer)}
+            {:done, value,
+             hints ++ before ++ diags ++ Workspace.merge(binding, env, refs, writer, workspace)}
 
           {:runtime_error, formatted, diags} ->
-            {:failed, formatted, before ++ diags}
+            {:failed, formatted, hints ++ before ++ diags}
         end
 
       {:parse_error, message} ->
@@ -501,6 +521,21 @@ defmodule IxMcp.Jobs.Job do
   end
 
   def handle_cast(:quiet, state), do: {:noreply, %{state | quiet: true}}
+
+  # Notes append in arrival order, capped so a loop of failing subprocesses
+  # cannot grow the summary without bound; the snapshot republish makes a
+  # running job's notes visible to Jobs.get right away.
+  @max_notes 20
+  def handle_cast({:note, message}, %{status: :running} = state) do
+    if length(state.diagnostics) < @max_notes do
+      state = %{state | diagnostics: state.diagnostics ++ [message]}
+      {:noreply, publish_snapshot(state)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_cast({:note, _message}, state), do: {:noreply, state}
 
   @impl true
   def handle_info({:eval_finished, pid, outcome}, %{eval_pid: pid} = state) do
@@ -614,7 +649,9 @@ defmodule IxMcp.Jobs.Job do
       state
       | status: status,
         result: result,
-        diagnostics: diags,
+        # Notes attached while the cell ran (Cmd exit reports) precede the
+        # evaluator's own diagnostics; finishing must merge, not clobber.
+        diagnostics: state.diagnostics ++ diags,
         finished_mono: System.monotonic_time(:millisecond)
     }
 

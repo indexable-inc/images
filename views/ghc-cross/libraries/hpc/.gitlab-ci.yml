@@ -1,0 +1,11 @@
+variables:
+  # Commit of ghc/ci-images repository from which to pull Docker images
+  DOCKER_REV: "853f348f9caf38b08740b280296fbd34e09abb3a"
+
+build:
+  image: "registry.gitlab.haskell.org/ghc/ci-images/x86_64-linux-fedora33:$DOCKER_REV"
+  tags:
+    - "x86_64-linux"
+  script:
+    - "cabal build -w $GHC lib:hpc"
+    - "cabal test -w $GHC"

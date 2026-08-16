@@ -42,12 +42,10 @@ from this one bump.
 That bump also carries git 2.54.0 to 2.55.0, and there is no rev in between:
 nixpkgs bumped git on 2026-07-11, four days before the libffi fix merged, so
 any tree with the fix already has the new git. `packages/git` asserts that
-nixpkgs' git version matches the `git-src` pin, so the single ix patch (linked
+nixpkgs' git version matches the Git view, so the single ix patch (linked
 worktrees borrowing the common-dir submodule object store, #3610) is rebased
 onto the `v2.55.0` tag. The rebase lands on a new branch,
-`ix-patched-v2.55.0`, instead of rewriting `ix-patched`. `git-src` is pinned by
-rev, and force-pushing the old branch would eventually let GitHub collect the
-old commit and break every index rev still pointing at it.
+`ix-patched-v2.55.0`, instead of rewriting `ix-patched`.
 
 The bump has one more piece of fallout. msgpack moved to 1.2.1, and mitmproxy
 12.2.3 declares `msgpack>=1.0.0,<=1.1.2`, so `pythonRuntimeDepsCheckHook`

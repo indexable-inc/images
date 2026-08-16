@@ -32,8 +32,7 @@
   # sibling is out of scope, so the wrapper bakes no MCP server there (the same
   # fallback the claude-code wrapper uses).
   repoPackages ? {},
-  # The indexable-inc/codex jj megamerge (codex-src input): upstream plus the
-  # "route channel notifications into chat" patch commit.
+  # The Codex view carries the "route channel notifications into chat" patch.
   codexSrc ? ix.codexSrc,
   # Rule names dropped from the default house prompt. Only affects the computed
   # `systemPrompt` default below; ignored when `systemPrompt` is passed
@@ -207,7 +206,7 @@
   # codex-rs built on the per-unit Rust DAG (see ./rust.nix). This is the deep
   # change: instead of `rustPlatform.buildRustPackage`, codex now rides the same
   # cargoUnit machinery as index's own crates, so it cross-compiles to Darwin
-  # from Linux and a codex-src bump only rebuilds the crates that changed.
+  # from Linux and a Codex view update only rebuilds the crates that changed.
   codexRust = import ./rust.nix {
     inherit lib pkgs ix codexSrc binName;
     target = crossTarget;

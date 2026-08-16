@@ -20,7 +20,7 @@
 // when done per scrub tick on the main thread. The worker owns the recording's
 // document and posts back the pane snapshot at each requested moment, so the main
 // thread only renders.
-import { LoroDoc } from 'https://esm.sh/loro-crdt@1';
+import { LoroDoc, LoroText } from 'https://esm.sh/loro-crdt@1';
 import type { DocJson, JsonValue } from 'https://esm.sh/loro-crdt@1';
 import { paneScope, SCOPE_SEP } from './scope.ts';
 import type { PaneRecord } from './types';
@@ -474,6 +474,35 @@ export function setInput(key: string, value: JsonValue): boolean {
   }
   // Show it immediately rather than waiting for the server to echo it back: the
   // edit is already in our document, and the echo is idempotent.
+  rebuildLiveBounds();
+  renderLive();
+  return true;
+}
+
+// Replace a shared note draft's text (an agent compose box) with `value`.
+//
+// The draft is a mergeable LoroText the hub declares beside every terminal pane
+// (`<scope>\x1f<pane>\x1fcompose`), so the container is already in the snapshot
+// this browser imported. `update` diffs the current content against `value` into
+// minimal insert/delete ops, which is what lets two people type into one draft
+// at once and both sentences survive. The commit travels the same /apply path as
+// `setInput`, 409-rebase included.
+//
+// Refuses (false) when the field was never declared or is not a text container:
+// creating it here would race a concurrent viewer's creation and drop whatever
+// they had typed (see Hub::declare_note), so an undeclared draft stays read-only.
+export function setNoteText(key: string, value: string): boolean {
+  if (!canEdit()) return false;
+  const container = doc.getMap('inputs').get(key);
+  if (!(container instanceof LoroText)) return false;
+  try {
+    registerSelf();
+    container.update(value);
+    doc.commit({ timestamp: Date.now(), origin: 'viewer' });
+  } catch (err) {
+    writes.error = `could not update the draft: ${String(err)}`;
+    return false;
+  }
   rebuildLiveBounds();
   renderLive();
   return true;

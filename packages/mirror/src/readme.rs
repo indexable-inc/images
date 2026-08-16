@@ -1,5 +1,5 @@
 //! The mirror README, composed to the house README style
-//! (packages/agent/skills/creating-a-readme/SKILL.md, the single source of
+//! (skills/creating-a-readme/SKILL.md, the single source of
 //! truth the skill says generators conform to). A package with its own
 //! README leads the mirror with it verbatim -- the skill already makes it
 //! open with an `assets/hero.svg` and a hook question, and the skill's

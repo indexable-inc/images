@@ -270,6 +270,9 @@ mod tests {
     #[test]
     fn long_chains_report_what_was_cut() {
         let path: Vec<String> = (0..10).map(|n| n.to_string()).collect();
-        assert_eq!(elide_chain(&path), "0 <- 1 <- 2 <- ... 4 more ... <- 7 <- 8 <- 9");
+        assert_eq!(
+            elide_chain(&path),
+            "0 <- 1 <- 2 <- ... 4 more ... <- 7 <- 8 <- 9"
+        );
     }
 }

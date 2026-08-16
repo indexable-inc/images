@@ -62,11 +62,25 @@ vim.opt.cmdheight = 0  -- Hide command line when not in use
 
 -- Footer: single global statusline (one bar at the very bottom, not per-split)
 vim.opt.laststatus = 3
--- Buffer path for the statusline, starship-style. fs_realpath follows symlinks
--- so a linked file (e.g. an out-of-store config symlink) shows its real target;
--- inside a git repo we print <repo dir name>/<path from repo root>, else the
--- home-relative path (":~"). Cached per buffer so the upward ".git" search does
--- not run on every statusline redraw. Empty name for unnamed/special buffers.
+-- Buffer path for the statusline, starship-style, as a symlink CHAIN: the
+-- opened path, then every readlink hop, ending at the real source -- e.g.
+-- `~/.claude/CLAUDE.md -> store:hm-files/.claude/CLAUDE.md -> nix/claude/CLAUDE.md`
+-- rather than silently jumping to the resolved target (what a bare
+-- fs_realpath shows). Only file-level hops are walked; directory symlinks in
+-- the path resolve inside the final fs_realpath as before. The final hop keeps
+-- the old formatting: <repo dir name>/<path from repo root> inside a git repo,
+-- else home-relative (":~"). Nix store hops compress their hash to keep the
+-- bar readable. Cached per buffer so the hop walk and the upward ".git"
+-- search do not run on every statusline redraw. Empty name for
+-- unnamed/special buffers.
+local function statusline_hop(path)
+  local rest = path:match("^/nix/store/[a-z0-9]+%-(.+)$")
+  if rest then
+    return "store:" .. rest
+  end
+  return vim.fn.fnamemodify(path, ":~")
+end
+
 function _G.statusline_path()
   local buf = vim.api.nvim_get_current_buf()
   local name = vim.api.nvim_buf_get_name(buf)
@@ -77,15 +91,38 @@ function _G.statusline_path()
   if cache and cache.name == name then
     return cache.text
   end
-  local abs = vim.fn.fnamemodify(name, ":p")
-  local real = vim.fs.normalize((vim.uv or vim.loop).fs_realpath(abs) or abs)
-  local git = vim.fs.find(".git", {upward = true, path = vim.fs.dirname(real)})[1]
+  local uv = vim.uv or vim.loop
+  local abs = vim.fs.normalize(vim.fn.fnamemodify(name, ":p"))
+  -- Walk the file's own symlink hops one readlink at a time (capped, in case
+  -- of a link cycle); fs_realpath would skip straight to the end.
+  local hops = {}
+  local cur = abs
+  for _ = 1, 8 do
+    local target = uv.fs_readlink(cur)
+    if not target then
+      break
+    end
+    if not target:match("^/") then
+      target = vim.fs.dirname(cur) .. "/" .. target
+    end
+    hops[#hops + 1] = cur
+    cur = vim.fs.normalize(vim.fn.simplify(target))
+  end
+  local real = vim.fs.normalize(uv.fs_realpath(cur) or cur)
+  local git = vim.fs.find({".git", ".jj"}, {upward = true, path = vim.fs.dirname(real)})[1]
   local text
   if git then
     local root = vim.fs.dirname(git)
     text = vim.fs.basename(root) .. real:sub(#root + 1)
   else
     text = vim.fn.fnamemodify(real, ":~")
+  end
+  if #hops > 0 then
+    local parts = {}
+    for i, hop in ipairs(hops) do
+      parts[i] = statusline_hop(hop)
+    end
+    text = table.concat(parts, " → ") .. " → " .. text
   end
   vim.b[buf].statusline_path = {name = name, text = text}
   return text

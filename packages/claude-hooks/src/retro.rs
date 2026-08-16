@@ -53,7 +53,7 @@ const DEFAULT_MIN_TOOL_CALLS: usize = 8;
 /// kernels.
 const DEFAULT_MCP_URL: &str = "https://mcp.ix.dev/mcp";
 
-/// Base64 characters per `python_exec` upload call (~1.5 MiB of gzipped
+/// Base64 characters per `python_exec` upload call (~1.5 `MiB` of gzipped
 /// transcript each). The fronting nginx has no body cap (`client_max_body_size
 /// 0`), so this only keeps a single JSON-RPC message comfortably sized for the
 /// transport and kernel; tens-of-MB transcripts arrive as a handful of chunks.
@@ -497,7 +497,7 @@ print("session-retro dispatched: blob=" + _hash + " task=" + _s.task + " gz_byte
 /// The prompt the retro agent receives: fetch the shipped transcript
 /// from weave CAS, then run the `session-retro` skill's walk/route/dedupe/file
 /// loop over it. Adapted from the old in-session block reason plus
-/// `packages/agent/skills/session-retro/SKILL.md`.
+/// `skills/session-retro/SKILL.md`.
 fn retro_prompt(session: &str, cwd: &str, host: &str) -> String {
     let prefix = session_prefix(session);
     format!(

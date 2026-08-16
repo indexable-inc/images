@@ -7,7 +7,7 @@
 # of codex must fetch the Darwin archives. Versions track codex's Cargo.lock:
 #   - `v8` crate 149.2.0            -> denoland/rusty_v8 release v149.2.0
 #   - webrtc-sys-build WEBRTC_TAG   -> livekit/rust-sdks release webrtc-24f6822-2
-# Refresh both alongside a codex-src bump: read the new v8 version out of
+# Refresh both alongside a Codex view update: read the new v8 version out of
 # codex-rs/Cargo.lock and the new WEBRTC_TAG out of
 # webrtc-sys/build/src/lib.rs, then re-run `nix store prefetch-file` on the URLs.
 {
@@ -62,7 +62,7 @@ in {
   # under `build_dir()` (an ancestor of OUT_DIR) which does not cross cargoUnit's
   # per-unit boundary, so the compile cannot see it. rustc needs the file named
   # exactly `librusty_v8.a` to satisfy `-l static=rusty_v8`.
-  librustyV8Lib = runCommand "librusty_v8-${rustyV8Version}-${targetSystem}-lib" {} ''
+  librustyV8Lib = runCommand "librusty_v8-${rustyV8Version}-${targetSystem}-lib" {__structuredAttrs = true;} ''
     mkdir -p "$out"
     gzip -dc ${rustyV8Archive} > "$out/librusty_v8.a"
   '';

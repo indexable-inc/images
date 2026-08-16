@@ -358,7 +358,9 @@ mod tests {
     // merely mentions a path is not, and neither is an empty value.
     #[test]
     fn carrier_test_separates_pointers_from_scripts() {
-        assert!(is_carrier_value(&format!("/nix/store/{HASH}-libghostty-vt/lib")));
+        assert!(is_carrier_value(&format!(
+            "/nix/store/{HASH}-libghostty-vt/lib"
+        )));
         assert!(is_carrier_value(&format!(
             "/nix/store/{HASH}-zlib/lib/pkgconfig:/nix/store/{HASH}-openssl/lib/pkgconfig"
         )));

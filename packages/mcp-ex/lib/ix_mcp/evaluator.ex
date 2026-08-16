@@ -18,8 +18,11 @@ defmodule IxMcp.Evaluator do
   @type ok :: {:ok, term(), Code.binding(), Macro.Env.t(), [String.t()]}
   @type failure :: {:runtime_error, String.t(), [String.t()]}
 
-  @typedoc "The names a cell mentions, read off its AST before it runs."
-  @type refs :: %{vars: [atom()], modules: [module()]}
+  @typedoc """
+  The names a cell mentions, read off its AST before it runs, plus scan-time
+  hints about constructs that parse fine and misbehave at runtime.
+  """
+  @type refs :: %{vars: [atom()], modules: [module()], hints: [String.t()]}
 
   @doc """
   Parse a cell and read off what it mentions: the workspace variables it
@@ -33,9 +36,46 @@ defmodule IxMcp.Evaluator do
     # `file:` matches what `IxMcp.Workspace` puts in the eval env, which is
     # what error positions are reported against.
     case Code.string_to_quoted(code, file: "cell", columns: true, emit_warnings: false) do
-      {:ok, quoted} -> {:ok, quoted, read_refs(quoted)}
-      {:error, {meta, message, token}} -> {:parse_error, format_parse_error(meta, message, token)}
+      {:ok, quoted} ->
+        refs = quoted |> read_refs() |> Map.put(:hints, hints(quoted))
+        {:ok, quoted, refs}
+
+      {:error, {meta, message, token}} ->
+        {:parse_error, format_parse_error(meta, message, token)}
     end
+  end
+
+  # Scan-time footgun hints: things that parse and then quietly do the wrong
+  # thing at runtime. Today exactly one: a quoted phrase inside `~w`, which
+  # splits on whitespace regardless -- `~w(rg "two words")` hands rg the
+  # arguments `"two` and `words"`, and the report's silent exit-2 searches
+  # all came from that shape.
+  defp hints(quoted) do
+    {_quoted, hints} =
+      Macro.prewalk(quoted, [], fn
+        {sigil, meta, [{:<<>>, _bin_meta, parts}, _mods]} = node, acc
+        when sigil in [:sigil_w, :sigil_W] ->
+          static = for part <- parts, is_binary(part), into: "", do: part
+
+          if String.contains?(static, "\"") or String.contains?(static, "'") do
+            line = Keyword.get(meta, :line, "?")
+
+            {node,
+             [
+               "hint: cell:#{line}: ~w splits on whitespace only, so a quoted phrase " <>
+                 "inside it becomes separate words with stray quote characters. Pass " <>
+                 "arguments with spaces as a plain list of strings instead."
+               | acc
+             ]}
+          else
+            {node, acc}
+          end
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    Enum.reverse(hints)
   end
 
   # One walk, three questions: which names does the cell mention, which of

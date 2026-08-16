@@ -18,6 +18,9 @@ in {
       ixCli
       loomPackage.passthru.claudeCode
       loomPackage.passthru.mcp
+      # The `loom` wrapper carries its own pinned zellij; this one is for
+      # operating the session from outside it (list-sessions, kill-session).
+      pkgs.zellij
     ];
     variables = {
       IS_SANDBOX = "1";
@@ -25,7 +28,13 @@ in {
       LOOM_IX_BIN = lib.getExe ixCli;
       LOOM_CLAUDE_BIN = lib.getExe' loomPackage "loom-claude";
       LOOM_REMOTE_CLAUDE_BIN = lib.getExe' loomPackage "loom-remote-claude";
-      LOOM_PREFLIGHT = "test -s /var/lib/loom/anthropic_api_key";
+      # Gate the fork child on the interior actually being ready: the key
+      # file materialized AND the claude launcher resolvable. A freshly
+      # restored fork hydrates its store lazily, and a child launched before
+      # loom-claude resolves dies as an opaque exit (measured live in the
+      # template e2e: PATH lookup failed seconds after restore, then
+      # succeeded).
+      LOOM_PREFLIGHT = "test -s /var/lib/loom/anthropic_api_key && command -v loom-claude";
       LOOM_CLAUDE_ARGS = "--dangerously-skip-permissions";
     };
   };

@@ -97,13 +97,37 @@
     };
   }
   {
+    indexLivesInIx = {
+      topics = ["workflow"];
+      text = ''
+        Every change to index is a change to `ix:index/`: an ordinary commit
+        in an ordinary ix pull request, needing no second repository. Never
+        open one against the public `indexable-inc/index` repository. That
+        tree is downstream, so work landed there reaches neither ix nor the
+        fleet, and it is overwritten whenever the projection is published.
+        This covers all of index and not only the agent prompt: modules,
+        packages, lib, examples, skills and tests. Check which repository a
+        checkout is before the first edit, because the two trees hold the
+        same paths and an editor cannot tell you which one you opened: `git
+        remote get-url origin` ending in `/ix` is the one to work in.
+      '';
+      reason = ''
+        2026-08-03: the two trees had diverged in both directions and nobody
+        knew. 39 files differed, three paths existed only in the public repo
+        and four only in ix, and 100 pull requests were open against the
+        public one while the publisher that was meant to make it a projection
+        had failed every run since it was added, 37 failures and zero
+        successes. The differing set included this file, so which rules a
+        session loaded depended on which tree it came from. ENG-12167.
+      '';
+    };
+  }
+  {
     promptSource = {
       text = ''
         These rules live at `index/packages/agent-prompt/rules.nix` in the ix
-        repo. Edit them there; rendered copies are overwritten. The public
-        `indexable-inc/index` repository is a read-only projection of
-        `ix:index/`, so editing its copy of this file looks like it worked
-        and is erased by the next publish.
+        repo. Edit them there; rendered copies are overwritten, so editing
+        one looks like it worked and is erased by the next build.
       '';
       reason = ''
         Agents edited rendered copies that the next build overwrote. Restated
@@ -161,8 +185,26 @@
     worktree = {
       topics = ["workflow"];
       text = ''
-        Never work in a primary checkout: every change, however small or
-        urgent, is made on a dedicated `git worktree` branch at
+        Never work in a primary checkout: isolate every change, however small
+        or urgent, before the first edit. A jj repo uses a dedicated `jj
+        workspace` for every change, created before editing at
+        `/tmp/worktree/<org>/<repo>/<name>`: `jj workspace add --name <name>
+        --revision main --sparse-patterns empty <dir>`, then `jj sparse set
+        --add <path>` for each path the change touches. Verify its `jj root`.
+        Start from nothing and add, rather than materializing the tree and
+        excluding: ix tracks file pairs that differ only in case, so a full
+        checkout on a mac is permanently dirty, and an exclude written to skip
+        those paths matches at every depth and skips more than it names. Add
+        `flake.nix` too. Sparse patterns cost a gate nothing, because nix reads
+        the flake source from the jj commit rather than from your files, but it
+        looks in the working copy to find the flake root and stops when that
+        file is absent. Never use `git worktree` for a jj repo: it bypasses
+        jj's workspace record and shared operation log, and every `just` recipe
+        reads the checkout from `jj root`, so all of them fail there before
+        they run.
+
+        A git repo that jj does not manage uses a dedicated `git worktree`
+        branch at
         `/tmp/worktree/<org>/<repo>/<name>` (org and repo from the
         checkout's origin URL), created before the first edit, and root
         and branch get verified before committing. A shared checkout is
@@ -175,15 +217,19 @@
         ordinary ix commit needing no second repository. An isolation worktree belongs to the session's repo,
         not necessarily your task's: verify its origin, and when the task
         targets another repo, add your own worktree of the target
-        checkout. A repo with no colocated `.git` fails
+        checkout. A non-jj repo with no colocated `.git` fails
         `git worktree add`. Keep the path and change the command:
         `git clone --filter=blob:none <origin>
-        /tmp/worktree/<org>/<repo>/<name>`. Use a `jj workspace` instead
-        when you need the repo's own operation log. Never point
-        `git worktree add` at `.jj/repo/store/git`: that store is jj's,
-        other sessions read it, and a worktree writes metadata into it.
+        /tmp/worktree/<org>/<repo>/<name>`.
         Unmerged branches are unfinished for reasons you may not see; check for
         open PRs touching a file before nontrivial edits.
+
+        An isolated checkout has one writer. Until its owner has reported and
+        been acknowledged, nobody else runs a command there that changes
+        repository state. An abort restores the ref as it stood when its own
+        operation began, so cleaning up your stuck rebase can undo someone
+        else's finished one, and a resumed agent reopens the checkout you
+        thought was free.
       '';
       reason = ''
         Primary-checkout edits collided with concurrent work; parallel
@@ -200,17 +246,73 @@
         2026-07-29 at the operator's request: "the first action in any
         repo" reads as a rule about entering a repo, so an agent already
         mid-session asked for a one-line fix does not see itself covered.
-        No size or urgency exemption exists. Extended on 2026-07-31 for
-        repos with no colocated git: the shared checkouts of nix, ix and
-        index all carry `.jj` and no `.git`, so `git worktree add` fails
-        outright in each, and three agents in one session invented three
-        different substitutes for it. The filtered clone is named because
-        it is the one that keeps the standardized path. Worktreeing
-        `.jj/repo/store/git` is called out separately because it looks
-        like the obvious way through and is not: writing into a store
-        other sessions read is the same class of mistake as deleting a
-        shared checkout's `.git`, which destroyed another agent's
-        worktrees the same day (ENG-11676).
+        No size or urgency exemption exists. Revised on 2026-08-03 for ix's
+        jj views migration at the operator's direction: a filtered Git clone
+        loses the repo's jj operation history and view workspace state. A
+        dedicated jj workspace keeps those owners intact. Task-scoped sparse
+        patterns stop a one-file change from materializing unrelated view
+        trees. Pointing `git worktree add` at `.jj/repo/store/git` is still
+        forbidden: it writes Git metadata into a store other sessions read,
+        the same class of mistake that destroyed another agent's worktrees
+        in ENG-11676.
+
+        The creation recipe and the empty-then-add default were added
+        2026-08-05, once the migration had landed and the alternatives had
+        each failed. `justfile` sets `repo_root` from `jj root` at parse
+        time, so in a git worktree of ix every recipe dies before running,
+        including `just lint`, which needs no jj at all (ENG-12483).
+        Materialize-then-exclude fails at both halves: `views/linux` on main
+        holds 13 file pairs differing only in case, which a mac filesystem
+        cannot represent, so every full mac checkout of main is dirty and
+        cannot rebase (ENG-12453); and the
+        `git sparse-checkout set --no-cone "/*" "!views/"` written to dodge
+        that also skipped `index/views/**`, because the pattern is unanchored
+        and matches at every depth. That surfaced much later as a nix error
+        naming a view path nobody had touched (ENG-12467). `flake.nix`
+        is named because the empty default has exactly one sharp edge,
+        measured the same day: nix resolves the flake to
+        `jj+file://<workspace>?rev=<working copy commit>` and that source
+        carries the whole tree, colliding view files and all, so a gate run
+        from a one-file workspace covers everything CI covers. Discovery is
+        the exception, and it reads the working copy, so `nix eval
+        .#ci-lint-checks.drvPath` in a workspace with nothing materialized
+        fails with `could not find a flake.nix file` (ENG-12500).
+
+        One writer per checkout comes from two silent incidents in one night,
+        both with clean status and no error: a parent's `rebase --abort` in a
+        live subagent's worktree reset the branch past a rebase the subagent
+        had completed, and a second writer's soft reset re-staged another
+        agent's commit into a merge no gate had ever run on (ENG-12466). The
+        handover condition is a report plus an acknowledgment because the
+        first agent was resumed after reporting and kept working.
+      '';
+    };
+  }
+  {
+    jjViews = {
+      text = ''
+        A jj repo can publish subtrees as repositories of their own via
+        `jj views` (status | fetch | push): the derived history's hashes
+        match the published repo's, so `jj views push -r <rev>` sends an
+        ordinary fast-forwardable branch there and prints the PR URL.
+        `jj git push` moves only the containing repo's bookmarks, so
+        landing subtree work upstream takes both, in that order. When
+        `jj views status` says diverged, run `jj views fetch`, integrate
+        with `jj new <main> <lifted-tip>` as a two-parent merge, and
+        never rebase the lifted commits: their hashes are already
+        published. The push refuses an undescribed tip, so describe the
+        revision (or push `-r` a described one) rather than reaching for
+        `--allow-empty-description`. `~/.config/nix` on the operator's
+        machines is such a repo, with `ix/` as a view of ix; work landed
+        only to its own origin has not reached ix until the view is
+        pushed and merged.
+      '';
+      reason = ''
+        On 2026-08-02 a session landed a day of claude-html work to the
+        personal repo's main and reported it done; the ix view was six
+        commits behind until the operator pointed at `jj views push`.
+        The tool's own hints cover the mechanics, but only once you know
+        it exists and that `jj git push` alone is half a landing.
       '';
     };
   }
@@ -222,11 +324,36 @@
         strongest source, and read live state over SSH (fleet on Tailscale,
         `~/.ssh/config`). The terminal artifact is the outcome, not a
         wrapper's zero exit. A "never happens" claim needs a fresh check
-        covering its window.
+        covering its window. A brief describing the repository is evidence
+        about when it was written and not about now, so re-read it at the tip
+        before acting, however recently it arrived and whoever relayed it.
       '';
       reason = ''
         Confident answers went wrong against the live system; outcomes were
         inferred from green intermediate stages (index#3164 merge).
+
+        The brief clause was added 2026-08-02, after four briefs in one night
+        described repository state that had changed under them. Each was
+        accurate when its author wrote it. Two of four corrections to the
+        clippy guidance were already on main, and both halves of a ticket
+        about the ix gate were already fixed. Re-reading at the tip cost about
+        two minutes apiece and avoided four pull requests that would have
+        looked like work and duplicated it.
+
+        Written as a property of the claim rather than as care about the
+        relay, because nobody was careless: a repository taking merges at
+        thirty an hour invalidates an accurate report faster than it can be
+        acted on, and no amount of diligence at the writing end fixes that.
+        The check belongs where the acting happens.
+
+        The instance worth remembering is not a duplicate. A ticket said ix
+        CI had no concurrency group; it has had one since ix#8883, in all 25
+        workflows, and the main half is deliberate rather than absent, since
+        main pushes group per commit and never cancel because main's own run
+        is the only union gate. Acting on the brief would have meant adding
+        a guard that was already there. Reading the tip instead surfaced that
+        the guard was being cancelled by hand, which is the opposite finding
+        and the useful one.
       '';
     };
   }
@@ -386,6 +513,38 @@
         of those produced a clean, plausible number. What separates them from
         a real result is whether the output says what it read, which costs
         one `echo`.
+      '';
+    };
+  }
+  {
+    statedInvariants = {
+      topics = ["verification"];
+      text = ''
+        A stated invariant holds only while the mechanism that maintains it
+        runs, so check that mechanism's last success rather than its
+        existence. A mirror is a projection only while its publisher lands, a
+        gitlink matches upstream only while the bumper runs, and a generated
+        file matches its source only while the diff that compares them is
+        required rather than merely present. Read this from the producer,
+        because a maintainer job that fails is invisible from the consuming
+        side by construction: the consumer sees a successful fetch of an old
+        revision and nothing else. Then say how stale the thing is in units
+        the reader can act on, naming the last success and what has landed
+        since.
+      '';
+      reason = ''
+        2026-08-03: this file says `indexable-inc/index` is a read-only
+        projection of `ix:index/`, and it has never been one. The publisher
+        that would make it so was added 2026-07-30 and has failed every run
+        since, 37 failures and zero successes, because
+        `vars.MIRROR_APP_CLIENT_ID` resolves to nothing and the step has no
+        fallback. Both copies went on taking changes: 39 files differ, three
+        paths exist only in the public repo and four only in ix, and the
+        differing set includes this file, so which rules a session loads
+        depended on which tree it came from. The only signal a consumer ever
+        got was `nix flake update index` returning the same revision twenty
+        minutes after the option being looked for had merged. ENG-12166,
+        ENG-12167.
       '';
     };
   }
@@ -613,6 +772,39 @@
     };
   }
   {
+    devNodeClaim = {
+      topics = ["workflow"];
+      text = ''
+        A dev node is claimed in writing before use and released in writing
+        when you stop, and you never deploy to one you did not claim. Idle
+        does not mean free: check occupancy by the `dev-nodes` skill before
+        taking a box, because every individual signal has been seen
+        reporting free on one that was not, and someone announcing their own
+        release is not the same statement as the box being unoccupied.
+      '';
+      reason = ''
+        Moved into the repository 2026-08-02 at the user's decision
+        (ENG-11862). The convention had lived only in a personal
+        instructions file: no diff, no review, no history, on the rule with
+        the highest cost of failure we have. It was corrected three times in
+        two hours that night, each correction a real measurement, and three
+        sessions were left holding three versions with one current.
+
+        Split deliberately. The volatile half is the occupancy signals,
+        which are empirical and decay, and it lives in the `dev-nodes` skill
+        where an amendment is one commit to one document. The stable half is
+        this: claim, release, and do not read idle as free. That has not
+        changed and has to be present at the moment somebody reaches for a
+        box, which is what an always-on rule is for and what a skill nobody
+        loaded is not.
+
+        The cost being avoided is concrete: a dev box that looked unused got
+        a second deploy on top of an in-flight experiment, and on 2026-08-02
+        two boxes would have been taken on a quiet signal alone.
+      '';
+    };
+  }
+  {
     claimBeforeDispatch = {
       topics = ["workflow"];
       text = ''
@@ -626,6 +818,31 @@
         Every listening session dispatched its own fixer: ix#8156 got two
         full parallel implementations, ix#8155 two live branches, each
         duplicate ~30 min of builds and ~140k tokens (index#4002).
+      '';
+    };
+  }
+  {
+    approvalsBindToState = {
+      topics = ["workflow" "verification"];
+      text = ''
+        An approval is granted against a state and expires with that state.
+        Before acting on one you received earlier (a claim on a machine,
+        clearance to merge, authorization to clean something up), re-verify
+        the state it was granted against. That the approval was sound when
+        it was given is a reason to re-check and not a reason to proceed,
+        because the grant is the last moment anyone looked.
+      '';
+      reason = ''
+        2026-08-05, from a session that acted on an approval whose subject
+        had moved under it. The neighbours cover the same shape for
+        descriptions and not for permissions: validate says a brief is
+        evidence about when it was written, and devNodeClaim says idle does
+        not mean free. An approval reads as durable in a way a description
+        does not, so holding one talks an agent out of the check it would
+        have run without it. That is backwards wherever the state belongs to
+        other people, which is every case worth naming here, since a claim,
+        a merge clearance and a cleanup authorization all describe a world
+        others keep changing.
       '';
     };
   }
@@ -733,99 +950,45 @@
     vendoredForks = {
       topics = ["architecture"];
       text = ''
-        Key upstreams are vendored forks (`lib/fork-packages.nix`). A bug in
-        vendored code is ours: patch at the vendor point, never work around
-        downstream. The fix reaches consumers only after their lock bump.
-        That list records what has been patched, not what may be. A defect
+        Key upstreams are jj views in this repository. A bug in view code is
+        ours: fix it in the view, never work around it downstream. A defect
         in a compiler, an evaluator, a C library or a kernel is fixed at the
-        layer that owns it, and vendoring something new is an ordinary edit
-        rather than an escalation; its procedure is in that file's header.
+        layer that owns it. Adding a view is an ordinary edit.
         A workaround downstream leaves the defect in place for every other
         consumer and hides the evidence that it exists, so where one is
         right today, name the real fix in the same breath and file it.
       '';
       reason = ''
-        Diagnosis ended at "upstream's problem" inside our own forks
-        (index#3559, #3566). Authoring mechanics live in fork-patch memories
-        and the `forkBranches` rule (index#3594); the `rebase-patches`
-        driver that used to own them went with the megamerge migration.
-        An agent worked around nix dropping a fast-failing derivation's log
-        under a parallel build by moving its check to eval time and filing,
-        though nix is vendored here: the fork list read as a boundary on
-        what may be patched rather than a record of what has been
-        (ENG-11198, 2026-07-29).
+        Diagnosis ended at "upstream's problem" inside code this repository
+        ships (index#3559, #3566, ENG-11198).
       '';
     };
   }
   {
-    forkBranches = {
+    viewWorkflow = {
       topics = ["architecture" "workflow"];
       text = ''
-        Fork repos keep one branch: `ix-patched` carries ordinary git
-        commits on the upstream base, one commit per patch, and the flake
-        input pins its tip. Use plain git. Do not reintroduce a jj
-        megamerge, a patch dependency graph, or an in-repo patch series;
-        put each change in a commit of its own on top.
-        The branch is published history: flake.locks pin its revs, so it
-        is never rewritten. When upstream moves, merge upstream into
-        `ix-patched` as an ordinary two-parent merge, resolving conflicts
-        in the merge commit; never rebase onto the new base. The delta
-        over upstream stays readable as
-        `git log upstream/main..ix-patched --first-parent --no-merges`.
-        Both flags are load-bearing, and dropping either is how
-        `upstream-sync` came to read three revisions of one home-manager
-        patch as three patches and die on their duplicate subject:
-        `--no-merges` drops the merge commits, and `--first-parent` drops
-        what those merges brought in, which includes any earlier revision of
-        a patch merged back to keep a rev some flake.lock pinned reachable.
-        A force-push is therefore exceptional, and one still needs a
-        permanent `refs/pins/<date>-<sha12>` ref for every rev a
-        flake.lock has ever pinned, in the same operation, or GitHub
-        garbage-collects it and every consumer that pinned it breaks.
-        Read a conflicted fork PR as a moved tree rather than a real
-        conflict: merge the branch forward, then run the tests again,
-        because the tree under them changed. A PR against the branch
-        inherits the branch's state, so a red check can predate the
-        branch; a sibling PR against another base separates the two.
-        The branch is pushed directly, so make sure CI triggers on push to
-        it and not only on pull requests, or nothing gates the thing every
-        consumer builds from.
+        Forks live as jj views, listed in the root `.jj-views.toml` and
+        checked in under `views/`, `vendored/` and `index/views/`. Make every
+        change in a jj workspace. Use `jj views status` to inspect drift,
+        `jj views anchor` to move the upstream base, and `jj views patches` to
+        inspect the local commits. The manifest owns each view's path, remote,
+        branch, upstream and anchor. Move a view's anchor in the same commit
+        that moves its tree: nothing checks that the checked tree is the tree
+        the anchor names, and the anchor is the only remaining record of which
+        upstream revision a build came from. Do not add a flake input, patch
+        directory or second metadata registry for a view.
       '';
       reason = ''
-        Measured on 2026-07-29, on the nix fork: 109 megamerge commits in 8
-        days, all on one upstream base, `2c6d06e9387c` dated 2026-05-04. The
-        structure exists to make an upstream rebase cheap by localising
-        conflicts per patch, and that operation had been performed zero
-        times while the series was rewritten about fourteen times a day. It
-        also assumes the patches are separable because they are candidates
-        for upstreaming; most of ours are fork-specific or AI-authored and
-        are never going upstream, so the separability buys nothing.
-        What it cost, all first-hand the same day. Nothing gated
-        `ix-patched`, because `ci.yml` triggered on push to `master`, a
-        branch the fork does not have, and jj pushed the bookmark directly
-        so it was never a PR head; two defects live in the pinned rev sat
-        undiscovered behind that, one losing build logs on Linux and one
-        hanging builds on macOS. A re-flattened PR went DIRTY the moment the
-        bookmark moved. One clone held three different current states at
-        once, so a measurement ran against the wrong tree until another
-        agent caught it. A patch got re-fixed because the checkout was seven
-        patches behind and ordinary git tooling could not say so.
-        The migration itself was verified rather than trusted: 54 patches
-        replayed onto the base, three that jj had represented as merge
-        commits reconciled in one commit because their content cannot be
-        replayed as independent cherry-picks, and the result confirmed by
-        comparing tree object ids, not by reading a diff. The tree was
-        byte-identical to the megamerge it replaced.
-        Amended 2026-07-31 from rebase-onto to merge-forward, at the
-        user's direction. The linear-series rule mandated rewriting a
-        branch flake.locks pin, and the pin-ref machinery, the
-        coordination around every force-push, and one retirement that
-        stranded index's pin on a deleted line all existed to compensate
-        for those rewrites. It also contradicted the derived-views
-        doctrine, which forbids rebasing published history. Merge-forward
-        keeps SHAs stable and deletes the compensation layer; the only
-        loss is a linear log, and the --first-parent --no-merges delta
-        answers the same question.
+        ENG-12220 moved maintained fork histories and their consumers into one
+        repository operation log. A second registry had already drifted from
+        the commits it described.
+
+        The anchor clause is ENG-12482: a view source is a plain path with no
+        `rev`, so the patched Nix version string silently lost its fork
+        revision after the migration, and the anchor became the only place
+        that revision is written down. Nothing compares the anchor to the
+        tree, so a drifted one is invisible.
       '';
     };
   }
@@ -833,12 +996,31 @@
     machineReadable = {
       topics = ["tooling"];
       text = ''
-        Prefer structured output (`--json`) to scraping prose. A tool of ours
-        that lacks it gets the interface fixed, not worked around.
+        Prefer structured output (`--json`) to scraping prose, one
+        self-contained record per finding. A tool of ours that lacks it gets
+        the interface fixed, not worked around. Rendered text is a sequence
+        of records only while one writer owns the stream, and a per-process
+        or per-derivation prefix on each line looks like that guarantee
+        without being it: the prefix labels a record, and nothing labels the
+        stream. Two writers interleave, so an extractor that pairs a line
+        with the nearest following line pairs lines from different runs.
+        Where only rendered text exists, compare multisets of messages, and
+        never tuples built out of adjacency.
       '';
       reason = ''
         Prose scraping broke on format changes when a structured mode
         existed.
+
+        The single-writer clause was added 2026-08-05, after a comparison of
+        two trees reported differences that were not there. The log carried a
+        per-derivation prefix on every line, which reads as a promise that
+        one derivation's lines are contiguous and is not one, so two
+        concurrent builds interleaved and every (message, nearest following
+        location) pair came out wrong. Comparing message multisets over the
+        same logs agreed. Stated as a property rather than as a note about
+        that tool: any shared stream can be interleaved by a second writer,
+        so adjacency in rendered text is never evidence of adjacency in the
+        producer, and one record per finding is what removes the question.
       '';
     };
   }
@@ -881,6 +1063,32 @@
         as Chrome being unable to load `http://` at all and spent 45 minutes
         building a `file://` workaround; killing the daemon made the same
         URL load in 2.3s (ix#9022, upstream agent-browser#1621).
+      '';
+    };
+  }
+  {
+    namedSkillFirst = {
+      topics = ["tooling"];
+      text = ''
+        Before choosing an approach for a task that names a specific product,
+        app or service, check the available-skills listing for that name. A
+        matching skill's instructions displace your default tool choice. A
+        general capability guide can drive that product and still does not
+        displace the product-named skill: the specific one wins.
+      '';
+      reason = ''
+        2026-08-05: a session asked to send a Beeper message matched the task
+        to browser automation and drove the desktop app's window by Chrome
+        DevTools Protocol for several minutes. A `beeper` skill sat in that
+        session's own skills listing the whole time, and its first line says
+        to use the local Beeper API on localhost and never drive the app's
+        window. The generic route was slower, raced the user's window focus,
+        and ended in quitting and relaunching the user's app.
+
+        Stated as a lookup on the product name rather than as "load the right
+        skill", because the listing was rendered and the matching entry was in
+        it. What was missing is a step that reads the listing at the moment an
+        approach gets chosen, and an order between two guides that both apply.
       '';
     };
   }
@@ -943,24 +1151,68 @@
     };
   }
   {
+    commitDiscipline = {
+      topics = ["tooling"];
+      text = ''
+        A commit follows a green check; never commit while the
+        verification you started is unread or red, because the sha then
+        claims what the log refutes. In a worktree shared with other
+        agents, git add names explicit paths, never `-A` or `.`: the
+        index is shared state, and a bare commit sweeps a sibling's
+        staged work into a commit whose message describes none of it.
+        Bind each gate to what it ran on: log the commit, its parent,
+        and a content hash of the diff
+        (`git diff HEAD^..HEAD | git hash-object --stdin`) beside every
+        exit code, and check
+        `git merge-base --is-ancestor origin/main HEAD` before reporting
+        a sha. A rebase or a second writer can move the commit out from
+        under a green you already hold.
+      '';
+      reason = ''
+        Both happened on 2026-08-04 in one session: a marker-file commit
+        absorbed a sibling agent's entire 16-file guest-daemon change
+        because the sibling had staged it in the shared index, and a
+        clippy fix was committed while its build check sat at rc=1,
+        which turned out to be a real 9-error compile failure the
+        rebase had introduced.
+
+        The gate binding is ENG-12466. Two lanes arrived at the diff
+        hash independently the same night, and in both it turned a
+        would-have-been-silent reparenting into a failed comparison.
+        `origin/main` moved three times in that session, so every lane
+        rebases and the window is never shut.
+      '';
+    };
+  }
+  {
     subagentTopology = {
       topics = ["tooling"];
       text = ''
         Prefer delegating to subagents over doing everything inline. The
-        topology is a star: the spawner is the hub, subagents are leaves.
-        A leaf that hits a problem outside its charter (a different bug,
-        a design flaw, a blocking dependency) does not fix it and does
-        not spawn its own coordinator; it sends the problem to its parent
-        (SendMessage when available, otherwise its final report), and the
-        parent decides: fix, file, or dispatch another subagent. Subagents
-        never coordinate with each other directly; cross-agent traffic
-        goes through the parent.
+        topology is a tree of depth two: the spawner is the root, a
+        subagent may spawn its own subagents, and those grandchildren
+        are leaves that spawn nothing. A subagent that fans out stays
+        the coordinator of what it spawned: it waits for its children
+        and folds their results into its own report, so its parent still
+        sees one report. An agent that hits a problem outside its
+        charter (a different bug, a design flaw, a blocking dependency)
+        does not fix it and does not spawn a coordinator for it; it
+        sends the problem up (SendMessage when available, otherwise its
+        final report), and the level above decides: fix, file, or
+        dispatch another subagent. Agents never coordinate with
+        siblings directly; cross-agent traffic goes through the common
+        ancestor.
       '';
       reason = ''
-        Requested 2026-07-23: the spawner is the one context holding the
-        whole picture, so cross-cutting problems route through it. States
-        topology and escalation only; delegation mechanics stay in
-        backgroundSubagents and subagentToolSubset.
+        Requested 2026-07-23 (star), widened to depth two 2026-08-04:
+        a subagent given a decomposable charter (audit N files, verify
+        M findings) was blocked from fanning out, so wide work
+        serialized inside one context. Depth two keeps the property the
+        star bought, one context holding each subtree's whole picture,
+        while allowing one level of fan-out. Leaves stay leaves so the
+        recursion cannot run away. States topology and escalation only;
+        delegation mechanics stay in backgroundSubagents and
+        subagentToolSubset.
       '';
     };
   }
@@ -1000,11 +1252,54 @@
         State expected duration past a minute; background what can overlap.
         Quiet past budget is dead only after liveness checks. Watchers fire
         on every terminal state and carry deadlines; verify one is alive
-        before ending a turn to wait.
+        before ending a turn to wait. Detect a detached process's death by
+        its process id, never by matching text in the process table: a
+        watcher whose own command line carries its subject's name matches
+        itself, so that check cannot fail. A shell subshell reads its own id
+        from `$BASHPID`, where `$$` gives the parent's and turns the parent
+        exiting into a death the subject never had. A death alarm is a
+        hypothesis, so confirm it against the process before acting on it.
+        Read a verdict by searching the whole artifact and never a
+        fixed-size window: a window that stops before the result line
+        manufactures an absence, and an absence reads as a stall.
       '';
       reason = ''
         Foreground waits idled sessions; success-only watchers left a green
         PR unmerged 45 minutes (#1941).
+
+        The mechanics were added 2026-08-05 from a session that hit all
+        three. Each is structural rather than a slip. A watcher is named
+        after what it watches, so its own command line matches the pattern
+        it greps the process table for, and the liveness test it implements
+        is one that no state of the world can falsify. `$$` in a subshell is
+        documented to be the parent's id, so a watcher recording it reports
+        a death as soon as the parent returns, before the subject has done
+        anything. And a head-window read of a log answers about the window,
+        not about the run, so the missing verdict line is indistinguishable
+        from a run that never reached one. A waiter that acts on any of the
+        three is acting on a hypothesis it never checked against the
+        process.
+      '';
+    };
+  }
+  {
+    resumeVisibly = {
+      topics = ["comms" "agency"];
+      text = ''
+        To whoever is waiting on you, silence while you work and silence
+        while you are stuck look the same. So resuming after a gap takes two
+        things: the action, and one line to your coordinator saying you
+        resumed and on what. An action discoverable only by re-reading your
+        workspace is indistinguishable from the stall it fixes.
+      '';
+      reason = ''
+        2026-08-05: an agent recovered from a stall and went back to work
+        without saying so, and the coordinator went on reading the silence
+        it had been reading before. The recovery was real and left its only
+        trace in a workspace nobody was watching. A coordinator observes
+        messages, not workspaces, so working and stalled emit the same thing
+        unless the working one speaks; the line is what makes the two
+        distinguishable, and no amount of progress substitutes for it.
       '';
     };
   }
@@ -1043,8 +1338,12 @@
         there is nothing to wait for and `--auto` merges on the spot,
         silently, exit 0. Then do not arm: say the repo has no gate and
         leave the merge to a human. A red on main that your merge caused is
-        fixed forward immediately. Then delete worktree and branch and
-        announce in one line:
+        fixed forward immediately. Then take the isolated checkout down. In a
+        jj repo that is `jj workspace forget <name>`, removing the directory
+        yourself, and `jj abandon` for any change that did not land, because
+        forgetting a workspace stops tracking it and leaves both its files
+        and its commits where they were. In a git repo it is the worktree and
+        its branch. Announce in one line:
         `🚀 Pushed to main: [<summary>](<commit url>)` or
         `🌸 PR merged: [<title or number>](<url>) in <duration>`.
       '';
@@ -1103,6 +1402,14 @@
         fork, the clippy fork and upstream jj. Weaken this rule and the
         500-file revert that was closed safely, for the sole reason that
         nobody had armed it, merges instead.
+
+        The cleanup step named only a git worktree until 2026-08-05, by which
+        point a jj workspace was the default isolation for ix, so the step
+        read as belonging to somebody else's setup. `jj workspace forget` is
+        spelled out with what follows it because the command does less than
+        its name suggests: `--help` says the workspace "will not be touched
+        on disk", and the commits stay reachable too, so a session that runs
+        it and stops there has cleaned up nothing.
       '';
     };
   }
@@ -1419,12 +1726,38 @@
         is fundamentally right. On finding a fundamentally better design,
         even a major one, surface it unprompted and put the choice to the
         user with the AskUserQuestion tool, costs
-        named; this early, the rework is usually wanted.
+        named; this early, the rework is usually wanted. The better shape is
+        often smaller than the patch, though, so it wants noticing rather
+        than escalating: prefer the form that makes a class impossible over
+        the one that removes the instance. The tell is maintenance you are
+        about to sign up for. An exception list, a retry loop, a check keyed
+        on how something is spelled: each has to be kept correct as the world
+        moves, and each usually has a version with nothing to keep.
       '';
       reason = ''
         A jobs-registry death (index#3839) drew a three-patch fix on a shape
         the author thought wrong; the ledger redesign surfaced only when the
         user asked "would you design it differently".
+
+        The smaller-shape clause was added 2026-08-02, after the pattern
+        recurred three times in one session across unrelated domains. A
+        dev-node occupancy check was going to list `~/.ssh/agent` as an
+        exclusion, because a recursive scan of home directories is disturbed
+        by the ssh connection doing the scanning; reading only the top-level
+        mtimes is immune by construction and needs no list, measured as
+        `/home/andrew` staying at 2026-07-30T23:21 while the connection
+        stamped `~/.ssh/agent/` at 03:31:30. A retry loop stood in for a
+        signal the kernel already raises. A lint tested the syntactic shape
+        of an operand where testing its type held on every path.
+
+        Stated as a preference with a tell rather than as a prohibition,
+        because each of those patches was a correct fix for the instance in
+        front of its author and none looked wrong at the time. What they
+        share is not an error but a commitment: something a later change can
+        silently invalidate, with no failure at the moment it does. An
+        exclusion list is the clearest case, since the entry that goes
+        missing produces no error at all, only a check that quietly stops
+        discriminating.
       '';
     };
   }

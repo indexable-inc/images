@@ -71,7 +71,7 @@ let
         plugins;
     };
   in
-    pkgs.runCommand "claude-marketplace-${name}" {} ''
+    pkgs.runCommand "claude-marketplace-${name}" {__structuredAttrs = true;} ''
       mkdir -p "$out/.claude-plugin" "$out/plugins"
       cp ${manifest} "$out/.claude-plugin/marketplace.json"
       ${lib.concatStringsSep "\n" (lib.mapAttrsToList (

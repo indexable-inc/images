@@ -1,0 +1,27 @@
+---
+title: Debounce vs throttle
+note: first draft, debounce only
+---
+
+# Debounce vs throttle
+
+Both tame a noisy event stream, but they answer different questions.
+Debounce answers "has the user stopped?"; it waits for a quiet gap
+before firing.
+
+```ts
+function debounce<A extends unknown[]>(
+  fn: (...args: A) => void,
+  waitMs: number
+): (...args: A) => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), waitMs);
+  };
+}
+```
+
+Every call resets the timer, so `fn` runs once, `waitMs` after the
+last call. A search box uses this: no request per keystroke, one
+request when typing pauses.

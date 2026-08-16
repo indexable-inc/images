@@ -1,0 +1,4 @@
+# cabal check
+The following errors will cause portability problems on other environments:
+Error: [repo-relative-dir] The 'subdir' field of a source-repository must be a relative path.
+Error: Hackage would reject this package.

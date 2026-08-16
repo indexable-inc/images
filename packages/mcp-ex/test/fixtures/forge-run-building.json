@@ -1,0 +1,33 @@
+{
+  "run_id": "5a5b5c5d5e5f-1786546900000",
+  "repo": "fixture-repo",
+  "change_id": "1122334455667788990011223344556f",
+  "commit_id": "5a5b5c5d5e5f0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "target_bookmark": "main",
+  "status": "building",
+  "started_at_ms": 1786546900000,
+  "updated_at_ms": 1786546940000,
+  "materialize": {
+    "files_total": 172519,
+    "files_done": 172519,
+    "seconds": 8.185446444
+  },
+  "nix": {
+    "drvs_total": 0,
+    "drvs_done": 0,
+    "drvs_failed": 0,
+    "building": [],
+    "recent_done": []
+  },
+  "trigger": {
+    "change_id": "1122334455667788990011223344556f",
+    "description": "fixture: a commit subject that is not a real one\n\nBody text.\n",
+    "author": "Fixture Author",
+    "changed_paths": [
+      "fixture/one.ex",
+      "fixture/two.ex"
+    ],
+    "invalidation": "fixture"
+  },
+  "log_tail": "==== jj-forge gate v2 (lint + gate-eval + scoped build) ====\nstage incr: start (timeout 7200s)\n"
+}

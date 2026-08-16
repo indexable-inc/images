@@ -25,6 +25,9 @@ in
     };
     dontConfigure = true;
     dontBuild = true;
+    # Raw source copy; the vitest suites deliberately stay app-side in
+    # packages/site (see the fileset above).
+    doCheck = false;
     installPhase = ''
       # shell
       runHook preInstall

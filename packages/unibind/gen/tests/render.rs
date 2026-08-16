@@ -238,6 +238,7 @@ fn sample_objects() -> Vec<ir::Object> {
         docs: docs(&["A stateful handle over one store."]),
         resource: false,
         constructor: Some(constructor),
+        associated: Vec::new(),
         methods: vec![head, watch, cursor],
     };
 
@@ -266,6 +267,7 @@ fn sample_objects() -> Vec<ir::Object> {
         docs: docs(&["A resource over one store; instances come from `Store.cursor`."]),
         resource: true,
         constructor: None,
+        associated: Vec::new(),
         methods: vec![read, close],
     };
 
@@ -361,4 +363,93 @@ fn parse_rejects_a_newer_ir_version() {
         message.contains(&format!("version {}", ir::IR_VERSION)),
         "missing supported version: {message}"
     );
+}
+
+/// One unit enum, plus the two positions a value of it occupies.
+///
+/// Kept off the shared fixture so this states its rule rather than
+/// restating a snapshot: the `.pyi` declares a real `enum.StrEnum` whose
+/// members are the Python convention and whose values are the wire strings
+/// the extension actually hands back.
+fn enum_interface() -> ir::Interface {
+    let severity = ir::Enum {
+        name: "Severity".to_owned(),
+        names: names(None),
+        docs: docs(&["How bad it is."]),
+        variants: vec![
+            ir::EnumVariant {
+                name: "Info".to_owned(),
+                wire: "info".to_owned(),
+                names: names(Some("INFO")),
+                docs: docs(&["Routine."]),
+            },
+            ir::EnumVariant {
+                name: "HardFailure".to_owned(),
+                wire: "hard_failure".to_owned(),
+                names: names(Some("HARD_FAILURE")),
+                docs: Vec::new(),
+            },
+        ],
+    };
+    let finding = ir::Record {
+        name: "Finding".to_owned(),
+        names: names(None),
+        docs: docs(&["One finding."]),
+        fields: vec![field(
+            "severity",
+            None,
+            &["How bad it is."],
+            ir::Type::Named("Severity".to_owned()),
+        )],
+    };
+    let worst = ir::Function {
+        ret: Some(ir::Type::Named("Severity".to_owned())),
+        ..fixtures::function(
+            "worst",
+            names(None),
+            &["The worst severity seen."],
+            vec![arg("floor", ir::Type::Named("Severity".to_owned()), None)],
+        )
+    };
+    ir::Interface {
+        enums: vec![severity],
+        records: vec![finding],
+        functions: vec![worst],
+        errors: Vec::new(),
+        objects: Vec::new(),
+        ..interface()
+    }
+}
+
+#[test]
+fn a_unit_enum_declares_a_str_enum_the_stub_can_be_read_against() {
+    let emitter = PyEmitter {
+        package: "sample".to_owned(),
+        skip_init: false,
+    };
+    let files = emitter.emit(&enum_interface()).expect("emits");
+    let by_path = |path: &str| {
+        files
+            .iter()
+            .find(|file| file.path == path)
+            .unwrap_or_else(|| panic!("no emitted file at {path}"))
+            .contents
+            .clone()
+    };
+    let stub = by_path("sample/_sample.pyi");
+    for declared in [
+        "import enum",
+        "class Severity(enum.StrEnum):",
+        "    INFO = \"info\"",
+        "    HARD_FAILURE = \"hard_failure\"",
+        // Both positions annotate as the class, not as `str`.
+        "def worst(floor: Severity) -> Severity:",
+        "    def severity(self) -> Severity:",
+    ] {
+        assert!(stub.contains(declared), "`{declared}` is missing:\n{stub}");
+    }
+    // The class is a public name of the package, so `from sample import
+    // Severity` works the way every other declared type does.
+    let init = by_path("sample/__init__.py");
+    assert!(init.contains("    Severity,"), "{init}");
 }

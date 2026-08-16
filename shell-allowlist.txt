@@ -63,8 +63,8 @@ packages/claude-code/statusline.nu
 packages/claude-code/update.nix:writeNushellApplication:2
 packages/codex/rust.nix:writeBashApplication:1
 packages/pi-harnesses/omp/smoke/claude-hooks-smoke.sh
-packages/agent/skills/antithesis-setup/assets/antithesis/setup-complete.sh
-packages/agent/skills/antithesis-triage/assets/download-logs.sh
+skills/antithesis/setup/assets/antithesis/setup-complete.sh
+skills/antithesis/triage/assets/download-logs.sh
 packages/system-prompt-eval-viewer/default.nix:writeNushellApplication:1
 packages/hive/default.nix:writeNushellApplication:2
 packages/bbctl/default.nix:writeNushellApplication:1
@@ -97,8 +97,6 @@ packages/nix-output-monitor/default.nix:writeBashApplication:3
 packages/oci-image-builder/bench.sh
 packages/push-cache/default.nix:writeNushellApplication:2
 packages/whence/default.nix:writeNushellApplication:2
-lib/util/fork-dag-check/dag-check.nu
-lib/util/fork-dag-check/dag-lib.nu
 packages/lake/iceberg/fixture/rest-fixture.sh
 packages/source/github/export.sh
 packages/spark-gluten/default.nix:writeNushellApplication:1
@@ -114,6 +112,7 @@ packages/panes/guest-image/default.nix:writeNushellApplication:1
 packages/wasm-bindgen-cli/default.nix:writeNushellApplication:1
 packages/wrangler-cli/default.nix:writeBashApplication:1
 tests/default.nix:writeBashApplication:1
+tests/hardened-state-directory-vm.nix:writeBashApplication:2
 users/andrewgazelka/config/nushell/atuin.nu
 users/andrewgazelka/config/nushell/completions.nu
 users/andrewgazelka/config/nushell/completions/buck2.nu

@@ -1,0 +1,115 @@
+{ lib, ... }:
+let
+  testData = {
+    a = 1;
+    b = "string";
+    c = ''
+      multiline string
+      with special characters:
+      ''\t \" " \
+    '';
+    unsafeString = " \" \n 	 \\";
+    flatItems = [
+      1
+      2
+      "asdf"
+      true
+      null
+    ];
+    bigFlatItems = [
+      23847590283751
+      1.239
+      ''
+        multiline " " "
+        string
+      ''
+      null
+    ];
+    nested = [
+      [
+        1
+        2
+      ]
+      [
+        true
+        false
+      ]
+      [ ]
+      [ null ]
+    ];
+    duplicateChildren._children = [
+      { child = [ 2 ]; }
+      { child = [ 1 ]; }
+    ];
+    _children = [
+      { rootLevelChild = [ 2 ]; }
+      { rootLevelChild = [ 1 ]; }
+    ];
+    extraAttrs = {
+      _args = [
+        2
+        true
+      ];
+      _props = {
+        arg1 = 1;
+        arg2 = false;
+      };
+      nested = {
+        a = 1;
+        b = null;
+      };
+    };
+    argsAndProps = {
+      _args = [
+        1
+        2
+      ];
+      _props = {
+        a = 3;
+      };
+    };
+    listInAttrsInList = {
+      list1 = [
+        { a = 1; }
+        { b = true; }
+        {
+          c = null;
+          d = [ { e = "asdfadfasdfasdf"; } ];
+        }
+      ];
+      list2 = [ { a = 8; } ];
+    };
+  };
+in
+
+{
+  home.file."tokdl-result.txt".text = lib.hm.generators.toKDL { } testData;
+  home.file."tokdl-result-escape-backslashes.txt".text = lib.hm.generators.toKDL {
+    escapeBackslashes = true;
+  } testData;
+  home.file."tokdl-result-escape-tabs.txt".text = lib.hm.generators.toKDL {
+    escapeTabs = true;
+  } testData;
+  home.file."tokdl-result-escape-backslashes-tabs.txt".text = lib.hm.generators.toKDL {
+    escapeBackslashes = true;
+    escapeTabs = true;
+  } testData;
+
+  nmt.script = ''
+    assertFileContent \
+      home-files/tokdl-result.txt \
+      ${./tokdl-result.txt}
+
+    assertFileContent \
+      home-files/tokdl-result-escape-backslashes.txt \
+      ${./tokdl-result-escape-backslashes.txt}
+
+    assertFileContent \
+      home-files/tokdl-result-escape-tabs.txt \
+      ${./tokdl-result-escape-tabs.txt}
+
+    assertFileContent \
+      home-files/tokdl-result-escape-backslashes-tabs.txt \
+      ${./tokdl-result-escape-backslashes-tabs.txt}
+  '';
+}

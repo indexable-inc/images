@@ -1,0 +1,61 @@
+[package]
+name = "jj-vfs"
+description = "Serve a Jujutsu commit tree as a mounted filesystem"
+
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+documentation = { workspace = true }
+readme = { workspace = true }
+
+include = [
+    "/LICENSE",
+    "/src/",
+    "/tests/",
+]
+
+autotests = false
+
+[[test]]
+name = "runner"
+
+[features]
+# NFSv3 works on every platform jj supports and needs no system library, so it
+# is on by default. FUSE is opt-in because it is Linux-only here: the macOS
+# FUSE story is macFUSE, a third-party kernel extension, which is exactly what
+# the NFS transport exists to avoid.
+default = ["nfs"]
+fuse = ["dep:fuser"]
+nfs = ["dep:nfs3_server", "dep:tokio"]
+
+[dependencies]
+clru = { workspace = true }
+futures = { workspace = true }
+jj-lib = { workspace = true }
+libc = { workspace = true }
+nfs3_server = { workspace = true, optional = true }
+pollster = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true }
+
+# fuser links against the FUSE userspace protocol only (default-features = off
+# drops libfuse), but the crate is still Linux-shaped: on macOS it targets
+# macFUSE. Keeping it target-gated means a macOS build of jj never sees it.
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = { workspace = true, optional = true }
+
+[dev-dependencies]
+nfs3_client = { workspace = true, features = ["tokio"] }
+nfs3_types = { workspace = true }
+pollster = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+testutils = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net"] }
+
+[lints]
+workspace = true

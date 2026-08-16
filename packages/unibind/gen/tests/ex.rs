@@ -150,6 +150,7 @@ fn sample_interface() -> ir::Interface {
                 vec![arg("store", ir::Type::String { owned: false }, None)],
             )
         }),
+        associated: Vec::new(),
         methods: vec![ir::Function {
             ret: Some(ir::Type::Int(ir::IntKind::U64)),
             ..function("position", &["The current position."], Vec::new())

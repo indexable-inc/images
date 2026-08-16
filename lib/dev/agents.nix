@@ -31,7 +31,11 @@ turns one off with `ix.dev.agents.codex = false;`.
   # global `environment.variables`) keeps the blast radius to claude and reaches
   # every launch path, including non-login `ssh root@vm -- claude` and `ix
   # shell` exec, which never source the login-shell environment. Named with the
-  # upstream version so `lib.getName` stays "claude-code".
+  # upstream version so `lib.getName` stays "claude-code". The shared base
+  # profile (`modules/profiles/base`) carries a byte-identical copy of this
+  # wrapper so every image ships `claude` next to codex; keep the two
+  # runCommand bodies identical, or an image importing both modules collides
+  # on `bin/claude` instead of deduping to one store path.
   claude-code =
     pkgs.runCommand "claude-code-${pkgs.claude-code.version}"
     {nativeBuildInputs = [pkgs.makeWrapper];}

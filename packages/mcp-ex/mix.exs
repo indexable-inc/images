@@ -48,6 +48,11 @@ defmodule IxMcp.MixProject do
       # semantics. A path dep so the harness rides into the release; the MCP
       # tool surface over it is follow-up work, nothing is exposed yet.
       {:agent_harness, path: "../agent-harness-ex"},
+      # The fleet warning engine and the one copy of the BEAM mesh client
+      # (ENG-12004 adjacent; extracted from this package so test-ide and the
+      # kernel stop keeping parallel copies). Policy stays private: this
+      # package only names a policy module via config, never its contents.
+      {:fleet_mesh, path: "../fleet-mesh"},
       # Static-analysis gate, test-only so the sandboxed check runs `mix credo`
       # offline where the deps FOD provides it.
       {:credo, "~> 1.7", only: :test, runtime: false},

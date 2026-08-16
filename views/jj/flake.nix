@@ -1,0 +1,192 @@
+{
+  description = "Jujutsu VCS, a Git-compatible DVCS that is both simple and powerful";
+
+  inputs = {
+    # For listing and iterating nix systems
+    flake-utils.url = "github:numtide/flake-utils";
+
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
+    # For installing non-standard rustc versions
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    rust-overlay,
+  }: let
+    cleanRevision = self.rev or null;
+    dirtyRevision = self.dirtyRev or null;
+    gitRevision =
+      if cleanRevision != null
+      then cleanRevision
+      else if dirtyRevision != null
+      then dirtyRevision
+      else "dirty";
+  in
+    {
+      overlays.default = final: prev: {
+        jujutsu = final.callPackage ./default.nix {
+          gitRev = gitRevision;
+        };
+      };
+
+      # NixOS module for `jj fs mount`. System-independent, so it lives outside
+      # the per-system block. The VM test imports this rather than standing the
+      # mount up by hand, so what the test exercises is what a host would run.
+      nixosModules.jj-vfs = ./nix/module.nix;
+      nixosModules.default = self.nixosModules.jj-vfs;
+    }
+    // (flake-utils.lib.eachSystem nixpkgs.lib.systems.flakeExposed (system: let
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          rust-overlay.overlays.default
+        ];
+      };
+
+      # When we're running in the shell, we want to use rustc with a bunch
+      # of extra junk to ensure that rust-analyzer works, clippy etc are all
+      # installed.
+      rustShellToolchain = (pkgs.rust-bin.selectLatestNightlyWith (t: t.default)).override {
+        # NOTE (aseipp): explicitly add rust-src to the rustc compiler only in
+        # devShell. this in turn causes a dependency on the rust compiler src,
+        # which bloats the closure size by several GiB. but doing this here and
+        # not by default avoids the default flake install from including that
+        # dependency, so it's worth it
+        #
+        # relevant PR: https://github.com/rust-lang/rust/pull/129687
+        extensions = [
+          "rust-src"
+          "rust-analyzer"
+          "llvm-tools-preview"
+        ];
+      };
+
+      # But, whenever we are running CI builds or checks, we want to use a
+      # smaller closure. This reduces the CI impact on fresh clones/VMs, etc.
+      rustMinimalPlatform = let
+        platform = pkgs.rust-bin.selectLatestNightlyWith (t: t.minimal);
+      in
+        pkgs.makeRustPlatform {
+          rustc = platform;
+          cargo = platform;
+        };
+    in {
+      formatter = pkgs.alejandra;
+
+      packages =
+        {
+          jujutsu = pkgs.callPackage ./default.nix {
+            rustPlatform = rustMinimalPlatform;
+            gitRev = gitRevision;
+          };
+          default = self.packages.${system}.jujutsu;
+        }
+        # The `jj fs mount` VM test. Deliberately a package rather than a check:
+        # `nix flake check` runs on GitHub hosted runners, and those do not
+        # provide KVM. It does not degrade to emulation there, it refuses:
+        #
+        #     error: failed to build attribute 'checks.aarch64-linux.vfs-mount'
+        #            Reason: missing system features
+        #            Required features: {kvm, nixos-test}
+        #            Available features: {benchmark, big-parallel, nixos-test, uid-range}
+        #
+        # So it runs on demand on a host that has KVM, self-hosted or a
+        # workstation: `nix build .#vfs-mount-test`. Linux only, since nixosTest
+        # cannot evaluate on darwin at all.
+        #
+        # Keyed off the system string rather than `pkgs.stdenv`, so that merely
+        # listing the packages does not instantiate nixpkgs for every system.
+        // nixpkgs.lib.optionalAttrs (nixpkgs.lib.hasSuffix "-linux" system) {
+          vfs-mount-test = pkgs.callPackage ./nix/vfs-mount-test.nix {
+            jjVfsModule = self.nixosModules.jj-vfs;
+            # The VM test needs the binary, not jj's own test suite. That suite
+            # is what checks.jujutsu exists for, and running it again inside a
+            # test about mounting adds tens of minutes for no extra coverage.
+            jujutsu = self.packages.${system}.jujutsu.overrideAttrs ({...}: {
+              doCheck = false;
+            });
+          };
+        };
+
+      checks.jujutsu = self.packages.${system}.jujutsu.overrideAttrs ({...}: {
+        # The default Rust infrastructure runs all builds in the release
+        # profile, which is significantly slower. Run this under the `test`
+        # profile instead, which matches all our other CI systems, Cargo, etc.
+        cargoBuildType = "test";
+        cargoCheckType = "test";
+
+        # By default, `flake check` will want to run the install phase, but
+        # because we override the cargoBuildType, it fails to find the proper
+        # binary. But we don't even care about the binary or even the buildPhase
+        # in this case; just remove them both.
+        buildPhase = "true";
+        installPhase = "touch $out";
+      });
+
+      devShells.default = let
+        packages = with pkgs; [
+          rustShellToolchain
+          llvmPackages.llvm # for e.g. llvm-symbolizer
+
+          # Additional tools recommended by contributing.md
+          bacon
+          cargo-deny
+          cargo-insta
+          cargo-nextest
+          cargo-llvm-cov
+
+          # Miscellaneous tools
+          watchman
+
+          # In case you need to run `cargo run --bin gen-protos`
+          protobuf
+
+          # For building the documentation website
+          uv
+          # nixos does not work with uv-installed python
+          python3
+          python3Packages.numpy
+        ];
+
+        # on macOS and Linux, use faster parallel linkers that are much more
+        # efficient than the defaults. these noticeably improve link time even for
+        # medium sized rust projects like jj
+        rustLinkerFlags =
+          if pkgs.stdenv.isLinux
+          then ["-fuse-ld=mold" "-Wl,--compress-debug-sections=zstd"]
+          else if pkgs.stdenv.isDarwin
+          then
+            # on darwin, /usr/bin/ld actually looks at the environment variable
+            # $DEVELOPER_DIR, which is set by the nix stdenv, and if set,
+            # automatically uses it to route the `ld` invocation to the binary
+            # within. in the devShell though, that isn't what we want; it's
+            # functional, but Xcode's linker as of ~v15 (not yet open source)
+            # is ultra-fast and very shiny; it is enabled via -ld_new, and on by
+            # default as of v16+
+            ["--ld-path=$(unset DEVELOPER_DIR; /usr/bin/xcrun --find ld)" "-ld_new"]
+          else [];
+
+        rustLinkFlagsString =
+          pkgs.lib.concatStringsSep " "
+          (pkgs.lib.concatMap (x: ["-C" "link-arg=${x}"]) rustLinkerFlags);
+
+        # The `RUSTFLAGS` environment variable is set in `shellHook` instead of `env`
+        # to allow the `xcrun` command above to be interpreted by the shell.
+        shellHook = ''
+          export RUSTFLAGS="-Zthreads=0 ${rustLinkFlagsString}"
+        '';
+
+        jujutsu = self.packages.${system}.jujutsu;
+      in
+        pkgs.mkShell {
+          name = "jujutsu";
+          packages = packages ++ jujutsu.nativeBuildInputs ++ jujutsu.buildInputs;
+          inherit shellHook;
+        };
+    }));
+}

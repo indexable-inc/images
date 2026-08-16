@@ -33,6 +33,8 @@ defmodule IxMcp.Sessions do
           topic: String.t() | nil,
           started_at: String.t(),
           last_seen_at: String.t() | nil,
+          parent: integer() | nil,
+          spawn_tag: String.t() | nil,
           live: boolean(),
           self: boolean()
         }
@@ -42,6 +44,11 @@ defmodule IxMcp.Sessions do
   first, each flagged `live:` (heartbeat within #{@fresh_within_s}s) and
   `self:`. Rows that never heartbeat are dead history (pre-#3881 instances,
   one-shot connections) and stay hidden; `all: true` includes them.
+
+  Subagent rows (`parent` set, ENG-12004) are hidden by default: this list
+  is who a cell can delegate to, and a registered child has no kernel to
+  read a delegation with until ENG-12004 phase 3. `children: true` includes
+  them.
 
   Options exist for tests: `:action_log` (the shared log), `:session_id`
   (this session's row), `:now` (the liveness clock).
@@ -54,7 +61,8 @@ defmodule IxMcp.Sessions do
 
     ActionLog.session_directory(log)
     |> Enum.filter(fn row ->
-      Keyword.get(opts, :all, false) or row.last_seen_at != nil or row.id == self_id
+      (Keyword.get(opts, :children, false) or row.parent == nil) and
+        (Keyword.get(opts, :all, false) or row.last_seen_at != nil or row.id == self_id)
     end)
     |> Enum.map(fn row ->
       row
@@ -121,7 +129,7 @@ defmodule IxMcp.Sessions do
         {:error, "session #{id} is this session; message a peer from Sessions.list()"}
 
       row = Enum.find(ActionLog.session_directory(log), fn row -> row.id == id end) ->
-        {:ok, row}
+        refuse_child(row)
 
       true ->
         {:error, "no session #{id} in the directory; Sessions.list() shows who is here"}
@@ -135,7 +143,7 @@ defmodule IxMcp.Sessions do
   defp resolve(name, self_id, log, now) when is_binary(name) do
     matches =
       ActionLog.session_directory(log)
-      |> Enum.filter(fn row -> row.name == name and row.id != self_id end)
+      |> Enum.filter(fn row -> row.name == name and row.id != self_id and row.parent == nil end)
 
     case {Enum.filter(matches, &live?(&1, now)), matches} do
       {[row], _} -> {:ok, row}
@@ -145,6 +153,17 @@ defmodule IxMcp.Sessions do
       {live, _} -> {:error, ambiguous(name, live)}
     end
   end
+
+  # A registered subagent has no kernel sweeping its mailbox until
+  # ENG-12004 phase 3, so a send would sit unread while looking delivered.
+  # Its lead's `Agents.send/2` is the channel that actually reaches it.
+  defp refuse_child(%{parent: parent} = row) when is_integer(parent) do
+    {:error,
+     "session #{label(row)} is a subagent of session #{parent} and has no kernel to read " <>
+       "mail with (ENG-12004); its lead reaches it via Agents.send/2"}
+  end
+
+  defp refuse_child(row), do: {:ok, row}
 
   defp ambiguous(name, rows) do
     ids = Enum.map_join(rows, ", ", fn row -> "#{row.id} (last seen #{row.last_seen_at})" end)

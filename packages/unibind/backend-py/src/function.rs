@@ -22,31 +22,88 @@ enum Target<'a> {
         /// classes.
         object: &'a str,
     },
+    /// A `#[unibind(associated)]` function:
+    /// `super::<user>::<Object>::<name>(...)`, rendered as a
+    /// `@staticmethod`. No receiver, and it may be async, which is the
+    /// shape `__new__` cannot take.
+    Associated {
+        /// The owning object's Rust name, which both spells the call and
+        /// scopes per-export stream classes.
+        object: &'a str,
+    },
 }
 
 impl Target<'_> {
     const fn owner(&self) -> Option<&str> {
         match self {
             Self::Free => None,
-            Self::Method { object } => Some(object),
+            Self::Method { object } | Self::Associated { object } => Some(object),
         }
     }
 
-    fn sync_call(&self, name: &Ident, forwarded: &[TokenStream], user: &Ident) -> TokenStream {
+    fn sync_call(&self, call: CallParts<'_>) -> TokenStream {
+        let CallParts {
+            name,
+            forwarded,
+            user,
+        } = call;
         match self {
             Self::Free => quote!(super::#user::#name(#(#forwarded),*)),
             Self::Method { .. } => quote!(self.inner.#name(#(#forwarded),*)),
+            Self::Associated { object } => {
+                let object = Ident::new(object, Span::call_site());
+                quote!(super::#user::#object::#name(#(#forwarded),*))
+            }
         }
     }
 
     /// Inside an async future the receiver is the cloned `inner` Arc: the
     /// future must be `'static`, so it cannot borrow `&self`.
-    fn async_call(&self, name: &Ident, forwarded: &[TokenStream], user: &Ident) -> TokenStream {
+    fn async_call(&self, call: CallParts<'_>) -> TokenStream {
+        let CallParts {
+            name,
+            forwarded,
+            user,
+        } = call;
         match self {
             Self::Free => quote!(super::#user::#name(#(#forwarded),*)),
             Self::Method { .. } => quote!(inner.#name(#(#forwarded),*)),
+            Self::Associated { object } => {
+                let object = Ident::new(object, Span::call_site());
+                quote!(super::#user::#object::#name(#(#forwarded),*))
+            }
         }
     }
+}
+
+/// The user-side call a rendered wrapper forwards to: the callee's Rust ident,
+/// the already-lowered argument expressions, and the user module's ident.
+///
+/// `name` and `user` are both `&Ident`; naming them keeps a transposed pair
+/// from compiling into `super::close::my_module(..)`.
+/// `Copy` because both renderers only read it; by value without `Copy` reads
+/// to `clippy::needless_pass_by_value` as a move that never happens.
+#[derive(Clone, Copy)]
+struct CallParts<'a> {
+    name: &'a Ident,
+    forwarded: &'a [TokenStream],
+    user: &'a Ident,
+}
+
+/// Everything one rendered pyo3 item needs, gathered once by
+/// [`render_callable`] and consumed by whichever of the sync/async renderers
+/// the callable's asyncness selects.
+///
+/// `Copy` for the same reason as [`CallParts`].
+#[derive(Clone, Copy)]
+struct ItemParts<'a, 'ctx> {
+    function: &'a ir::Function,
+    ctx: &'a Ctx<'ctx>,
+    target: &'a Target<'ctx>,
+    /// The wrapper's Rust ident, shared by the item signature and the call.
+    name: &'a Ident,
+    args: &'a sig::Args,
+    ret: &'a sig::RetSpec,
 }
 
 pub fn render_fn(function: &ir::Function, ctx: &Ctx<'_>) -> Result<TokenStream, RenderError> {
@@ -59,6 +116,19 @@ pub fn render_method(
     object: &str,
 ) -> Result<TokenStream, RenderError> {
     render_callable(function, ctx, &Target::Method { object })
+}
+
+/// A `#[unibind(associated)]` function, as a `@staticmethod`.
+///
+/// # Errors
+///
+/// Fails for the same type surface any callable refuses.
+pub fn render_associated(
+    function: &ir::Function,
+    ctx: &Ctx<'_>,
+    object: &str,
+) -> Result<TokenStream, RenderError> {
+    render_callable(function, ctx, &Target::Associated { object })
 }
 
 fn render_callable(
@@ -74,29 +144,46 @@ fn render_callable(
     let args = sig::lower_args(function, ctx)?;
     let ret = sig::ret_spec(function, target.owner(), ctx);
     let pyfunction = matches!(target, Target::Free).then(|| quote!(#[::pyo3::pyfunction]));
+    // pyo3 composes `staticmethod` with an async fn, which is what makes
+    // these expressible where `#[new]` is not.
+    let staticmethod = matches!(target, Target::Associated { .. }).then(|| quote!(#[staticmethod]));
     let entries = &args.signature;
+    let parts = ItemParts {
+        function,
+        ctx,
+        target,
+        name: &name,
+        args: &args,
+        ret: &ret,
+    };
     let item = match function.asyncness {
-        ir::Asyncness::Async => async_item(function, ctx, target, &name, &args, &ret),
-        ir::Asyncness::Sync => sync_item(function, ctx, target, &name, &args, &ret),
+        ir::Asyncness::Async => async_item(parts),
+        ir::Asyncness::Sync => sync_item(parts),
     };
     Ok(quote! {
         #docs
         #pyfunction
+        #staticmethod
         #rename
         #[pyo3(signature = (#(#entries),*))]
         #item
     })
 }
 
-fn sync_item(
-    function: &ir::Function,
-    ctx: &Ctx<'_>,
-    target: &Target<'_>,
-    name: &Ident,
-    args: &sig::Args,
-    ret: &sig::RetSpec,
-) -> TokenStream {
-    let call = target.sync_call(name, &args.forwarded, ctx.user);
+fn sync_item(parts: ItemParts<'_, '_>) -> TokenStream {
+    let ItemParts {
+        function,
+        ctx,
+        target,
+        name,
+        args,
+        ret,
+    } = parts;
+    let call = target.sync_call(CallParts {
+        name,
+        forwarded: &args.forwarded,
+        user: ctx.user,
+    });
     // `detach` releases the GIL around the user call; the prologue built
     // any buffer slices already and `&[u8]` is Send, so they cross into
     // the closure.
@@ -124,15 +211,20 @@ fn sync_item(
     }
 }
 
-fn async_item(
-    function: &ir::Function,
-    ctx: &Ctx<'_>,
-    target: &Target<'_>,
-    name: &Ident,
-    args: &sig::Args,
-    ret: &sig::RetSpec,
-) -> TokenStream {
-    let call = target.async_call(name, &args.forwarded, ctx.user);
+fn async_item(parts: ItemParts<'_, '_>) -> TokenStream {
+    let ItemParts {
+        function,
+        ctx,
+        target,
+        name,
+        args,
+        ret,
+    } = parts;
+    let call = target.async_call(CallParts {
+        name,
+        forwarded: &args.forwarded,
+        user: ctx.user,
+    });
     let future_body = if function.throws.is_some() {
         ret.wrap.as_ref().map_or_else(
             || quote!(#call.await.map_err(::pyo3::PyErr::from)),

@@ -1,0 +1,66 @@
+[package]
+authors.workspace = true
+description = "CLI-related functionality for Nushell"
+repository = "https://github.com/nushell/nushell/tree/main/crates/nu-cli"
+edition.workspace = true
+license.workspace = true
+name = "nu-cli"
+rust-version.workspace = true
+version.workspace = true
+autotests = false
+
+[lib]
+bench = false
+harness = false
+
+[[test]]
+name = "tests"
+path = "tests/main.rs"
+harness = false
+
+[dev-dependencies]
+nu-cmd-lang = { workspace = true, features = ["os"] }
+nu-command = { workspace = true, features = ["os"] }
+nu-std.workspace = true
+nu-test-support = { path = "../nu-test-support", features = ["os"] }
+rstest = { workspace = true, default-features = false }
+tempfile = { workspace = true }
+
+[dependencies]
+nu-cmd-base.workspace = true
+nu-command = { workspace = true, features = ["os"] }
+nu-engine = { workspace = true, features = ["os"] }
+nu-glob.workspace = true
+nu-path.workspace = true
+nu-parser.workspace = true
+nu-plugin-engine = { workspace = true, optional = true }
+nu-protocol = { workspace = true, features = ["os"] }
+nu-config.workspace = true
+nu-utils.workspace = true
+nu-color-config.workspace = true
+nu-experimental.workspace = true
+nu-ansi-term.workspace = true
+reedline = { workspace = true, features = ["bashisms"] }
+
+chrono = { default-features = false, features = ["std"], workspace = true }
+crossterm = { workspace = true }
+fancy-regex = { workspace = true }
+is_executable = { workspace = true }
+log = { workspace = true }
+lscolors = { workspace = true, default-features = false, features = ["nu-ansi-term"] }
+miette = { workspace = true, features = ["fancy-no-backtrace"] }
+nucleo-matcher = { workspace = true }
+percent-encoding = { workspace = true }
+sysinfo = { workspace = true }
+strum = { workspace = true }
+unicode-segmentation = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+which = { workspace = true }
+
+[features]
+plugin = ["nu-plugin-engine"]
+system-clipboard = ["reedline/system_clipboard"]
+sqlite = ["reedline/sqlite", "nu-protocol/sqlite", "nu-command/sqlite"]
+
+[lints]
+workspace = true

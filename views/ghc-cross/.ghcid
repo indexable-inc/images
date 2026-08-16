@@ -1,0 +1,5 @@
+--command sh -c "HADRIAN_ARGS=-j ./hadrian/ghci -j"
+--reload compiler
+--reload ghc
+--reload includes
+--restart hadrian/ghci

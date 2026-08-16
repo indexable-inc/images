@@ -1,0 +1,3 @@
+# cabal check
+These warnings will likely cause trouble when distributing the package:
+Warning: [no-category] No 'category' field.

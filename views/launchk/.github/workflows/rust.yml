@@ -1,0 +1,37 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-12 deprecated 2024-12-03
+          - runner: macos-13
+            xcode_version: 15.2           # macOS SDK: 14.2
+          - runner: macos-14
+            xcode_version: 15.3           # macOS SDK: 14.4
+          - runner: macos-15
+            xcode_version: 16.3           # macOS SDK: 15.4
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Xcode version
+      uses: maxim-lobanov/setup-xcode@v1.6.0
+      with:
+        xcode-version: ${{ matrix.xcode_version }}
+    - name: Build
+      run: |
+        echo "macOS SDK version: $(xcrun --sdk macosx --show-sdk-version)"
+        cargo build --verbose
+    - name: Run tests
+      run: cargo test --verbose

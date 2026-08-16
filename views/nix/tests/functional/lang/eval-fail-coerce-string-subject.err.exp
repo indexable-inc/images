@@ -1,0 +1,11 @@
+error:
+       … while calling the 'stringLength' builtin
+         at /pwd/lang/eval-fail-coerce-string-subject.nix:4:1:
+            3| # raises a type error. builtins.toString is the one primop that sets it.
+            4| builtins.stringLength 42
+             | ^
+            5|
+
+       … while evaluating the argument passed to builtins.stringLength
+
+       error: cannot coerce an integer to a string: 42

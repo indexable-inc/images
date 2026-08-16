@@ -1,0 +1,214 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  inherit (lib)
+    mkEnableOption
+    mkOption
+    types
+    mkIf
+    ;
+
+  cfg = config.programs.meli;
+
+  tomlFormat = pkgs.formats.toml { };
+
+  enabledAccounts = lib.attrsets.filterAttrs (
+    _name: value: value.enable && (value.meli.enable or false)
+  ) config.accounts.email.accounts;
+
+  meliAccounts = (lib.attrsets.mapAttrs (name: value: (mkMeliAccounts name value)) enabledAccounts);
+
+  mkMeliAccounts = (
+    _name: account:
+    {
+      root_mailbox = "${config.accounts.email.maildirBasePath}/${account.maildir.path}";
+      format = "Maildir";
+      identity = account.address;
+      display_name = account.realName;
+      subscribed_mailboxes = account.meli.mailboxes;
+      send_mail = mkSmtp account;
+      mailboxes = account.meli.mailboxAliases;
+    }
+    // lib.optionalAttrs (account.flavor == "fastmail.com") {
+      server_username = account.userName;
+      server_password_command = lib.concatMapStringsSep " " lib.escapeShellArg account.passwordCommand;
+      format = "jmap";
+      server_url = "https://api.fastmail.com/jmap/session";
+      use_token = true;
+    }
+    // account.meli.settings
+  );
+
+  mkSmtp = account: {
+    hostname = account.smtp.host;
+    inherit (account.smtp) port;
+    auth = {
+      type = "auto";
+      username = account.userName;
+      password = {
+        type = "command_eval";
+        value = lib.strings.concatStringsSep " " account.passwordCommand;
+      };
+    };
+    security = {
+      type =
+        if account.smtp.tls.enable or false then
+          if account.smtp.tls.useStartTls or false then "starttls" else "tls"
+        else
+          "none";
+      danger_accept_invalid_certs = false;
+    };
+    extensions = {
+      PIPELINING = true;
+      CHUNKING = true;
+      PRDR = true;
+      DSN_NOTIFY = "FAILURE";
+    };
+  };
+
+in
+{
+  meta.maintainers = with lib.hm.maintainers; [ munsman ];
+
+  options = {
+    programs.meli = {
+      enable = mkEnableOption "meli email client";
+
+      package = lib.mkPackageOption pkgs "meli" { };
+
+      includes = mkOption {
+        type = with types; listOf str;
+        description = "Paths of the various meli configuration files to include.";
+        default = [ ];
+      };
+
+      settings = mkOption {
+        type = types.submodule {
+          freeformType = tomlFormat.type;
+        };
+        example = lib.literalExpression ''
+          {
+          shortcuts = {
+          contact-list = {
+                      create_contact = "c";
+                      edit_contact = "m";
+                    };
+          general = {
+            edit = "m";
+            scroll_up = "e";
+            scroll_down = "n";
+          };
+          composing = {
+            edit = "m";
+            scroll_up = "e";
+            scroll_down = "n";
+          };
+          listing = {
+            new_mail = "t";
+            set_seen = "s";
+          };
+          pager = {
+                      scroll_up = "e";
+                      scroll_down = "n";
+          };
+
+          }
+          }'';
+        default = { };
+        description = "Meli Configuration";
+      };
+    };
+    accounts.email.accounts = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { config, ... }:
+          {
+            options.meli = {
+              enable = mkEnableOption "the meli mail client for this account.\nRequires SMTP settings.";
+              mailboxes = mkOption {
+                type = with types; listOf str;
+                default = (
+                  with config.folders;
+                  [
+                    inbox
+                    sent
+                    trash
+                    drafts
+                  ]
+                );
+                example = [
+                  "INBOX"
+                  "Sent"
+                  "Trash"
+                  "Drafts"
+                ];
+                description = "Mailboxes to show in meli";
+              };
+              mailboxAliases = mkOption {
+                type = with types; attrsOf attrs;
+                default = { };
+                example = {
+                  "INBOX" = {
+                    alias = "📥 Inbox";
+                  };
+                  "Sent" = {
+                    alias = "📤 Sent";
+                  };
+                };
+                description = "Folder display name";
+              };
+
+              settings = mkOption {
+                type = types.submodule {
+                  freeformType = tomlFormat.type;
+                };
+                default = { };
+                description = "Account specific meli configuration";
+              };
+            };
+          }
+        )
+      );
+    };
+  };
+  config = mkIf config.programs.meli.enable {
+    assertions = [
+      {
+        assertion = cfg.settings ? accounts == false;
+        message = ''
+          programs.meli.settings.accounts override the accounts.email values.
+                      Use per-email accounts.email.<ACCOUNT>.meli.settings instead'';
+      }
+    ];
+
+    home.packages = [ config.programs.meli.package ];
+
+    # Generate meli configuration from email accounts
+    xdg.configFile."meli/config.toml" =
+      let
+
+        generatedToml = tomlFormat.generate "meli-config" (
+          {
+            accounts = meliAccounts;
+          }
+          // config.programs.meli.settings
+        );
+
+      in
+      if cfg.includes == [ ] then
+        {
+          source = generatedToml;
+        }
+      else
+        {
+          text = lib.concatStringsSep "\n" (
+            map (inc: "include(\"${inc}\")") (cfg.includes ++ [ generatedToml ])
+          );
+        };
+  };
+}

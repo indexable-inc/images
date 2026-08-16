@@ -165,7 +165,7 @@ let
     # discovery drops symlinked entries (anthropics/claude-code#36659), the same
     # reason skills.mkSkillsDir dereferences here in the sandbox rather than
     # asking each consumer to do it on the host.
-      pkgs.runCommand "claude-agents" {} ''
+      pkgs.runCommand "claude-agents" {__structuredAttrs = true;} ''
         cp -RL ${farm} "$out"
         links=$(find "$out" -type l)
         if [ -n "$links" ]; then

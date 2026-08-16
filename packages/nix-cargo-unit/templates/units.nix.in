@@ -47,6 +47,26 @@
   # what shows up under `cases`; `all` always runs the harness without
   # --include-ignored.
   includeIgnored ? false,
+  # How the shared test manifest discovers #[test] names.
+  #
+  #   "binary" (default): build every test binary and run
+  #     `<bin> --list --format terse`, which needs each binary compiled AND
+  #     linked inside the manifest IFD.
+  #   "dump-test-names": compile each harness test target with
+  #     `-Zdump-test-names` (the ix rustc fork's flag for
+  #     rust-lang/rust#50297), which emits the harness's collected tests as
+  #     JSON and stops before codegen and linking, so cold discovery pays for
+  #     the dependency chain and proc macros but never a test binary's
+  #     codegen or link. Requires the selected rustToolchain to carry the
+  #     flag; an upstream toolchain fails the unit loudly with
+  #     "unknown unstable option". `harness = false` targets have no #[test]
+  #     collection to dump and fall back to the binary path per target.
+  #
+  # Both modes write byte-identical `.list`/`.ignored.list` files: the JSON
+  # carries the exact `name: kind` lines the terse formatter prints, in
+  # harness registration order (parity pinned by tests/default.nix's
+  # cargo-unit fork-discovery fixtures).
+  testDiscovery ? "binary",
   # Additive seam for injecting prebuilt units (rlib+rmeta) that were not built
   # from source in this graph. `extraUnits` is keyed by the unit key
   # (`"<name>-<version>-<hash>"`) and merged over the generated `units` set, so a
@@ -94,6 +114,38 @@ let
   renderExtraLinkRustcArgs =
     platform:
     pkgs.lib.concatStringsSep "\n" (map renderRustcArg (extraLinkRustcArgsForPlatform platform));
+
+  # The doctest sibling of renderExtraLinkRustcArgs: `rustdoc --test`
+  # compiles AND LINKS each doctest binary, the same final link a test unit
+  # performs, so it reads the same per-platform link args (mold, native
+  # library search paths, rpaths) -- into rustdoc's argv, which forwards
+  # `-C` codegen options to the doctest compile. Without this the doctest
+  # link ran on whatever the environment happened to provide: it passed
+  # under the upstream rust-overlay aggregate only because that toolchain
+  # implicitly satisfied the link, and broke the day the fork toolchain
+  # stopped hiding the missing dependency. The dependency is explicit now,
+  # unconditionally: an implicit environment dependency is the defect
+  # regardless of which toolchain hides it.
+  renderDoctestLinkArgs =
+    platform:
+    pkgs.lib.concatStringsSep "\n" (
+      map (arg: "rustdoc_args+=( ${pkgs.lib.escapeShellArg arg} )") (
+        extraLinkRustcArgsForPlatform platform
+      )
+    );
+
+  # The fork-only rmeta byte-stability flags this graph was rendered with
+  # (policy.compiler.rmetaStability -> nix-cargo-unit --rmeta-stability-flag),
+  # applied per IMPORT rather than baked into unit argv: cargo-unit re-imports
+  # this same rendered file for the clippy graph with the pinned llm-clippy
+  # toolchain, whose upstream rustc hard-errors on fork-only flags ("unknown
+  # unstable option"), so that import's parallel Rustc dependency units must
+  # compile without them. Keyed on the imported toolchain's fork marker
+  # (passthru.forkRev), the same fact lib/rust/resolve.nix's eval guard reads;
+  # a caller selecting an upstream toolchain WITH the flags is still refused
+  # there at eval, so this binding only ever disarms the engine's own
+  # non-fork imports of a fork-toolchain graph.
+  rmetaStabilityArgs = pkgs.lib.optionals (rustToolchain ? forkRev) [ {{ rmeta_stability_args }} ];
 
   sourceRootPath =
     root:
@@ -233,9 +285,17 @@ let
 {{ panic_object_unit_entries }}  };
 
   # Every test target in the graph, keyed the same way `tests.<name>` is.
-  # The shared manifest derivation depends on every binary listed here.
+  # The shared manifest derivation depends on every binary listed here (or,
+  # in dump mode, on every `testNameUnits` entry).
   testTargets = [
 {{ test_target_entries }}  ];
+
+  # One `-Zdump-test-names` compile per harness test target, keyed like
+  # `testTargets` entries. Each is that target's exact test compile with the
+  # dump flag and no codegen or link; `$out/test-names.json` is the product.
+  # Lazy: only the "dump-test-names" manifest below ever builds one.
+  testNameUnits = {
+{{ test_name_unit_entries }}  };
   testTargetNamesByPackage =
     pkgs.lib.mapAttrs (_: targets: map (target: target.name) targets) (
       pkgs.lib.groupBy (target: target.packageName) testTargets
@@ -695,9 +755,8 @@ let
   # One IFD owns test discovery because IFDs block evaluation. The builder
   # lists binaries concurrently, then the generated attrset fans out into
   # ordinary per-#[test] derivations.
-  testManifestDrv =
-    if testTargets == [] then null
-    else pkgs.runCommand "cargo-unit-test-manifest" { } (
+  binaryTestManifestDrv =
+    pkgs.runCommand "cargo-unit-test-manifest" { } (
       ''
         set -euo pipefail
 
@@ -741,6 +800,51 @@ let
         fi
       ''
     );
+
+  # Same manifest contract, discovery via the fork flag: each harness
+  # target's `testNameUnits` JSON is converted to the exact bytes
+  # `<bin> --list --format terse` prints. The terse formatter writes one
+  # `{name}: {kind}` line per collected item, in registration order, with no
+  # header or summary (library/test/src/formatters/terse.rs), and the dump's
+  # `kind` carries those exact strings, so the jq projection reproduces the
+  # binary's output byte for byte. `--ignored` listing keeps only ignored
+  # tests (libtest's RunIgnored::Only filter), which is `select(.ignore)`.
+  # The manifest depends on the dump units, never the test binaries, so a
+  # cold-store manifest IFD compiles metadata chains and proc macros but
+  # links nothing. `harness = false` targets carry no `names` (no #[test]
+  # collection exists to dump) and run their binary exactly like the
+  # "binary" mode.
+  dumpTestNamesManifestDrv =
+    pkgs.runCommand "cargo-unit-test-manifest" { nativeBuildInputs = [ pkgs.jq ]; } (
+      ''
+        set -euo pipefail
+
+        mkdir -p "$out"
+      ''
+      + pkgs.lib.concatMapStrings (target:
+        if target ? names then ''
+          jq -r '.tests[] | "\(.name): \(.kind)"' ${target.names} \
+            > "$out"/${pkgs.lib.escapeShellArg target.name}.list
+          jq -r '.tests[] | select(.ignore) | "\(.name): \(.kind)"' ${target.names} \
+            > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list
+        '' else ''
+          if ! ${target.binary} --list --format terse > "$out"/${pkgs.lib.escapeShellArg target.name}.list ||
+             ! ${target.binary} --list --format terse --ignored > "$out"/${pkgs.lib.escapeShellArg target.name}.ignored.list; then
+            echo >&2 "error: cargo-unit: failed to list tests for ${target.name} (${target.binary})"
+            exit 1
+          fi
+        '') testTargets
+    );
+
+  testManifestDrv =
+    if testTargets == [ ] then
+      null
+    else if testDiscovery == "dump-test-names" then
+      dumpTestNamesManifestDrv
+    else if testDiscovery == "binary" then
+      binaryTestManifestDrv
+    else
+      throw "nix-cargo-unit: testDiscovery must be \"binary\" or \"dump-test-names\", got ${builtins.toString testDiscovery}";
 
   mkTestCases =
     { name, binary, packageName, ignored }:
@@ -799,6 +903,32 @@ let
         (builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile path))).doctests
     );
 
+  # rustdoc applies split_whitespace to every --test-args value before handing
+  # it to libtest. A complete doctest name therefore cannot be one filter: the
+  # source path, `-`, item path and `(line N)` become separate arguments, and
+  # the source-path token runs every doctest in that file. Select the longest
+  # whitespace-free token that occurs in exactly one manifest name instead.
+  # If rustdoc ever emits names with no such token, fail during evaluation
+  # rather than silently broadening a case derivation to multiple doctests.
+  uniqueDoctestFilter = testNames: testName:
+    let
+      candidates = builtins.filter
+        (token: token != "" && !(pkgs.lib.hasPrefix "-" token))
+        (pkgs.lib.splitString " " testName);
+      unique = builtins.filter
+        (token:
+          builtins.length (builtins.filter (other: pkgs.lib.hasInfix token other) testNames) == 1
+        )
+        candidates;
+      longestFirst = builtins.sort
+        (left: right: builtins.stringLength left > builtins.stringLength right)
+        unique;
+    in
+    if longestFirst == [] then
+      throw "cargo-unit: no unique whitespace-free doctest filter for ${testName}"
+    else
+      builtins.head longestFirst;
+
   doctestManifestDrv =
     if doctestTargets == [] then null
     else pkgs.runCommand "cargo-unit-doctest-manifest" { nativeBuildInputs = [ rustToolchain ]; } (
@@ -812,26 +942,45 @@ let
       '') doctestTargets
     );
 
+  # `rustdoc --test` links every doctest binary, so the run derivations carry
+  # the same explicit linker surface a test unit's build does: a C compiler
+  # driver for rustc's default `-C linker=cc`, plus the workspace's linker
+  # native inputs (mold et al., folded into extraNativeBuildInputs). Explicit
+  # in the template, not conditional on the toolchain: these derivations used
+  # to link only because the upstream rust-overlay aggregate happened to
+  # satisfy the dependency implicitly, and the fork toolchain surfacing that
+  # is what broke the doctest units (the implicit dependency was the defect
+  # either way). The list-mode manifest above stays on the lean input set;
+  # it never links.
+  doctestRunInputs = [ rustToolchain pkgs.stdenv.cc ] ++ extraNativeBuildInputs;
+
   mkDoctestCases =
     { name, runCommand }:
+    let
+      testNames = parseDoctestList "${doctestManifestDrv}/${name}.json";
+    in
     pkgs.lib.listToAttrs (
       map (testName: {
         name = testName;
         value =
           pkgs.runCommand
             "cargo-unit-doctest-${name}-${sanitizeTestName testName}"
-            { TEST_NAME = testName; nativeBuildInputs = [ rustToolchain ]; }
+            {
+              TEST_NAME = testName;
+              DOCTEST_FILTER = uniqueDoctestFilter testNames testName;
+              nativeBuildInputs = doctestRunInputs;
+            }
             ''
               ${runCommand}
               mkdir -p "$out"
             '';
-      }) (parseDoctestList "${doctestManifestDrv}/${name}.json")
+      }) testNames
     );
 
   mkDoctestEntry =
     { name, allCommand, runCommand, ... }:
     {
-      all = pkgs.runCommand "cargo-unit-doctest-${name}" { nativeBuildInputs = [ rustToolchain ]; } ''
+      all = pkgs.runCommand "cargo-unit-doctest-${name}" { nativeBuildInputs = doctestRunInputs; } ''
         ${allCommand}
         mkdir -p "$out"
       '';
@@ -869,6 +1018,11 @@ in
     doctestTargetNamesByPackage
     policyChecks
     sourceAudit
+    # The shared discovery manifest (null when the graph has no test
+    # targets), exported so the fork-discovery parity fixtures can byte-diff
+    # the "binary" and "dump-test-names" modes against each other.
+    testManifestDrv
+    testNameUnits
     testTargetNamesByPackage
     unusedCrateDependenciesByPackage
     units

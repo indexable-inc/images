@@ -1,0 +1,4 @@
+# cabal check
+The following errors will cause portability problems on other environments:
+Error: [license-none] The 'license' field is missing or is NONE.
+Error: Hackage would reject this package.

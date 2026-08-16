@@ -90,6 +90,9 @@ in
     inherit version;
     dontUnpack = true;
 
+    # Upstream npm tarball repack; nothing to test at build time.
+    doCheck = false;
+
     nativeBuildInputs = [
       makeWrapper
       nodejs_22

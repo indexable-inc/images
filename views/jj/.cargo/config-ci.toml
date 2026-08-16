@@ -1,0 +1,13 @@
+include = [
+  "config.toml",
+]
+
+[profile.dev]
+debug = "none"
+incremental = false
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-Clink-arg=-fuse-ld=mold"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-Clink-arg=-fuse-ld=mold"]

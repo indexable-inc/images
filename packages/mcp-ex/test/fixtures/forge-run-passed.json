@@ -1,0 +1,33 @@
+{
+  "run_id": "1f2e3d4c5b6a-1786546496920",
+  "repo": "fixture-repo",
+  "change_id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+  "commit_id": "1f2e3d4c5b6a0123456789abcdef0123456789abcdef0123456789abcdef0123",
+  "target_bookmark": "main",
+  "status": "passed",
+  "started_at_ms": 1786546496920,
+  "updated_at_ms": 1786546805920,
+  "materialize": {
+    "files_total": 172519,
+    "files_done": 172519,
+    "seconds": 8.185446444
+  },
+  "nix": {
+    "drvs_total": 0,
+    "drvs_done": 0,
+    "drvs_failed": 0,
+    "building": [],
+    "recent_done": []
+  },
+  "trigger": {
+    "change_id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "description": "fixture: a commit subject that is not a real one\n\nBody text.\n",
+    "author": "Fixture Author",
+    "changed_paths": [
+      "fixture/one.ex",
+      "fixture/two.ex"
+    ],
+    "invalidation": "fixture"
+  },
+  "log_tail": "==== jj-forge gate v2 (lint + gate-eval + scoped build) ====\ntree:   /fixture/ci-state/run\nsystem: x86_64-linux\nlog:    /fixture/logs/gate-20260101T000000Z-1.log\nstage lint: start (timeout 5400s)\nstage lint: pass (baseline-tolerated: fixture-tolerated-check) in 36s\nstage fmt: start (timeout 1800s)\nstage fmt: warn rc=1 in 20s\nstage incr: start (timeout 7200s)\nstage eval: manifest in 183s\nstage build: pass (11 built/substituted) in 46s\n\n==== gate verdict: PASS ====\nlog: /fixture/logs/gate-20260101T000000Z-1.log\n"
+}

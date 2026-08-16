@@ -1,0 +1,14 @@
+[Install]
+WantedBy=graphical-session.target
+
+[Service]
+ExecStart=@foot@/bin/foot --server
+OOMPolicy=continue
+Restart=on-failure
+
+[Unit]
+After=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+Description=Fast, lightweight and minimalistic Wayland terminal emulator.
+Documentation=man:foot(1)
+PartOf=graphical-session.target

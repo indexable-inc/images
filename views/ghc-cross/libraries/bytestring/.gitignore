@@ -1,0 +1,13 @@
+GNUmakefile
+cabal-dev
+dist
+dist-install
+ghc.mk
+.cabal-sandbox
+cabal.sandbox.config
+.hsenv
+*~
+dist-newstyle/
+cabal.project.local*
+.nvimrc
+.ghc.environment*

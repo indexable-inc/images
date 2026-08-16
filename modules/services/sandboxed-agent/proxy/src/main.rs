@@ -180,9 +180,12 @@ fn handle(
     let request_bytes = upstream_request(config, method, path, request.headers, &key, &body);
     match relay(&mut client, config, tls, &request_bytes) {
         Ok(()) => Ok(()),
-        Err(RelayError::BeforeResponse(err)) => {
-            respond(&mut client, 502, "Bad Gateway", &format!("upstream unreachable: {err}"))
-        }
+        Err(RelayError::BeforeResponse(err)) => respond(
+            &mut client,
+            502,
+            "Bad Gateway",
+            &format!("upstream unreachable: {err}"),
+        ),
         // Mid-stream failures cannot become a clean HTTP error anymore;
         // closing the client socket is the honest signal left.
         Err(RelayError::MidStream(err)) => Err(err),
@@ -208,7 +211,10 @@ fn read_head(client: &mut TcpStream) -> io::Result<RequestBytes> {
             });
         }
         if data.len() > MAX_HEAD_BYTES {
-            return Err(io::Error::new(ErrorKind::InvalidData, "request head too large"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "request head too large",
+            ));
         }
         let count = client.read(&mut buf)?;
         if count == 0 {
@@ -222,7 +228,9 @@ fn read_head(client: &mut TcpStream) -> io::Result<RequestBytes> {
 }
 
 fn head_end(data: &[u8]) -> Option<usize> {
-    data.windows(4).position(|w| w == b"\r\n\r\n").map(|at| at + 4)
+    data.windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|at| at + 4)
 }
 
 /// The body is whatever `content-length` promises; an absent header is a
@@ -339,8 +347,8 @@ fn relay(
     tls: &Arc<rustls::ClientConfig>,
     request_bytes: &[u8],
 ) -> Result<(), RelayError> {
-    let mut tcp = TcpStream::connect((config.upstream.as_str(), 443))
-        .map_err(RelayError::BeforeResponse)?;
+    let mut tcp =
+        TcpStream::connect((config.upstream.as_str(), 443)).map_err(RelayError::BeforeResponse)?;
     tcp.set_read_timeout(Some(UPSTREAM_TIMEOUT))
         .map_err(RelayError::BeforeResponse)?;
     tcp.set_write_timeout(Some(UPSTREAM_TIMEOUT))

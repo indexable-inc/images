@@ -1,0 +1,4 @@
+# cabal check
+Error: [Cabal-7654]
+No cabal file found.
+Please create a package description file <pkgname>.cabal

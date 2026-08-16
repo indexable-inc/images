@@ -1,0 +1,297 @@
+.. _spec-history:
+
+==================================================
+ Package Description Format Specification History
+==================================================
+
+:ref:`pkg-desc` need to specify the version of the
+specification they need to be interpreted in via the
+:pkg-field:`cabal-version` declaration. The following list describes
+changes that occurred in each version of the cabal specification
+relative to the respective preceding *published* version.
+
+.. note::
+
+    The sequence of specification version numbers is *not*
+    contiguous because it's synchronised with the version of the
+    ``Cabal`` library. As a consequence, only *even* versions are
+    considered proper published versions of the specification as *odd*
+    versions of the ``Cabal`` library denote unreleased development
+    branches which have no stability guarantee.
+
+``cabal-version: 3.12``
+-----------------------
+
+* License fields use identifiers from SPDX License List version
+  ``3.23 2024-02-08``.
+
+
+``cabal-version: 3.8``
+----------------------
+
+* Added field ``code-generators`` to :pkg-section:`test-suite` stanzas. This
+  enumerates executabes (possibly brought into scope by  :pkg-field:`build-tool-depends`) that are run after all other
+  preprocessors. These executables are invoked with a target dir for
+  output, a sequence of all source directories with source files of
+  local lib components that the given test stanza depends on, and
+  following a double dash, all options cabal would pass to ghc for a
+  build. They are expected to output a newline-separated list of
+  generated modules which have been written to the targetdir. This can
+  be used for driving doctests and other discover-style tests generated
+  from source code.
+
+* Added fields :pkg-field:`extra-libraries-static` and
+  :pkg-field:`extra-lib-dirs-static` to allow Haskell libraries to remember
+  linker flags needed for fully static linking of system libraries into
+  executables.
+  The existing field :pkg-field:`pkgconfig-depends` can used to append
+  the relevant output of ``pkg-config --libs --static`` to these new fields
+  automatically.
+  When :pkg-field:`extra-libraries-static` is not given, it defaults to
+  :pkg-field:`extra-libraries`.
+  When :pkg-field:`extra-lib-dirs-static` is not given, it defaults to
+  :pkg-field:`extra-lib-dirs`.
+
+* Wildcard matching has been slightly expanded. Matches are now
+  allowed of the form ``foo/**/literalFile``. Prior, double-star
+  wildcards required the trailing filename itself be a wildcard.
+
+* Allow the omission of the `type` field in `test-suite` and `benchmark` stanzas
+  when the type can be inferred by the presence of `main-is` or `test-module`.
+
+* License fields use identifiers from SPDX License List version
+  ``3.16 2022-02-06``
+
+``cabal-version: 3.6``
+----------------------
+
+* License fields use identifiers from SPDX License List version
+  ``3.10 2020-08-03``
+
+* Add :pkg-field:`hsc2hs-options`
+
+``cabal-version: 3.4``
+----------------------
+
+
+* License fields use identifiers from SPDX License List version
+  ``3.9 2020-05-15``
+
+* Dependencies to sublibraries must be specified explicitly,
+  even for current package.
+  For example: ``build-depends: mypackage:my-sublib``
+  This way you can have a sublibrary with the same
+  name as some external dependency.
+
+* Remove ``-any`` and ``-none`` syntax for version ranges
+  Use ``>=0`` and ``<0`` respectively.
+
+* :pkg-field:`default-language` is optional.
+  The Default value is to use the compiler's default language.
+
+* :pkg-field:`mixins` field allow specifying a sublibrary.
+
+``cabal-version: 3.0``
+----------------------
+
+* New :pkg-field:`library:visibility` for exposing sublibraries.
+
+* New ``pkg:lib`` and ``pkg:{lib1,lib2}`` syntax in :pkg-field:`build-depends`
+  for depending on public sublibraries from other packages.
+
+* Added the :pkg-field:`extra-dynamic-library-flavours` field to specify non-trivial
+  variants of dynamic flavours. It is :pkg-field:`extra-library-flavours` but for
+  shared libraries. Mainly useful for GHC's RTS library.
+
+* Free text fields (e.g. :pkg-field:`description`) preserve empty lines
+  and indentation. In other words, you don't need to add dots for blank lines.
+
+* License fields use identifiers from SPDX License List version
+  ``3.6 2019-07-10``
+
+* Remove deprecated ``hs-source-dir``, :pkg-field:`extensions` and
+  :pkg-field:`build-tools` fields.
+
+* Common stanzas are now allowed also in the beginning of conditional
+  sections.  In other words, the following is valid
+
+    ::
+
+        library
+            import deps
+
+            if flag(foo)
+                import foo-deps
+
+* Allow redundant leading or trailing commas in package fields with
+  optional commas, such as :pkg-field:`library:exposed-modules`
+
+* Require fields with optional commas to consistently omit or place
+  commas between elements.
+
+* Changed the behavior of :pkg-field:`extra-bundled-libraries` field. The naming convention
+  of dynamic library files (e.g. generated by a custom build script) has
+  changed. For library names prefixed with "C", the dynamic library file
+  name(s) must be of the form `lib<library-name>.<dyn-library-extension>*`
+  instead of the old `libC<library-name>-ghc<ghc-flavour><ghc-version>.<dyn-library-extension>`
+
+* New set-notation syntax for ``==`` and ``^>=`` operators, see
+  :pkg-field:`build-depends` field documentation for examples.
+
+* Allow more whitespace in :pkg-field:`mixins` field
+
+* Wildcards are disallowed in :pkg-field:`pkgconfig-depends`,
+  Yet the pkgconfig format is relaxed to accept e.g. versions like ``1.1.0h``.
+
+* New :pkg-field:`autogen-includes` for specifying :pkg-field:`install-includes`
+  which are autogenerated (e.g. by a ``configure`` script).
+
+* New :pkg-field:`asm-sources` and :pkg-field:`asm-options` fields
+  added for supporting bundled foreign routines implemented in
+  assembler.
+
+* New :pkg-field:`cmm-sources` and :pkg-field:`cmm-options` fields
+  added for supporting bundled foreign primops implemented in
+  C--.
+
+``cabal-version: 2.4``
+----------------------
+
+* Wildcard matching has been expanded. All previous wildcard
+  expressions are still valid; some will match strictly more files
+  than before. Specifically:
+
+  * Double-star (``**``) wildcards are now accepted for recursive
+    matching immediately before the final slash; they must be followed
+    by a filename wildcard (e.g., ``foo/**/*.html`` is valid;
+    ``foo/**/bar/*.html`` and ``foo/**/**/*.html``,
+    ``foo/**/bar.html`` are all invalid). As ``**`` was an error in
+    globs before, this does not affect any existing ``.cabal`` files
+    that previously worked.
+    (Caveat: Double-star wildcards in :pkg-field:`data-files` directories,
+    e.g. ``data-files: data/**/*.csv``,
+    `are only supported correctly from Cabal 3.0 <https://github.com/haskell/cabal/issues/6125#issuecomment-1379878419>`_.)
+
+
+  * Wildcards now match when the pattern's extensions form a suffix of
+    the candidate file's extension, rather than requiring strict
+    equality (e.g., previously ``*.html`` did not match
+    ``foo.en.html``, but now it does).
+
+* License fields use identifiers from SPDX License List version
+  ``3.2 2018-07-10``
+
+
+``cabal-version: 2.2``
+----------------------
+
+* New :pkg-section:`common` stanzas and :pkg-field:`import`
+  pseudo-field added.
+
+* New :pkg-field:`library:virtual-modules` field added.
+
+* New :pkg-field:`cxx-sources` and :pkg-field:`cxx-options` fields
+  added for supporting bundled foreign routines implemented in C++.
+
+* New :pkg-field:`extra-bundled-libraries` field for specifying
+  additional custom library objects to be installed.
+
+* Extended ``if`` control structure with support for ``elif`` keyword.
+
+* Changed default rules of :pkg-field:`build-type` field to infer
+  "build-type:" for "Simple"/"Custom" automatically.
+
+* :pkg-field:`license` field syntax changed to require SPDX
+  expression syntax (using SPDX license list version ``3.0 2017-12-28``).
+
+* Allow redundant leading or trailing commas in package fields (which
+  require commas) such as :pkg-field:`build-depends`.
+
+
+``cabal-version: 2.0``
+----------------------
+
+* New :pkg-field:`library:signatures` and :pkg-field:`mixins` fields
+  added for supporting :ref:`Backpack`.
+
+* New :pkg-field:`build-tool-depends` field added for adding
+  build-time dependencies of executable components.
+
+* New :pkg-field:`custom-setup:autogen-modules` field added for declaring modules
+  which are generated at build time.
+
+* Support for new PVP_ caret-style version operator (``^>=``) added to
+  :pkg-field:`build-depends`.
+
+* Add support for new :pkg-section:`foreign-library` stanza.
+
+* Add support for :ref:`sublibrary stanzas <sublibs>`.
+
+* New CPP Macro ``CURRENT_PACKAGE_VERSION``.
+
+``cabal-version: 1.24``
+-----------------------
+
+* New :pkg-section:`custom-setup` stanza and
+  :pkg-field:`custom-setup:setup-depends` field added for specifying dependencies
+  of custom ``Setup.hs`` scripts.
+
+* CPP Macros ``VERSION_$pkgname`` and ``MIN_VERSION_$pkgname`` are now
+  also generated for the current package.
+
+* New CPP Macros ``CURRENT_COMPONENT_ID`` and ``CURRENT_PACKAGE_KEY``.
+
+* New :pkg-field:`extra-framework-dirs` field added for specifying
+  extra locations to find OS X frameworks.
+
+``cabal-version: 1.22``
+-----------------------
+
+* New :pkg-field:`library:reexported-modules` field.
+
+* Support for ``-none`` version constraint added to
+  :pkg-field:`build-depends`.
+
+* New :pkg-field:`license` type ``ISC`` added.
+
+``cabal-version: 1.20``
+-----------------------
+
+* Add support for new :pkg-field:`license-files` field for declaring
+  multiple license documents.
+
+* New CPP Macro ``MIN_TOOL_VERSION_$buildtool``.
+
+* New :pkg-field:`license` types ``BSD2`` and ``MPL-2.0`` added.
+
+``cabal-version: 1.18``
+-----------------------
+
+* Add support for new :pkg-field:`extra-doc-files` field for
+  specifying extra file assets referenced by the Haddock
+  documentation.
+
+* New :pkg-field:`license` type ``AGPL`` and ``AGPL-3`` added.
+
+* Add support for specifying a C/C++/obj-C source file in
+  :pkg-field:`executable:main-is` field.
+
+* Add ``getSysconfDir`` operation to ``Paths_`` API.
+
+``cabal-version: 1.16``
+-----------------------
+
+.. todo::
+
+   this needs to be researched; there were only few changes between
+   1.12 and 1.18;
+
+``cabal-version: 1.12``
+-----------------------
+
+* Change syntax of :pkg-field:`cabal-version` to support the new recommended
+  ``cabal-version: x.y`` style
+
+
+
+.. include:: references.inc

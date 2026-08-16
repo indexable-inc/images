@@ -79,7 +79,7 @@ defmodule IxMcp.Fleet.Digest do
   which is fine hourly and not fine every 60 seconds.
   """
 
-  alias IxMcp.Fleet.ClickHouse
+  alias FleetMesh.ClickHouse
 
   # The fleet's journal uses "warn", not "warning" -- verified against
   # logs.journald_logs, whose only levels are info, notice, warn, error, crit,

@@ -17,7 +17,9 @@ defmodule LoomTest do
 
     [snapshot, new, shell, sync, stop] = FakeIx.await_calls(ctx[:calls_log], 5)
     assert sync == ["shell", vm, "--noninteractive", "--", "sync"]
-    assert snapshot == ["snapshot", "ctl"]
+    # `--wait-durable` is load-bearing, not decoration: the `new` below restores
+    # this id immediately, and an unwaited snapshot is still `capturing` then.
+    assert snapshot == ["snapshot", "ctl", "--wait-durable"]
     assert new == ["new", FakeIx.snapshot_id(), "--name", vm, "--no-shell"]
 
     assert shell == [

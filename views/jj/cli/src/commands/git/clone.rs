@@ -1,0 +1,460 @@
+// Copyright 2020-2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::fs;
+use std::io;
+use std::io::Write as _;
+use std::num::NonZeroU32;
+use std::path::Path;
+
+use itertools::Itertools as _;
+use jj_lib::file_util;
+use jj_lib::git;
+use jj_lib::git::GitFetch;
+use jj_lib::git::GitFetchRefExpression;
+use jj_lib::git::GitImportOptions;
+use jj_lib::git::GitSettings;
+use jj_lib::git::expand_fetch_refspecs;
+use jj_lib::ref_name::RefName;
+use jj_lib::ref_name::RefNameBuf;
+use jj_lib::ref_name::RemoteName;
+use jj_lib::ref_name::RemoteNameBuf;
+use jj_lib::repo::Repo as _;
+use jj_lib::str_util::StringExpression;
+use jj_lib::workspace::Workspace;
+
+use super::ObjectHash;
+use super::RepoPresets;
+use super::write_repo_presets;
+use crate::cli_util::CommandHelper;
+use crate::cli_util::WorkspaceCommandHelper;
+use crate::command_error::CommandError;
+use crate::command_error::cli_error;
+use crate::command_error::user_error;
+use crate::command_error::user_error_with_message;
+use crate::commands::git::maybe_add_gitignore;
+use crate::config::ConfigEnv;
+use crate::git_util::GitSubprocessUi;
+use crate::git_util::absolute_git_url;
+use crate::git_util::load_git_import_options;
+use crate::git_util::print_git_import_stats;
+use crate::revset_util::parse_remote_fetch_bookmarks;
+use crate::revset_util::parse_remote_fetch_tags;
+use crate::revset_util::parse_union_name_patterns;
+use crate::ui::Ui;
+
+/// Create a new repo backed by a clone of a Git repo
+#[derive(clap::Args, Clone, Debug)]
+pub struct GitCloneArgs {
+    /// URL or path of the Git repo to clone
+    ///
+    /// Local path will be resolved to absolute form.
+    #[arg(value_hint = clap::ValueHint::Url)]
+    source: String,
+
+    /// Specifies the target directory for the Jujutsu repository clone.
+    /// If not provided, defaults to a directory named after the last component
+    /// of the source URL. The full directory path will be created if it
+    /// doesn't exist.
+    #[arg(value_hint = clap::ValueHint::DirPath)]
+    destination: Option<String>,
+
+    /// Name of the newly created remote
+    #[arg(long = "remote", default_value = "origin")]
+    remote_name: RemoteNameBuf,
+
+    /// Colocate the Jujutsu repo with the git repo
+    ///
+    /// Specifies that the `jj` repo should also be a valid `git` repo, allowing
+    /// the use of both `jj` and `git` commands in the same directory.
+    ///
+    /// The repository will contain a `.git` dir in the top-level. Regular Git
+    /// tools will be able to operate on the repo.
+    ///
+    /// **This is the default**, and this option has no effect, unless the
+    /// [git.colocate config] is set to `false`.
+    ///
+    /// [git.colocate config]:
+    ///     https://docs.jj-vcs.dev/latest/config/#default-colocation
+    #[arg(long)]
+    colocate: bool,
+
+    /// Disable colocation of the Jujutsu repo with the git repo
+    ///
+    /// Prevent Git tools that are unaware of `jj` and regular Git commands from
+    /// operating on the repo. The Git repository that stores most of the repo
+    /// data will be hidden inside a sub-directory of the `.jj` directory.
+    ///
+    /// See [colocation docs] for some minor advantages of non-colocated
+    /// workspaces.
+    ///
+    /// [colocation docs]:
+    ///     https://docs.jj-vcs.dev/latest/git-compatibility/#colocated-jujutsugit-repos
+    #[arg(long, conflicts_with = "colocate")]
+    no_colocate: bool,
+
+    /// Create a shallow clone of the given depth
+    #[arg(long)]
+    depth: Option<NonZeroU32>,
+
+    /// Name of the branch to fetch and use as the parent of the working-copy
+    /// change (can be repeated)
+    ///
+    /// If not present, all branches are fetched and the repository's default
+    /// branch is used as parent of the working-copy change.
+    ///
+    /// By default, the specified pattern matches branch names with glob syntax,
+    /// but only `*` is expanded. Other wildcard characters such as `?` are
+    /// *not* supported. Patterns can be repeated or combined with [logical
+    /// operators] to specify multiple branches, but only union and negative
+    /// intersection are supported. If there are multiple matching branches, the
+    /// first exact branch name is used as the working-copy parent.
+    ///
+    /// Examples: `push-*`, `(push-* | foo/*) ~ foo/unwanted`
+    ///
+    /// [logical operators]:
+    ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
+    #[arg(long = "branch", short, alias = "bookmark", value_name = "BRANCH")]
+    branches: Option<Vec<String>>,
+
+    /// Fetch only some of the tags (can be repeated)
+    ///
+    /// By default, the specified pattern matches tag names with glob syntax,
+    /// but only `*` is expanded. Other wildcard characters such as `?` are
+    /// *not* supported. Patterns can be repeated or combined with [logical
+    /// operators] to specify multiple tags, but only union and negative
+    /// intersection are supported.
+    ///
+    /// [logical operators]:
+    ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
+    #[arg(long = "tag", short, value_name = "TAG")]
+    tags: Option<Vec<String>>,
+
+    /// Object hash algorithm for the local Git repository.
+    ///
+    /// *Must* match the remote's hash algorithm, otherwise the operation will
+    /// fail. Most existing repositories today still use the classic SHA-1
+    /// format, which is also the default if not configured otherwise by the
+    /// [git.object-hash config].
+    ///
+    /// See also Git's [hash-function-transition] document for an in-depth
+    /// explanation of the migration towards stronger hash functions.
+    ///
+    /// [git.object-hash config]:
+    ///     https://docs.jj-vcs.dev/latest/config/#default-object-hash-format
+    /// [hash-function-transition]:
+    ///     https://git-scm.com/docs/hash-function-transition
+    #[arg(long, value_enum)]
+    object_hash: Option<ObjectHash>,
+}
+
+fn clone_destination_for_source(source: &str) -> Option<&str> {
+    let destination = source.strip_suffix(".git").unwrap_or(source);
+    let destination = destination.strip_suffix('/').unwrap_or(destination);
+    destination
+        .rsplit_once(&['/', '\\', ':'][..])
+        .map(|(_, name)| name)
+}
+
+pub async fn cmd_git_clone(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &GitCloneArgs,
+) -> Result<(), CommandError> {
+    let remote_name = &args.remote_name;
+    if command.global_args().at_operation.is_some() {
+        return Err(cli_error("--at-op is not respected"));
+    }
+    let source = absolute_git_url(command.cwd(), &args.source)?;
+    let wc_path_str = args
+        .destination
+        .as_deref()
+        .or_else(|| clone_destination_for_source(&source))
+        .ok_or_else(|| user_error("No destination specified and wasn't able to guess it"))?;
+    let wc_path = command.cwd().join(wc_path_str);
+
+    let wc_path_existed = wc_path.exists();
+    if wc_path_existed && !file_util::is_empty_dir(&wc_path)? {
+        return Err(user_error(
+            "Destination path exists and is not an empty directory",
+        ));
+    }
+
+    // will create a tree dir in case if was deleted after last check
+    fs::create_dir_all(&wc_path)
+        .map_err(|err| user_error_with_message(format!("Failed to create {wc_path_str}"), err))?;
+
+    let colocate = if command.settings().get_bool("git.colocate")? {
+        !args.no_colocate
+    } else {
+        args.colocate
+    };
+    let is_specific = args.branches.is_some() || args.tags.is_some();
+    let specific_bookmark_expr = match &args.branches {
+        Some(texts) => Some(parse_union_name_patterns(ui, texts)?),
+        None => is_specific.then(StringExpression::none),
+    };
+    let specific_tag_expr = match &args.tags {
+        Some(texts) => Some(parse_union_name_patterns(ui, texts)?),
+        None => is_specific.then(StringExpression::none),
+    };
+    let object_hash = args.object_hash.map_or_else(
+        || command.settings().get::<ObjectHash>("git.object-hash"),
+        Result::Ok,
+    )?;
+
+    // Canonicalize because fs::remove_dir_all() doesn't seem to like e.g.
+    // `/some/path/.`
+    let canonical_wc_path = dunce::canonicalize(&wc_path)
+        .map_err(|err| user_error_with_message(format!("Failed to create {wc_path_str}"), err))?;
+
+    let clone_result: Result<_, CommandError> = async {
+        let (workspace_command, config_env) = init_workspace(
+            ui,
+            command,
+            &canonical_wc_path,
+            colocate,
+            object_hash.into(),
+        )
+        .await?;
+        let remote_settings = workspace_command.settings().remote_settings()?;
+        let bookmark = if let Some(expr) = &specific_bookmark_expr {
+            expr.clone()
+        } else if let Some(expr) = parse_remote_fetch_bookmarks(ui, &remote_settings, remote_name)?
+        {
+            expr
+        } else {
+            StringExpression::all()
+        };
+        let tag = if let Some(expr) = specific_tag_expr {
+            expr
+        } else if let Some(expr) = parse_remote_fetch_tags(ui, &remote_settings, remote_name)? {
+            expr
+        } else {
+            StringExpression::all()
+        };
+        let mut workspace_command =
+            configure_remote(ui, command, workspace_command, remote_name, &source).await?;
+        let ref_expr = GitFetchRefExpression { bookmark, tag };
+        let default_branch = fetch_new_remote(
+            ui,
+            &mut workspace_command,
+            remote_name,
+            &ref_expr,
+            args.depth,
+        )
+        .await?;
+        Ok((workspace_command, default_branch, config_env))
+    }
+    .await;
+    if clone_result.is_err() {
+        let clean_up_dirs = || -> io::Result<()> {
+            let sub_dirs = [Some(".jj"), colocate.then_some(".git")];
+            for &name in sub_dirs.iter().flatten() {
+                let dir = canonical_wc_path.join(name);
+                fs::remove_dir_all(&dir).or_else(|err| match err.kind() {
+                    io::ErrorKind::NotFound => Ok(()),
+                    _ => Err(err),
+                })?;
+            }
+            if !wc_path_existed {
+                fs::remove_dir(&canonical_wc_path)?;
+            }
+            Ok(())
+        };
+        if let Err(err) = clean_up_dirs() {
+            writeln!(
+                ui.warning_default(),
+                "Failed to clean up {}: {}",
+                canonical_wc_path.display(),
+                err
+            )
+            .ok();
+        }
+    }
+
+    let (mut workspace_command, (working_branch, working_is_default), config_env) = clone_result?;
+
+    write_repo_presets(
+        ui,
+        &config_env,
+        RepoPresets {
+            remote: remote_name,
+            fetch_bookmarks: is_specific.then_some(args.branches.as_deref().unwrap_or(&[])),
+            fetch_tags: is_specific.then_some(args.tags.as_deref().unwrap_or(&[])),
+            trunk: working_branch
+                .as_deref()
+                .filter(|_| working_is_default)
+                .map(|name| name.to_remote_symbol(remote_name)),
+        },
+    )?;
+
+    if let Some(name) = &working_branch {
+        let working_symbol = name.to_remote_symbol(remote_name);
+        let working_branch_remote_ref = workspace_command
+            .repo()
+            .view()
+            .get_remote_bookmark(working_symbol);
+        if let Some(commit_id) = working_branch_remote_ref.target.as_normal().cloned() {
+            let mut tx = workspace_command.start_transaction();
+            if let Ok(commit) = tx.repo().store().get_commit_async(&commit_id).await {
+                tx.check_out(&commit)?;
+            }
+            tx.finish(
+                ui,
+                format!("check out git remote's branch: {}", name.as_symbol()),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn init_workspace(
+    ui: &Ui,
+    command: &CommandHelper,
+    wc_path: &Path,
+    colocate: bool,
+    object_hash: gix::hash::Kind,
+) -> Result<(WorkspaceCommandHelper, ConfigEnv), CommandError> {
+    let (settings, config_env) = command.settings_for_new_workspace(ui, wc_path)?;
+    let (workspace, repo) = if colocate {
+        Workspace::init_colocated_git(&settings, wc_path, object_hash).await?
+    } else {
+        Workspace::init_internal_git(&settings, wc_path, object_hash).await?
+    };
+    let workspace_command = command.for_workable_repo(ui, workspace, repo)?;
+    maybe_add_gitignore(&workspace_command)?;
+    Ok((workspace_command, config_env))
+}
+
+async fn configure_remote(
+    ui: &Ui,
+    command: &CommandHelper,
+    mut workspace_command: WorkspaceCommandHelper,
+    remote_name: &RemoteName,
+    source: &str,
+) -> Result<WorkspaceCommandHelper, CommandError> {
+    let mut tx = workspace_command.start_transaction();
+    git::add_remote(tx.repo_mut(), remote_name, source, None)?;
+    tx.finish(ui, format!("add git remote {}", remote_name.as_symbol()))
+        .await?;
+    // Reload workspace to apply new remote configuration to
+    // gix::ThreadSafeRepository behind the store.
+    let workspace = command.load_workspace_at(
+        workspace_command.workspace_root(),
+        workspace_command.settings(),
+    )?;
+    let op = workspace
+        .repo_loader()
+        .load_operation(workspace_command.repo().op_id())
+        .await?;
+    let repo = workspace.repo_loader().load_at(&op).await?;
+    command.for_workable_repo(ui, workspace, repo)
+}
+
+async fn fetch_new_remote(
+    ui: &Ui,
+    workspace_command: &mut WorkspaceCommandHelper,
+    remote_name: &RemoteName,
+    ref_expr: &GitFetchRefExpression,
+    depth: Option<NonZeroU32>,
+) -> Result<(Option<RefNameBuf>, bool), CommandError> {
+    writeln!(
+        ui.status(),
+        r#"Fetching into new repo in "{}""#,
+        workspace_command.workspace_root().display()
+    )?;
+    let settings = workspace_command.settings();
+    let git_settings = GitSettings::from_settings(settings)?;
+    let remote_settings = settings.remote_settings()?;
+    let subprocess_options = git_settings.to_subprocess_options();
+    let import_options = GitImportOptions {
+        // There may be a large number of new commits. Don't record synthetic
+        // predecessors.
+        record_synthetic_predecessors: false,
+        ..load_git_import_options(ui, &git_settings, &remote_settings)?
+    };
+    let should_track_default = settings.get_bool("git.track-default-bookmark-on-clone")?;
+    let mut tx = workspace_command.start_transaction();
+    let (default_branch, import_stats) = {
+        let mut git_fetch = GitFetch::new(tx.repo_mut(), subprocess_options, &import_options)?;
+
+        let fetch_refspecs = expand_fetch_refspecs(remote_name, ref_expr.clone())?;
+
+        git_fetch.fetch(
+            remote_name,
+            fetch_refspecs,
+            &mut GitSubprocessUi::new(ui),
+            depth,
+        )?;
+
+        let import_stats = git_fetch.import_refs().await?;
+
+        let default_branch = git_fetch.get_default_branch(remote_name)?;
+        (default_branch, import_stats)
+    };
+
+    // Warn unmatched exact patterns, and record the first matching branch as
+    // the working branch. If there are no matching exact patterns, use the
+    // default branch of the remote.
+    let mut missing_branches = vec![];
+    let mut working_branch = None;
+    let bookmark_matcher = ref_expr.bookmark.to_matcher();
+    let exact_bookmarks = ref_expr
+        .bookmark
+        .exact_strings()
+        .filter(|name| bookmark_matcher.is_match(name)) // exclude negative patterns
+        .map(RefName::new);
+    for name in exact_bookmarks {
+        let symbol = name.to_remote_symbol(remote_name);
+        if tx.repo().view().get_remote_bookmark(symbol).is_absent() {
+            missing_branches.push(name);
+        } else if working_branch.is_none() {
+            working_branch = Some(name);
+        }
+    }
+    if working_branch.is_none() {
+        working_branch = default_branch.as_deref().filter(|name| {
+            let symbol = name.to_remote_symbol(remote_name);
+            tx.repo().view().get_remote_bookmark(symbol).is_present()
+        });
+    }
+    if !missing_branches.is_empty() {
+        writeln!(
+            ui.warning_default(),
+            "No matching branches found on remote: {}",
+            missing_branches
+                .iter()
+                .map(|name| name.as_symbol())
+                .join(", ")
+        )?;
+    }
+    // TODO: warn missing tags if we add --tag=pattern
+
+    let working_is_default = working_branch == default_branch.as_deref();
+    if let Some(name) = working_branch
+        && working_is_default
+        && should_track_default
+    {
+        // For convenience, create local bookmark as Git would do.
+        let remote_symbol = name.to_remote_symbol(remote_name);
+        tx.repo_mut().track_remote_bookmark(remote_symbol).await?;
+    }
+    print_git_import_stats(ui, &tx, &import_stats)?;
+    tx.finish(ui, "fetch from git remote into empty repo")
+        .await?;
+    Ok((working_branch.map(ToOwned::to_owned), working_is_default))
+}

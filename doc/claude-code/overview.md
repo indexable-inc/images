@@ -158,6 +158,51 @@ defaults so package-owned keys always win:
   `default.nix` is the source of truth for Claude Code orchestration and
   hosted-service tool posture. Override with
   `systemTools.<ToolName> = true` when that surface earns its context cost.
+
+### `kernelOnly = true` leaves the index Elixir kernel as the only tool
+
+Opt-in strict mode, default off, off changes nothing. `claude-code.override {
+kernelOnly = true; }` denies every built-in tool and every non-index MCP server,
+so the session's whole surface is `mcp__index__*`. The point is the kernel's
+persistent Elixir workspace: bindings, modules and jobs survive across cells, so
+work accumulates somewhere a later cell can build on, where the same commands
+through Bash leave nothing behind but transcript. Web search and fetch are not
+lost with the exa server, they move in-language to `Web.search/1` and
+`Web.fetch/1`, which call the same API.
+
+Three things happen at once, and they are not redundant:
+
+- Every row of `defaultSystemTools` flips off, applied AFTER the caller's
+  `systemTools` so an explicit re-grant cannot punch a hole in the mode. To get
+  a tool back, turn the mode off.
+- Non-index servers are dropped from the baked `--mcp-config` outright, and
+  denied by name as well. `--mcp-config` layers MERGE, so a user's own config or
+  a discovered project `.mcp.json` can still introduce a server this wrapper
+  never baked; only the deny reaches that.
+- The `kernel-only-guard` PreToolUse hook is armed. This is the half that makes
+  the mode a guarantee rather than a list: it allowlists `mcp__index__*` and
+  `mcp__own-kernel__*` and denies everything else, so a tool the next CLI
+  release invents is covered with no change here. It is also the only seam that
+  can tell the agent WHERE to go instead, and a denied call is read by the model
+  as an instruction, so the reason names the kernel rather than only the
+  refusal.
+
+`kernelOnly` without the `index` server baked throws at eval rather than
+building an agent with no tools at all.
+
+Not supported for cursor-agent. Its `cli-config.json` can deny shell commands
+and nothing else, so the mode would be half-applied with no way to say so at
+runtime; `permissions.nix` reports this as `cursor.kernelOnlySupported = false`
+instead of pretending.
+
+**Known gap: an index server that drops mid-session strands the agent.**
+`WaitForMcpServers` is one of the built-ins the mode turns off, and the guard
+would deny it anyway, so an agent whose kernel disconnects has no tool left and
+no way to wait for the reconnection. Session startup is fine -- the CLI
+registers stdio MCP servers before the first turn -- so this is specifically
+the mid-session case, and the recovery is a new session. Named here because the
+symptom (every tool call refused, including the one the refusal recommends) is
+otherwise very hard to read.
 - `hooks` (below).
 - `channelsEnabled = true`: channels are allowed. This one is worth spelling
   out, because it is the key the managed layer *has* to carry rather than one it
@@ -260,13 +305,29 @@ and on Linux the sandbox helpers `bubblewrap` and `socat`.
 ## Build and wiring
 
 - Install (`default.nix:435-462`): the real binary is installed to
-  `$out/libexec/Claude Code` (off PATH, named for the product so 1Password's
-  "CLI access requested" prompt reads "Claude Code"); the launch spec's
-  `@helper@` placeholder is substituted with its real path; `$out/bin/${binName}`
+  `$out/libexec/<binName>/Claude Code` (off PATH; the BASENAME is the product
+  name so 1Password's "CLI access requested" prompt reads "Claude Code", while
+  the directory carries the command alias); the launch spec goes to
+  `$out/share/<binName>/claude-code-launch-spec.json` and its `@helper@`
+  placeholder is substituted with the helper's real path; `$out/bin/${binName}`
   is a `makeBinaryWrapper` over `config-launch` with `--inherit-argv0` and
   `--set IX_LAUNCH_SPEC`. `dontStrip = true` because stripping corrupts Bun's
   appended trailer (`default.nix:425-427`); `autoPatchelfHook` runs on ELF
   hosts.
+
+  **Everything outside `bin/` is keyed by `binName` so two wrappers share one
+  profile.** An overridden second wrapper (`claude-code.override { kernelOnly =
+  true; binName = "claude-kernel"; }`) is meant to be installed alongside the
+  ordinary `claude`, and `buildEnv` refuses any relative path two inputs both
+  provide. While the helper and the launch spec had fixed names the user
+  profile would not build at all (ENG-12737, hit on hydra). A per-`binName`
+  directory rather than a name suffix, so whatever is added here later is
+  collision-free without anyone having to remember;
+  `checks.claude-code-profile-coexist` merges both wrappers with `buildEnv` and
+  is what fails if that stops holding. Both paths are consumed as absolute
+  paths -- the launcher reads the spec out of `IX_LAUNCH_SPEC` and the helper is
+  reached only through the `@helper@` substitution -- so nothing looks either
+  up by name.
 - Install checks (`install-check.nix`): an offline argv regression net driven
   through the real launcher against a stub target (flags prepend, `=` form, no
   injected settings, caller `--settings` passes through) plus behavioral nets

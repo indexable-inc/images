@@ -23,10 +23,43 @@ defmodule IxMcp.MCP.Notifier do
   `register/1` replays them as one digest the moment a transport (re)joins:
   the no-silent-death invariant is the durable row, not a broadcast.
 
+  Both durable sources ride one queue. A terminal job transition is one
+  (#3839); a subagent's final is the other (#3700), inserted by
+  `ActionLog.announce_agent/5` and published here identically -- scoped to
+  the lead's session, coalesced with its siblings, replayed on reconnect,
+  acked by whoever renders it. An agent final differs from a job's in exactly
+  one rendered way: its result text rides along even on a clean finish,
+  because unlike a job's output there is no second place to read it from.
+
   Cross-session interest is explicit rather than ambient (#3934):
   `watch/2` subscribes a session to another job's or session's terminal
   transitions, observed by polling the shared ledger -- the watched job may
   live in a sibling kernel instance, so no in-memory signal can cross.
+
+  Measured contract note, `notifications/claude/channel` on Claude Code
+  2.1.226 (2026-08-12): the notification DOES render. Two pushes on a live,
+  correctly attributed transport both arrived in the client session, one
+  queued into a running turn and one as its own turn, with a multi-line body
+  intact and every meta pair carried through -- including the exact attribute
+  set `IxMcp.Agents.Events` sends for a finish. An earlier report of silence
+  was measured on a session that had been RESUMED under a new session id, so
+  the one registered transport belonged to the dead client and the bytes went
+  to a pipe nobody was reading. A direct push cannot recover from that, which
+  is why agent finals ride the durable outbox (#3934) instead: the unacked row
+  replays on the next `register/1`, so a finish survives exactly the transport
+  handover that swallowed it. (#3785 is the separate, still-open issue that
+  `notifications/message` never surfaces at all.)
+
+  One real wart surfaced while measuring, and it is a contract bug rather
+  than a delivery one: the renderer injects its own `source` attribute naming
+  the MCP server (`source="index"`), and every producer here also sends
+  `"source"` in `meta` (agents, jobs, fleet, issues, sessions, requests,
+  pr_watch). The rendered block therefore carries the attribute twice, as in
+  `source="index" ... source="agents"`, and under last-wins parsing the meta
+  value displaces the attribution the host added. Fixing it means namespacing
+  the meta key across all of those producers in one change, which is out of
+  scope here; until then a duplicated `source=` in a rendered block is
+  expected and is not evidence of a spoofed origin.
   """
 
   use GenServer
@@ -40,6 +73,11 @@ defmodule IxMcp.MCP.Notifier do
   # within-budget job before its row is ever rendered; short enough that a
   # background death still lands promptly. Tests shrink it via app env.
   @coalesce_ms Application.compile_env(:ix_mcp, :notify_coalesce_ms, 2_000)
+
+  # How much of a subagent's final text a single announcement carries. The
+  # whole final stays readable through `Agents.report/0`, so this bounds one
+  # channel message rather than the record.
+  @agent_result_cap 2_000
 
   # Watch-poll cadence. Watches read the shared database, so the interval
   # is also the cross-instance notification latency.
@@ -267,15 +305,19 @@ defmodule IxMcp.MCP.Notifier do
   # as a watch hit in the same window; the owned row wins (it acks).
   defp dedup(entries) do
     {outbox, watch} = Enum.split_with(entries, &(&1.kind == :outbox))
-    owned = MapSet.new(outbox, & &1.row.job_id)
+    owned = MapSet.new(outbox, &key(&1.row))
 
     watch =
       watch
-      |> Enum.reject(&MapSet.member?(owned, &1.row.job_id))
-      |> Enum.uniq_by(& &1.row.job_id)
+      |> Enum.reject(&MapSet.member?(owned, key(&1.row)))
+      |> Enum.uniq_by(&key(&1.row))
 
     outbox ++ watch
   end
+
+  # Only the pair identifies an announcement: `ref` is unique within its own
+  # source's namespace and nowhere else.
+  defp key(row), do: {row.source, row.ref}
 
   # A transport registered before its session acted has the session the
   # registration created; a nil-session outbox row (a pre-#3934 database)
@@ -361,7 +403,8 @@ defmodule IxMcp.MCP.Notifier do
 
   defp watch_row(job) do
     %{
-      job_id: job.id,
+      source: :jobs,
+      ref: job.id,
       intent: job.intent,
       status: job.status,
       elapsed_ms: job.elapsed_ms,
@@ -390,10 +433,10 @@ defmodule IxMcp.MCP.Notifier do
 
       rows ->
         lines = Enum.map_join(rows, "\n", &("- " <> line_of(&1)))
-        content = "while you were away, #{length(rows)} job(s) finished:\n" <> lines
+        content = "while you were away, #{finished_phrase(rows)}:\n" <> lines
 
         meta = %{
-          "source" => "jobs",
+          "source" => digest_source(rows),
           "replay" => Integer.to_string(length(rows)),
           "severity" => severity(rows)
         }
@@ -433,47 +476,88 @@ defmodule IxMcp.MCP.Notifier do
   # One finish is one line -- the output stays behind Jobs.output (#3934);
   # only a failure carries its reason, because the reason IS the news.
   defp render_entries([%{kind: kind, row: row}]) do
-    status = Atom.to_string(row.status)
-
-    content =
-      case row.status do
-        :done -> line_of(row)
-        _failure -> line_of(row) <> "\n" <> String.slice(row.result || "", 0, 500)
-      end
-
-    meta = %{
-      "source" => "jobs",
-      "job" => row.job_id,
-      "status" => status,
-      "severity" => severity([row])
-    }
-
+    content = line_of(row) <> body_of(row)
+    meta = Map.put(meta_of(row), "severity", severity([row]))
     {content, if(kind == :watch, do: Map.put(meta, "watch", "1"), else: meta)}
   end
 
   defp render_entries(entries) do
     rows = Enum.map(entries, & &1.row)
     lines = Enum.map_join(rows, "\n", &("- " <> line_of(&1)))
-    content = "#{length(rows)} job(s) finished:\n" <> lines
+    content = "#{finished_phrase(rows)}:\n" <> lines
 
     {content,
      %{
-       "source" => "jobs",
+       "source" => digest_source(rows),
        "digest" => Integer.to_string(length(rows)),
        "severity" => severity(rows)
      }}
+  end
+
+  # A digest counts each source separately rather than calling everything a
+  # job: "2 jobs and 1 agent finished" is the whole news in the first line.
+  defp finished_phrase(rows) do
+    {agents, jobs} = Enum.split_with(rows, &(&1.source == :agents))
+
+    [{length(jobs), "job"}, {length(agents), "agent"}]
+    |> Enum.reject(fn {n, _noun} -> n == 0 end)
+    |> Enum.map_join(" and ", fn {n, noun} -> "#{n} #{noun}#{if n == 1, do: "", else: "s"}" end)
+    |> Kernel.<>(" finished")
+  end
+
+  # A homogeneous digest keeps its source so a client can still filter on it;
+  # a mixed one says so rather than claiming to be one of them.
+  defp digest_source(rows) do
+    case Enum.uniq(Enum.map(rows, & &1.source)) do
+      [only] -> Atom.to_string(only)
+      _mixed -> "mixed"
+    end
+  end
+
+  defp line_of(%{source: :agents} = row) do
+    label = if row.intent, do: " [#{row.intent}]", else: ""
+    "agent #{row.ref}#{label} finished: #{row.status} in #{elapsed_s(row.elapsed_ms)}s"
   end
 
   defp line_of(row) do
     status = Atom.to_string(row.status)
 
     line =
-      "job #{row.job_id} (#{row.intent || "no intent"}): #{status} in #{elapsed_s(row.elapsed_ms)}s"
+      "job #{row.ref} (#{row.intent || "no intent"}): #{status} in #{elapsed_s(row.elapsed_ms)}s"
 
     case row.status do
       :done -> line
       _failure -> line <> " -- " <> reason_of(row.result)
     end
+  end
+
+  # A job's output stays behind Jobs.output, so only its failure reason rides
+  # along (#3934). An agent's final text IS the deliverable -- there is no
+  # second place to read it from -- so it rides on a clean finish too, capped.
+  defp body_of(%{source: :agents} = row) do
+    "\n" <> String.slice(row.result || "", 0, @agent_result_cap)
+  end
+
+  defp body_of(%{status: :done}), do: ""
+
+  defp body_of(row), do: "\n" <> String.slice(row.result || "", 0, 500)
+
+  # The attributes a client keys on. `intent` is each source's own short
+  # label: an exec cell's intent for a job, the backend that ran the child
+  # for an agent.
+  defp meta_of(%{source: :agents} = row) do
+    meta = %{
+      "source" => "agents",
+      "event" => "agent_finished",
+      "agent" => row.ref,
+      "status" => Atom.to_string(row.status)
+    }
+
+    if row.intent, do: Map.put(meta, "backend", row.intent), else: meta
+  end
+
+  defp meta_of(row) do
+    %{"source" => "jobs", "job" => row.ref, "status" => Atom.to_string(row.status)}
   end
 
   defp reason_of(nil), do: "no result recorded"

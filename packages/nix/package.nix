@@ -1,6 +1,5 @@
 {
-  # Upstream NixOS/nix (nix-src input) with the in-repo patch series
-  # (./patches) applied, built through nixpkgs' modular nix packaging so it is
+  # The Nix view, built through nixpkgs' modular nix packaging so it is
   # a drop-in for the daemon version the fleet runs (2.34.7). Surfaced as
   # `pkgs.nix-ix` in the repo package set and as the `nix-ix` flake output.
   #
@@ -9,8 +8,7 @@
   # under the bare `nix` name would make it its own base (infinite recursion),
   # exactly as nix-eval-jobs / nix-output-monitor document for their overrides.
   #
-  # `autoUpdate = false` in lib/fork-packages.nix keeps the daemon source out of
-  # scheduled fork-sync. The updater only resolves the bootstrap action's
+  # View updates move the daemon source deliberately. The updater only resolves the bootstrap action's
   # explicitly requested source ref into its generated lock; it does not move
   # the daemon version.
   id = "nix-ix";

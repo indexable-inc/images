@@ -32,6 +32,10 @@ pub struct TuiInstance {
     pub args: Vec<String>,
     /// When the process was spawned.
     pub spawned_at: SystemTime,
+    /// Agent presentation, when the spawner said this terminal is an agent.
+    /// `Arc` because every handle clone (one per poll tick via `list`) would
+    /// otherwise copy the marker strings.
+    pub agent: Option<Arc<crate::types::AgentConfig>>,
     /// Configured scrollback depth.
     pub scrollback_limit: usize,
     /// Live terminal size, shared across clones so a [`resize`](Self::resize)

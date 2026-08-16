@@ -1,0 +1,6 @@
+# smallpt implementation
+
+This is a Haskell port of the [smallpt](https://www.kevinbeason.com/smallpt/)
+raytracer by Davean Scies and bollu.
+
+Original source: <https://github.com/bollu/smallpt-opt/>

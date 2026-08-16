@@ -158,8 +158,9 @@ impl ClientSecrets {
     /// [`Error::ParseClientSecrets`] if it carries no client identity.
     pub fn from_file(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path).context(ReadClientSecretsSnafu { path })?;
-        let document: serde_json::Value =
-            serde_json::from_slice(&bytes).ok().context(ParseClientSecretsSnafu { path })?;
+        let document: serde_json::Value = serde_json::from_slice(&bytes)
+            .ok()
+            .context(ParseClientSecretsSnafu { path })?;
 
         // Try the wrapper keys the console emits before the flat shape, so a
         // file carrying both (never seen in the wild, but cheap to define)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import enum
 import gc
 import threading
 import time
@@ -54,6 +55,54 @@ async def case_echo_types() -> str:
     assert isinstance(caught, conf.ConformanceError)
     message = str(caught)
     return f"all round-trips exact; raised {message!r} as ValueError subclass"
+
+
+async def case_unit_enums() -> str:
+    """A unit enum crosses as a StrEnum member, both ways, and refuses junk."""
+    # The member is an enum member AND a str, which is the whole point: code
+    # written against the old stringly surface keeps working.
+    assert issubclass(conf.Severity, enum.StrEnum)
+    assert conf.Severity.HARD_FAILURE == "hard_failure"
+    assert isinstance(conf.Severity.INFO, str)
+
+    # Returned values are real members, not bare strings.
+    echoed = conf.echo_severity(conf.Severity.WARNING)
+    assert echoed is conf.Severity.WARNING, f"got {echoed!r}"
+    assert isinstance(echoed, conf.Severity)
+
+    # A bare string is accepted on the way in and still comes back a member.
+    from_str = conf.echo_severity("info")
+    assert from_str is conf.Severity.INFO, f"got {from_str!r}"
+
+    # Rust matched on the variant rather than passing a string through.
+    assert conf.escalate(conf.Severity.INFO) is conf.Severity.WARNING
+    assert conf.escalate(conf.Severity.WARNING) is conf.Severity.HARD_FAILURE
+
+    # `rename_all` decides the wire spelling; the member name stays the
+    # Python convention.
+    assert conf.FrameKind.STARTED == "Started"
+    assert conf.echo_optional_kind(None) is None
+    assert conf.echo_optional_kind(conf.FrameKind.FINISHED) is conf.FrameKind.FINISHED
+
+    # Enum-typed record fields cross in both directions.
+    finding = conf.echo_finding(
+        conf.Finding(conf.Severity.HARD_FAILURE, conf.FrameKind.FINISHED, "boom")
+    )
+    assert finding.severity is conf.Severity.HARD_FAILURE
+    assert finding.kind is conf.FrameKind.FINISHED
+    assert finding.to_dict()["severity"] is conf.Severity.HARD_FAILURE
+
+    # A word outside the closed set is refused by name, not silently mapped.
+    caught: ValueError | None = None
+    try:
+        conf.echo_severity("catastrophe")
+    except ValueError as exc:
+        caught = exc
+    assert caught is not None, "an unknown variant did not raise"
+    message = str(caught)
+    assert "catastrophe" in message, message
+    assert "hard_failure" in message, message
+    return f"StrEnum both ways; unknown variant raised {message!r}"
 
 
 async def case_cancel_mid_flight() -> str:
@@ -262,15 +311,125 @@ async def case_panic_containment() -> str:
     return f"sync panic -> {sync_name}, async panic -> {async_name}; interpreter still live"
 
 
+async def case_static_factory() -> str:
+    """Static factories construct the object, sync and async, and stay resources."""
+    closed_base = conf.closed_gates()
+
+    # The shape `__new__` cannot take: a static that awaits before it has
+    # an instance to hand back.
+    opened = await conf.Gate.opened("gamma")
+    assert isinstance(opened, conf.Gate), f"async factory returned {type(opened)!r}"
+    assert opened.label() == "gamma"
+    assert opened.is_open()
+
+    # A second factory on the same object, sync this time.
+    copy = conf.Gate.named_after("gamma")
+    assert isinstance(copy, conf.Gate), f"sync factory returned {type(copy)!r}"
+    assert copy.label() == "gamma-copy"
+
+    # A factory's errors raise like any other call's.
+    try:
+        await conf.Gate.opened("")
+    except ValueError as exc:
+        async_error = str(exc)
+    else:
+        raise AssertionError("empty label did not raise from the async factory")
+    try:
+        conf.Gate.named_after("")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empty label did not raise from the sync factory")
+
+    # What a factory returns is a real resource, so `async with` closes it.
+    async with await conf.Gate.opened("delta") as scoped:
+        assert scoped.label() == "delta"
+    assert not scoped.is_open()
+
+    # An associated function that does not return the object is a plain
+    # staticmethod.
+    assert conf.Gate.describe("epsilon") == "gate:epsilon"
+
+    await opened.close()
+    await copy.close()
+    assert conf.closed_gates() == closed_base + 3, "each factory instance closed once"
+    return f"factories construct and close; async factory error: {async_error}"
+
+
+def _doc_sites() -> list[tuple[str, str]]:
+    """Every docstring the extension exposes, by dotted name."""
+    sites: list[tuple[str, str]] = [("<module>", conf.__doc__ or "")]
+    for name in dir(conf):
+        if name.startswith("_"):
+            continue
+        member = getattr(conf, name)
+        doc = getattr(member, "__doc__", None)
+        if isinstance(doc, str):
+            sites.append((name, doc))
+        if not isinstance(member, type):
+            continue
+        for attr in vars(member):
+            if attr.startswith("_"):
+                continue
+            attr_doc = getattr(getattr(member, attr), "__doc__", None)
+            if isinstance(attr_doc, str):
+                sites.append((f"{name}.{attr}", attr_doc))
+    return sites
+
+
+async def case_doc_links() -> str:
+    """Intra-doc links reach __doc__ in Python's spelling, not rustdoc's."""
+    # One line per target kind the resolver distinguishes, each expectation
+    # anchored on prose from the fixture: a rendered name on its own can
+    # also come from a docstring the stub emitter synthesizes, which is how
+    # the first draft of this passed against a link pointing elsewhere.
+    rendered: tuple[tuple[str, str | None, str], ...] = (
+        # an object type, reached by the inline `[text](Target)` form
+        ("Shell.output", conf.Shell.output.__doc__, "opened under; see `Gate`."),
+        # a method on the object this one mints
+        ("Gate.open_shell", conf.Gate.open_shell.__doc__,
+         "Its bytes come back through `Shell.output`."),
+        # an error variant, which Python spells as its own exception class
+        ("Gate.opened", conf.Gate.opened.__doc__,
+         "Raises `Deliberate` on an empty label"),
+        # a sibling associated function, reached through `Self`
+        ("Gate.opened", conf.Gate.opened.__doc__,
+         "refusal `Gate.named_after` makes."),
+        # a record type, from an enumeration's own doc comment
+        ("Severity", conf.Severity.__doc__, "one to a `Finding`."),
+        # a method, from the object doc comment that already carried a link
+        ("Shell", conf.Shell.__doc__, "minted only by `Gate.open_shell`"),
+    )
+    for site, doc, expected in rendered:
+        assert doc is not None, f"{site} carries no docstring"
+        assert expected in doc, f"{site} docstring lacks {expected!r}: {doc!r}"
+
+    # No doc site keeps rustdoc syntax at runtime, records included: the macro
+    # writes the resolved lines back over the struct's own doc comments, which
+    # is the one site the generated wrappers do not own.
+    leftover = {name for name, doc in _doc_sites() if "[`" in doc}
+    assert not leftover, (
+        f"rustdoc link syntax survives into __doc__ at {sorted(leftover)}"
+    )
+    tail = conf.Shell.output.__doc__.splitlines()[-1].strip()
+    return (
+        f"{len(rendered)} link renderings match Python spelling "
+        f"(Shell.output ends {tail!r}); no doc site keeps rustdoc syntax"
+    )
+
+
 CASES: tuple[tuple[str, Callable[[], Awaitable[str]]], ...] = (
     ("echo-types", case_echo_types),
+    ("unit-enums", case_unit_enums),
     ("cancel-mid-flight", case_cancel_mid_flight),
     ("stream-backpressure", case_stream_backpressure),
     ("drop-without-close", case_resource_lifecycle),
     ("async-object-return", case_async_object_return),
+    ("static-factory", case_static_factory),
     ("bytes-stream", case_bytes_stream),
     ("zero-copy-gil", case_zero_copy_gil),
     ("panic-containment", case_panic_containment),
+    ("doc-links", case_doc_links),
 )
 
 

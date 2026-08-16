@@ -25,6 +25,10 @@ const panes: Record<string, PaneRecord> = {
   [`${S}${SCOPE_SEP}ns`]: { kind: 'data', renderer: 'namespace', body: '[]', created_at: 105 },
   // A terminal is a resource.
   [`${S}${SCOPE_SEP}resource/term`]: { kind: 'terminal', title: 'shell', created_at: 120, alive: true },
+  // An agent terminal is a resource too; its companion transcript pane is a
+  // card ingredient (rendered inside the AgentCard), never its own run.
+  [`${S}${SCOPE_SEP}agent1`]: { kind: 'terminal', title: 'claude', created_at: 125, alive: true, agent: 'claude', status: 'working' },
+  [`${S}${SCOPE_SEP}agent1-transcript`]: { kind: 'data', renderer: 'transcript', title: 'claude transcript', parent: 'agent1', created_at: 126, body: '{"agent":"claude","entries":[],"skipped":0}' },
   // A second session with one run.
   [`${T}${SCOPE_SEP}__session__`]: sessionPane('session B', 200),
   [`${T}${SCOPE_SEP}r1`]: run('only run', 210),
@@ -52,8 +56,16 @@ describe('buildSidebar', () => {
   it('collects terminals and resource/* panes as resources', () => {
     assert.deepEqual(
       model.resources.map((r) => r.pane.title),
-      ['shell'],
+      ['shell', 'claude'],
     );
+  });
+
+  it('folds an agent transcript into its card, never the run list', () => {
+    const a = model.sessions.find((s) => s.scope === S);
+    // The transcript pane appears in no run list and no resource list; the
+    // AgentCard renders it beside its terminal instead.
+    assert.ok(!a?.runs.some((r) => r.pane.renderer === 'transcript'));
+    assert.ok(!model.resources.some((r) => r.pane.renderer === 'transcript'));
   });
 
   it('counts every run across sessions', () => {
@@ -84,21 +96,29 @@ describe('flattenVisible', () => {
 
   it('walks runs, resources, then recordings in render order', () => {
     const rows = flattenVisible(model, allOpen);
-    // Session B (newest activity) comes before A; runs stay oldest-first within.
+    // Session B (newest activity) comes before A. Within a session, unattached
+    // resources come first, then runs oldest-first; the global resources
+    // section repeats every resource, then recordings.
     assert.deepEqual(rows.map((r) => r.selection), [
       { kind: 'run', key: `${T}${SCOPE_SEP}r1` },
+      { kind: 'resource', key: `${S}${SCOPE_SEP}resource/term` },
+      { kind: 'resource', key: `${S}${SCOPE_SEP}agent1` },
       { kind: 'run', key: `${S}${SCOPE_SEP}r1` },
       { kind: 'run', key: `${S}${SCOPE_SEP}r2` },
       { kind: 'resource', key: `${S}${SCOPE_SEP}resource/term` },
+      { kind: 'resource', key: `${S}${SCOPE_SEP}agent1` },
       { kind: 'recording', id: 'rec1' },
     ]);
   });
 
   it('hides a folded session and folded sections', () => {
     const rows = flattenVisible(model, (k) => k !== 'sess:' + S && k !== 'recordings');
+    // Folding session A hides its rows; its resources stay reachable through
+    // the global resources section.
     assert.deepEqual(rows.map((r) => r.selection), [
       { kind: 'run', key: `${T}${SCOPE_SEP}r1` },
       { kind: 'resource', key: `${S}${SCOPE_SEP}resource/term` },
+      { kind: 'resource', key: `${S}${SCOPE_SEP}agent1` },
     ]);
   });
 

@@ -1,0 +1,33 @@
+{
+  "incremental": true,
+  "typescript": {
+    "indentWidth": 4
+  },
+  "json": {},
+  "markdown": {
+    "lineWidth": 100
+  },
+  "toml": {},
+  "includes": [
+    "docs/**/*.{ts,js,cjs,mjs}",
+    "**/*.{md,toml,json}"
+  ],
+  "excludes": [
+    "CHANGELOG.md",
+    "docs/.vitepress/dist/**",
+    "**/node_modules",
+    "**/*-lock.json",
+    ".github/*",
+    "docs/??-??/**",
+    "docs/??-???/**",
+    "docs/???-??/**",
+    "docs/???-???/**",
+    "target/"
+  ],
+  "plugins": [
+    "https://github.com/dprint/dprint-plugin-typescript/releases/download/0.96.1/plugin.wasm",
+    "https://github.com/dprint/dprint-plugin-json/releases/download/0.22.0/plugin.wasm",
+    "https://github.com/dprint/dprint-plugin-markdown/releases/download/0.22.1/plugin.wasm",
+    "https://github.com/dprint/dprint-plugin-toml/releases/download/0.7.0/plugin.wasm"
+  ]
+}

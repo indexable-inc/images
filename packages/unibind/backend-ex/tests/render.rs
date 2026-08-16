@@ -130,6 +130,18 @@ fn binaries_cross_as_the_wire_newtype() {
     }
 }
 
+/// The elixir backend renders no enumeration, so it says which idiom it
+/// owes rather than emitting a wrapper over a shape it cannot carry.
+#[test]
+fn enumerations_are_rejected_with_the_idiom_they_owe() {
+    let message = render_failure(
+        "mod m { #[unibind::enumeration] pub enum Severity { Info } \
+         pub fn go() -> Severity { Severity::Info } }",
+    );
+    assert!(message.contains("an atom per variant"), "{message}");
+    assert!(message.contains("`Severity`"), "{message}");
+}
+
 #[test]
 fn binary_record_fields_are_rejected() {
     let message = render_failure(

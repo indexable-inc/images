@@ -1,0 +1,25 @@
+As of summer 2020 it seems the expected stdout for this test does not match
+the actual one. Below is the original expected stdout.
+
+Further it seems this has been the case for some time. I do not have time to
+investigate this, but I'm keeping the original stdout in case someone wants to
+do so in the future.
+
+ | | |O
+--------
+ |X|O|
+--------
+ | | |X
+--------
+ | | |
+
+Score 2
+X| | |O
+--------
+ |X|O|
+--------
+ | | |X
+--------
+ | | |
+
+

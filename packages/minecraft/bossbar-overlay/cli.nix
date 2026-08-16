@@ -16,6 +16,9 @@ stdenvNoCC.mkDerivation {
   src = ./bossbar;
   dontUnpack = true;
 
+  # Wraps the committed script verbatim; nothing to test at build time.
+  doCheck = false;
+
   strictDeps = true;
   nativeBuildInputs = [makeWrapper];
 

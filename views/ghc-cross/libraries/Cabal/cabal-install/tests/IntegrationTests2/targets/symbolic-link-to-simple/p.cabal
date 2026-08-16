@@ -1,0 +1,22 @@
+name: p
+version: 0.1
+build-type: Simple
+cabal-version: >= 1.2
+
+library
+  exposed-modules: P
+  build-depends: base
+
+executable pexe
+  main-is: Main.hs
+  other-modules: PMain
+
+executable ppexe
+  main-is: Main.hs
+  hs-source-dirs: app
+  other-modules: PMain
+
+executable pppexe
+  main-is: Main.hs
+  hs-source-dirs: "a p p"
+  other-modules: PMain

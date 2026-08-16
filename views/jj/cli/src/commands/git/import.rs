@@ -1,0 +1,56 @@
+// Copyright 2020-2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use jj_lib::git;
+use jj_lib::git::GitSettings;
+
+use crate::cli_util::CommandHelper;
+use crate::command_error::CommandError;
+use crate::git_util::load_git_import_options;
+use crate::git_util::print_git_import_stats;
+use crate::ui::Ui;
+
+/// Update repo with changes made in the underlying Git repo
+///
+/// Commits that are no longer reachable from any branch in the Git repo will be
+/// considered abandoned in the Git repo, and will be abandoned in the jj
+/// repo to match the Git repo. Set `git.abandon-unreachable-commits` to `false`
+/// to disable this behavior.
+///
+/// If a working-copy commit gets abandoned, it will be given a new, empty
+/// commit. This is true in general; it is not specific to this command.
+///
+/// There is no need to run this command if you're in colocated workspace
+/// because the import happens automatically there.
+#[derive(clap::Args, Clone, Debug)]
+pub struct GitImportArgs {}
+
+pub async fn cmd_git_import(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    _args: &GitImportArgs,
+) -> Result<(), CommandError> {
+    let mut workspace_command = command.workspace_helper(ui).await?;
+    let git_settings = GitSettings::from_settings(workspace_command.settings())?;
+    let remote_settings = workspace_command.settings().remote_settings()?;
+    let import_options = load_git_import_options(ui, &git_settings, &remote_settings)?;
+    let mut tx = workspace_command.start_transaction();
+    // In non-colocated workspace, Git HEAD will never be moved internally by jj.
+    // That's why cmd_git_export() doesn't export the HEAD ref.
+    git::import_head(tx.repo_mut()).await?;
+    let stats = git::import_refs(tx.repo_mut(), &import_options).await?;
+    print_git_import_stats(ui, &tx, &stats)?;
+    tx.finish(ui, "import git refs").await?;
+    Ok(())
+}

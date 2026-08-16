@@ -16,6 +16,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use unibind_core::ir;
+use unibind_core::render::{RenderError, name_ident};
 
 use crate::ty::{Level, TyCtx};
 
@@ -57,14 +58,22 @@ pub fn mirror_ident(name: &str) -> Ident {
 /// declared `Buffer`, which the user's own struct never spells, so such a
 /// record has to cross through a mirror. Bytes inside a container are
 /// declared as the user's own `Vec<u8>` and so adapt nothing.
-pub fn adapts(ty: &ir::Type, mirrored: &[String], level: Level) -> bool {
+pub fn adapts(ty: &ir::Type, enums: &[ir::Enum], mirrored: &[String], level: Level) -> bool {
     match ty {
         ir::Type::Int(kind) => is_wide_int(*kind),
         ir::Type::Bytes { .. } => level.bytes_as_buffer(),
-        ir::Type::Option(inner) => adapts(inner, mirrored, level),
-        ir::Type::Vec(inner) | ir::Type::Stream(inner) => adapts(inner, mirrored, Level::Element),
-        ir::Type::Map { value, .. } => adapts(value, mirrored, Level::Element),
-        ir::Type::Named(name) => mirrored.iter().any(|mirrored| mirrored == name),
+        ir::Type::Option(inner) => adapts(inner, enums, mirrored, level),
+        ir::Type::Vec(inner) | ir::Type::Stream(inner) => {
+            adapts(inner, enums, mirrored, Level::Element)
+        }
+        ir::Type::Map { value, .. } => adapts(value, enums, mirrored, Level::Element),
+        // A unit enum is a Rust enum on one side and a string on the other,
+        // so a record holding one is spelled differently on the two sides and
+        // has to cross through a mirror, exactly as a 64-bit field does.
+        ir::Type::Named(name) => {
+            mirrored.iter().any(|mirrored| mirrored == name)
+                || enums.iter().any(|declared| declared.name == *name)
+        }
         ir::Type::Bool | ir::Type::Float(_) | ir::Type::String { .. } | ir::Type::Path { .. } => {
             false
         }
@@ -115,8 +124,13 @@ pub fn inward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<Toke
             quote!(#narrow(#expr))
         }
         ir::Type::Named(name) => {
-            let mirror = ctx.mirror(name)?;
-            quote!(#mirror::__unibind_into(#expr))
+            if ctx.unit_enum(name).is_some() {
+                let parse = enum_from_str_ident(name);
+                quote!(#parse(#expr))
+            } else {
+                let mirror = ctx.mirror(name)?;
+                quote!(#mirror::__unibind_into(#expr))
+            }
         }
         ir::Type::Option(inner) => {
             let element = inward(inner, ctx, &quote!(__unibind_element))?;
@@ -160,8 +174,13 @@ pub fn outward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<Tok
             quote!(#expr as f64)
         }
         ir::Type::Named(name) => {
-            let mirror = ctx.mirror(name)?;
-            quote!(#mirror::__unibind_from(#expr))
+            if ctx.unit_enum(name).is_some() {
+                let render = enum_to_str_ident(name);
+                quote!(#render(#expr))
+            } else {
+                let mirror = ctx.mirror(name)?;
+                quote!(#mirror::__unibind_from(#expr))
+            }
         }
         ir::Type::Option(inner) => {
             let element = outward(inner, ctx, &quote!(__unibind_element))?;
@@ -192,10 +211,15 @@ pub fn outward(ty: &ir::Type, ctx: &TyCtx<'_>, expr: &TokenStream) -> Option<Tok
 /// The narrowing helpers the glue module needs: one per 64-bit width that
 /// actually arrives from JavaScript, plus the shared rejection they raise.
 /// Emitting only the reachable ones keeps the module free of dead code.
-pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
-    let kinds = inbound_kinds(interface, mirrored);
+pub fn helpers(interface: &ir::Interface, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
+    let enums = interface
+        .enums
+        .iter()
+        .map(|declared| enum_codec(declared, ctx))
+        .collect::<Result<Vec<_>, _>>()?;
+    let kinds = inbound_kinds(interface, ctx.mirrored);
     if kinds.is_empty() {
-        return TokenStream::new();
+        return Ok(quote!(#(#enums)*));
     }
     let narrowers = kinds.iter().map(|kind| narrow_fn(*kind));
     // The `allow(dead_code)` here and on each narrower covers one shape: a
@@ -203,7 +227,7 @@ pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
     // mentions in a signature, whose conversions are then legitimately
     // uncalled (see `crate::mirror`). That is the user's business, not dead
     // glue to report at them.
-    quote! {
+    Ok(quote! {
         /// A `number` JavaScript sent that the declared Rust width cannot
         /// hold exactly: fractional, non-finite, negative where unsigned,
         /// or outside the double-exact +/-(2^53 - 1) range. Deliberately not
@@ -219,7 +243,66 @@ pub fn helpers(interface: &ir::Interface, mirrored: &[String]) -> TokenStream {
         }
 
         #(#narrowers)*
-    }
+        #(#enums)*
+    })
+}
+
+/// The identifier of the generated Rust-to-wire renderer for enum `name`.
+fn enum_to_str_ident(name: &str) -> Ident {
+    format_ident!("__unibind_enum_to_str_{}", name)
+}
+
+/// The identifier of the generated wire-to-Rust parser for enum `name`.
+fn enum_from_str_ident(name: &str) -> Ident {
+    format_ident!("__unibind_enum_from_str_{}", name)
+}
+
+/// Both halves of one unit enum's mapping: the Rust variant to its wire
+/// string, and back.
+///
+/// Outbound is total (every variant has a spelling, and lowering refuses two
+/// that collide). Inbound is not: JavaScript is free to hand over any string,
+/// so an unrecognized one is refused by name, listing the set it should have
+/// come from. Deliberately a plain napi error rather than one of the
+/// generated exception classes -- passing a word outside a closed set is a
+/// caller mistake, not a failure the user's error enum declared.
+fn enum_codec(declared: &ir::Enum, ctx: &TyCtx<'_>) -> Result<TokenStream, RenderError> {
+    let user = ctx.user;
+    let name = name_ident(&declared.name)?;
+    let to_str = enum_to_str_ident(&declared.name);
+    let from_str = enum_from_str_ident(&declared.name);
+    let variants = declared
+        .variants
+        .iter()
+        .map(|variant| name_ident(&variant.name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let wires: Vec<&str> = declared
+        .variants
+        .iter()
+        .map(|variant| variant.wire.as_str())
+        .collect();
+    let accepted = wires.join(", ");
+    let rejection = format!("is not a {}; expected one of {accepted}", declared.name);
+    Ok(quote! {
+        #[allow(dead_code)]
+        fn #to_str(value: #user::#name) -> ::std::string::String {
+            match value {
+                #(#user::#name::#variants => #wires,)*
+            }
+            .to_owned()
+        }
+
+        #[allow(dead_code)]
+        fn #from_str(value: ::std::string::String) -> ::napi::Result<#user::#name> {
+            match value.as_str() {
+                #(#wires => ::std::result::Result::Ok(#user::#name::#variants),)*
+                other => ::std::result::Result::Err(::napi::Error::new(
+                    ::napi::Status::InvalidArg,
+                    ::std::format!("`{}` {}", other, #rejection),
+                )),
+            }
+        }
+    })
 }
 
 /// The widths that cross *into* Rust: every argument, plus every field of a
@@ -247,7 +330,11 @@ fn inbound_kinds(interface: &ir::Interface, mirrored: &[String]) -> Vec<ir::IntK
     }
     WIDE_INT_KINDS
         .into_iter()
-        .filter(|kind| found.iter().any(|seen| seen.rust_name() == kind.rust_name()))
+        .filter(|kind| {
+            found
+                .iter()
+                .any(|seen| seen.rust_name() == kind.rust_name())
+        })
         .collect()
 }
 

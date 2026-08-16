@@ -45,7 +45,12 @@ fn every_golden_pair_converts_exactly() {
             .unwrap_or_else(|_| panic!("{} has no .schema.golden sibling", path.display()));
         let schema = ix2nix::schema(&source)
             .unwrap_or_else(|error| panic!("{} has no schema:\n{error}", path.display()));
-        assert_eq!(schema, expected_schema, "{} diverged", schema_path.display());
+        assert_eq!(
+            schema,
+            expected_schema,
+            "{} diverged",
+            schema_path.display()
+        );
 
         checked += 1;
     }

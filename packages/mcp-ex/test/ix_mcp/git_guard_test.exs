@@ -124,4 +124,88 @@ defmodule IxMcp.GitGuardTest do
     {out, 0} = System.cmd("git", args, cd: dir, stderr_to_stdout: true)
     out
   end
+
+  describe "aiming git somewhere other than its cwd" do
+    # Reading only `-C` meant three forms reached a protected checkout unrefused
+    # while the two obvious ones were refused. The refused pair is the positive
+    # control: it proves the fixture really is protected, so an ALLOWED result
+    # below would have been a true bypass rather than a broken test.
+    test "the controls: the plain and -C forms are refused", %{primary: primary} do
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        Cmd.run("git", ["add", "-A"], cd: primary)
+      end
+
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        Cmd.run("git", ["-C", primary, "add", "-A"], cd: System.tmp_dir!())
+      end
+    end
+
+    test "--git-dir= and --work-tree= are refused", %{primary: primary} do
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        Cmd.run(
+          "git",
+          ["--git-dir=" <> Path.join(primary, ".git"), "--work-tree=" <> primary, "add", "-A"],
+          cd: System.tmp_dir!()
+        )
+      end
+
+      assert git!(primary, ["diff", "--cached", "--name-only"]) == ""
+    end
+
+    test "the separate-argument spellings are refused too", %{primary: primary} do
+      # `git --git-dir P/.git add -A` also read "P/.git" AS THE SUBCOMMAND, found
+      # it outside the mutating set, and allowed the command on that ground alone.
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        Cmd.run("git", ["--git-dir", Path.join(primary, ".git"), "add", "-A"],
+          cd: System.tmp_dir!()
+        )
+      end
+
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        Cmd.run("git", ["--work-tree", primary, "add", "-A"], cd: System.tmp_dir!())
+      end
+    end
+
+    test "GIT_DIR and GIT_WORK_TREE in the env are refused", %{primary: primary} do
+      assert :ok = IxMcp.GitGuard.check!("git", ["status"], System.tmp_dir!(), [])
+
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        IxMcp.GitGuard.check!("git", ["add", "-A"], System.tmp_dir!(), [
+          {"GIT_DIR", Path.join(primary, ".git")}
+        ])
+      end
+
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        IxMcp.GitGuard.check!("git", ["add", "-A"], System.tmp_dir!(), [
+          {"GIT_WORK_TREE", primary}
+        ])
+      end
+    end
+
+    test "an explicit flag beats the environment", %{primary: primary} do
+      # Precedence follows git's own, so a flag pointing somewhere harmless is
+      # NOT refused just because the env names a protected dir.
+      elsewhere = Path.join(System.tmp_dir!(), "sh-dsl-guard-elsewhere")
+      File.mkdir_p!(elsewhere)
+      on_exit(fn -> File.rm_rf(elsewhere) end)
+
+      assert :ok =
+               IxMcp.GitGuard.check!("git", ["--work-tree=" <> elsewhere, "add", "-A"], primary, [
+                 {"GIT_WORK_TREE", primary}
+               ])
+    end
+
+    test "a bare git dir stands for its parent checkout", %{primary: primary} do
+      assert :ok = IxMcp.GitGuard.check!("git", ["status"], primary, [])
+
+      assert_raise ArgumentError, ~r/Refusing `git add`/, fn ->
+        IxMcp.GitGuard.check!(
+          "git",
+          ["--git-dir=" <> Path.join(primary, ".git"), "add", "-A"],
+          System.tmp_dir!(),
+          []
+        )
+      end
+    end
+  end
 end

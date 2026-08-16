@@ -203,6 +203,6 @@ in
   assert lib.assertMsg (failures == []) (
     "portable-services:\n  " + lib.concatStringsSep "\n  " failures
   );
-    pkgs.runCommand "ix-test-portable-services" {} ''
+    pkgs.runCommand "ix-test-portable-services" {__structuredAttrs = true;} ''
       mkdir -p "$out"
     ''

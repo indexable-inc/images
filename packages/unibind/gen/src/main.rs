@@ -17,6 +17,7 @@ use unibind_gen::host::{self, HostEmitter};
 use unibind_gen::jvm::JvmEmitter;
 use unibind_gen::py::PyEmitter;
 use unibind_gen::ts::TsEmitter;
+use unibind_gen::wasm::WasmEmitter;
 
 /// Render host-language files (stubs, markers, wrapper modules) from the
 /// unibind IR embedded in a compiled artifact.
@@ -42,6 +43,9 @@ enum Command {
     /// Emit the Java host file: a single `<Class>.java` wrapping the
     /// C-ABI symbols through the FFM API.
     Jvm(JvmArgs),
+    /// Emit the browser host files: `index.d.ts`, `schemas.ts`, and the ESM
+    /// `index.js` wrapper around the `wasm-bindgen` module.
+    Wasm(WasmArgs),
 }
 
 #[derive(clap::Args)]
@@ -73,6 +77,23 @@ struct TsArgs {
     /// `./native/<addon>.node`, so packaging must place the cdylib there.
     #[arg(long)]
     addon: String,
+
+    /// Output root; files are written at paths relative to it.
+    #[arg(long)]
+    out: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct WasmArgs {
+    /// Compiled `wasm32-unknown-unknown` cdylib carrying the embedded IR.
+    #[arg(long)]
+    artifact: PathBuf,
+
+    /// Module specifier of the `wasm-bindgen --target web` JavaScript output
+    /// (`./wasm/ix_sdk.js`): the generated `index.js` imports every compiled
+    /// export and the initializer from it.
+    #[arg(long)]
+    module: String,
 
     /// Output root; files are written at paths relative to it.
     #[arg(long)]
@@ -115,6 +136,7 @@ fn main() -> anyhow::Result<()> {
         Command::Ts(args) => run_ts(&args),
         Command::Ex(args) => run_ex(&args),
         Command::Jvm(args) => run_jvm(&args),
+        Command::Wasm(args) => run_wasm(&args),
     }
 }
 
@@ -137,6 +159,13 @@ fn run_py(args: &PyArgs) -> anyhow::Result<()> {
 fn run_ts(args: &TsArgs) -> anyhow::Result<()> {
     let emitter = TsEmitter {
         addon: args.addon.clone(),
+    };
+    run_host(&args.artifact, &args.out, &emitter)
+}
+
+fn run_wasm(args: &WasmArgs) -> anyhow::Result<()> {
+    let emitter = WasmEmitter {
+        module: args.module.clone(),
     };
     run_host(&args.artifact, &args.out, &emitter)
 }

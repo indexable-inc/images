@@ -1,5 +1,4 @@
-# Gate for flake surfaces that need the indexable Nix fork
-# (lib/fork-packages.nix, `packages.<system>.nix-ix`). Fork-only *syntax*
+# Gate for flake surfaces that need `packages.<system>.nix-ix`. Fork-only syntax
 # (underscore digit separators, patch 0014) fails at parse time, before any
 # eval-time check can run, so the gate sits at the import seam of each
 # fork-syntax island, and this file itself must stay parseable by every

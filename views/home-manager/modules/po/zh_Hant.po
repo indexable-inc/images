@@ -1,0 +1,125 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR Home Manager contributors
+# This file is distributed under the same license as the Home Manager Modules package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Home Manager Modules\n"
+"Report-Msgid-Bugs-To: https://github.com/nix-community/home-manager/issues\n"
+"POT-Creation-Date: 2026-01-21 09:53+0100\n"
+"PO-Revision-Date: 2026-03-31 16:14+0000\n"
+"Last-Translator: Anonymous <noreply@weblate.org>\n"
+"Language-Team: Chinese (Traditional Han script) <https://hosted.weblate.org/"
+"projects/home-manager/modules/zh_Hant/>\n"
+"Language: zh_Hant\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"X-Generator: Weblate 5.17-dev\n"
+
+#: modules/files.nix:214
+msgid "Creating home file links in %s"
+msgstr "正在 %s 中建立家目錄檔案連結"
+
+#: modules/files.nix:227
+msgid "Cleaning up orphan links from %s"
+msgstr "正在清理 %s 中的孤立連結"
+
+#: modules/home-environment.nix:680
+msgid "Creating new profile generation"
+msgstr "正在建立新的世代設定檔"
+
+#: modules/home-environment.nix:683
+msgid "No change so reusing latest profile generation"
+msgstr "沒有變更，將重複使用最新的設定檔世代"
+
+#: modules/home-environment.nix:732
+msgid ""
+"Oops, Nix failed to install your new Home Manager profile!\n"
+"\n"
+"Perhaps there is a conflict with a package that was installed using\n"
+"\"%s\"? Try running\n"
+"\n"
+"    %s\n"
+"\n"
+"and if there is a conflicting package you can remove it with\n"
+"\n"
+"    %s\n"
+"\n"
+"Then try activating your Home Manager configuration again."
+msgstr ""
+"糟糕，Nix 無法安裝您的新 Home Manager 設定檔！\n"
+"\n"
+"可能與使用 \"%s\" 安裝的套件衝突？\n"
+"請嘗試執行\n"
+"\n"
+"    %s\n"
+"\n"
+"如果有衝突的套件，您可以使用以下指令移除\n"
+"\n"
+"    %s\n"
+"\n"
+"然後再次嘗試啟用您的 Home Manager 設定。"
+
+#: modules/home-environment.nix:768
+msgid "Activating %s"
+msgstr "正在啟用 %s"
+
+#: modules/home-environment.nix:840
+msgid "%s: unknown option '%s'"
+msgstr "%s：未知選項 '%s'"
+
+#: modules/lib-bash/activation-init.sh:22
+msgid "Migrating profile from %s to %s"
+msgstr "正在將設定檔從 %s 遷移至 %s"
+
+#: modules/lib-bash/activation-init.sh:54
+msgid "Could not find suitable profile directory, tried %s and %s"
+msgstr "找不到合適的設定檔目錄，已嘗試 %s 和 %s"
+
+#. translators: For example: HOME is "/home/foo", expected "/home/bar"
+#: modules/lib-bash/activation-init.sh:109
+#: modules/lib-bash/activation-init.sh:121
+msgid "%s is \"%s\", expected \"%s\""
+msgstr ""
+
+#: modules/lib-bash/activation-init.sh:138
+msgid "Starting Home Manager activation"
+msgstr "正在進行 Home Manager 啟用程序"
+
+#: modules/lib-bash/activation-init.sh:142
+msgid "Sanity checking Nix"
+msgstr "正在進行 Nix 完整性檢查"
+
+#: modules/lib-bash/activation-init.sh:155
+msgid "This is a dry run"
+msgstr "這是模擬執行"
+
+#: modules/lib-bash/activation-init.sh:159
+msgid "This is a live run"
+msgstr "這是實際執行"
+
+#: modules/lib-bash/activation-init.sh:165
+msgid "Using Nix version: %s"
+msgstr "使用中的 Nix 版本：%s"
+
+#: modules/lib-bash/activation-init.sh:168
+msgid "Activation variables:"
+msgstr "啟用變數："
+
+#~ msgid "Error: USER is set to \"%s\" but we expect \"%s\""
+#~ msgstr "錯誤：USER 被設定為「%s」，但我們的預期為「%s」"
+
+#~ msgid "Error: HOME is set to \"%s\" but we expect \"%s\""
+#~ msgstr "錯誤：HOME 被設定為「%s」，但我們的預期為「%s」"
+
+#~ msgid "Creating profile generation %s"
+#~ msgstr "正在建立配置檔案世代 %s"
+
+#~ msgid "No change so reusing latest profile generation %s"
+#~ msgstr "未發生變化，正在重新使用最近一次的配置檔案世代 %s"
+
+#~ msgid "Sanity checking oldGenNum and oldGenPath"
+#~ msgstr "正在進行 oldGenNum 和 oldGenPath 的完整性檢查"

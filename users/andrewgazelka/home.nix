@@ -72,6 +72,34 @@
   indexPkgs = indexPackages pkgs.stdenv.hostPlatform.system;
   claudeCode = config.programs.claude-code.finalPackage;
 
+  # The same wrapper as `claude`, in strict kernel-only mode, under its own
+  # name (ENG-12737). `claude-kernel` gets exactly one tool surface: the index
+  # Elixir MCP kernel. Every built-in and every non-index MCP server is denied,
+  # with a message telling the agent to use `exec` instead, so the work happens
+  # in the kernel's persistent Elixir workspace -- bindings, modules and jobs
+  # that survive across cells -- rather than in shell that leaves nothing
+  # behind. Web search and fetch are not lost with the exa server; they move
+  # in-language to the kernel's `Web.search/1` and `Web.fetch/1` against the
+  # same API, so `EXA_API_KEY` still has to reach the kernel's environment.
+  #
+  # A SECOND BINARY rather than `programs.claude-code.kernelOnly = true`, and
+  # the distinction is not cosmetic. `kernelOnly` is a build-time argument, so
+  # setting it on the module would strip Bash, Read, Edit and the rest from
+  # EVERY session including the interactive one -- and on hydra that same
+  # render feeds /Library managed settings (hosts/hydra/default.nix), which
+  # outrank user, project AND command-line scope, so there would be no
+  # per-session way back. Deriving a second package leaves `claude` byte-for-
+  # byte what it was and makes strict mode something you opt into by typing a
+  # different command.
+  #
+  # Derived from `claudeCode` rather than from the bare package so it inherits
+  # every other choice made here (added dirs, features, primary checkouts, the
+  # house plugin); the only difference from `claude` is the two arguments below.
+  claudeKernel = claudeCode.override {
+    kernelOnly = true;
+    binName = "claude-kernel";
+  };
+
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
   # macOS speaks through the built-in `say`; Linux falls back to a configurable
@@ -384,8 +412,12 @@ in {
       }
     ];
 
-    # Expose the shared speaker on PATH so the user can announce by hand too.
-    home.packages = [sayDetached];
+    # Expose the shared speaker on PATH so the user can announce by hand too,
+    # and the kernel-only Claude wrapper alongside the ordinary `claude`.
+    home.packages = [
+      sayDetached
+      claudeKernel
+    ];
 
     services.portable = lib.mkMerge [
       (lib.mkIf cfg.downtime.enable {

@@ -6,7 +6,10 @@ defmodule IxMcp.Application do
       ├── IxMcp.ActionLog       SQLite: sessions/topics/actions rows for every tools/call
       ├── IxMcp.Session         this instance's session/topic ids + display labels
       ├── IxMcp.Checkpoint      ETS keeper for workspace state (survives Workspace restarts)
-      ├── IxMcp.Workspace       the shared binding + Macro.Env every cell sees
+      ├── IxMcp.Workspaces.Registry   name -> named workspace process
+      ├── IxMcp.Workspaces.Supervisor (DynamicSupervisor)  one child per named workspace
+      │   └── IxMcp.Workspace*  an isolated named REPL (exec workspace: "name")
+      ├── IxMcp.Workspace       the default "main" workspace every unnamed cell shares
       ├── IxMcp.Jobs.Registry   id -> job process
       ├── IxMcp.MCP.Notifier    server-initiated notification fan-out (+ outbox replay)
       ├── IxMcp.MCP.ClientRequests  server-initiated requests (elicitation) awaiting client replies
@@ -17,6 +20,7 @@ defmodule IxMcp.Application do
       ├── IxMcp.PrWatch.Supervisor (Task.Supervisor)  one task per PR watch
       ├── IxMcp.IssueWatch      (stdio + IX_MCP_ISSUE_WATCH_OWNERS set) new-issue channel feed
       ├── IxMcp.SessionWatch    (only when IX_MCP_STDIO=1) heartbeat + message/request-feed delivery
+      ├── IxMcp.Inbox.Watcher*  (stdio + a credential) one per feed: Beeper chats, mail
       ├── IxMcp.Agents.Harness     (AgentHarness) depth-1 subagent processes (#3700)
       ├── IxMcp.Agents.Events      subagent ledger: events, finals, graph, notifications
       └── IxMcp.MCP.Stdio       (only when IX_MCP_STDIO=1) the stdio transport
@@ -39,6 +43,7 @@ defmodule IxMcp.Application do
     IxMcp.Cmd.capture_launch_cwd()
     route_crash_dumps()
     install_crash_log()
+    configure_fleet_policy()
 
     children =
       [
@@ -46,6 +51,11 @@ defmodule IxMcp.Application do
         IxMcp.ActionLog,
         IxMcp.Session,
         IxMcp.Checkpoint,
+        # Named-workspace machinery before the default workspace: a cell in
+        # "main" can create a named sibling, so registry and supervisor must
+        # already stand. Named workspaces start on first use (#3967).
+        {Registry, keys: :unique, name: IxMcp.Workspaces.Registry},
+        {DynamicSupervisor, name: IxMcp.Workspaces.Supervisor, strategy: :one_for_one},
         IxMcp.Workspace,
         {Registry, keys: :unique, name: IxMcp.Jobs.Registry},
         # Notifier and Reaper before the job supervisor: a job registers with
@@ -58,6 +68,10 @@ defmodule IxMcp.Application do
         # sessions viewing that document.
         IxMcp.Dashboard.Bridge,
         IxMcp.Jobs.Reaper,
+        # The one evaluator of the fleet warning catalog (its conditions come
+        # from the policy configured above). Before Watch, which reads its
+        # snapshot; also serves session-facing snapshot and edge subscribers.
+        FleetMesh.Engine,
         # After the notifier it pushes through (ENG-11209). Polls the fleet on a
         # timer, so it is started always rather than only under stdio: a kernel
         # driven by a test or a sibling instance still wants the mute state and
@@ -70,7 +84,7 @@ defmodule IxMcp.Application do
         {IxMcp.Agents.ForkGuard, enabled: loom?()},
         {AgentHarness, name: IxMcp.Agents.Harness, runner: agent_runner()},
         {IxMcp.Agents.Events, harness: IxMcp.Agents.Harness}
-      ] ++ issue_watch() ++ transport()
+      ] ++ issue_watch() ++ feeds() ++ transport()
 
     # max_restarts above the default 3-in-5s (#3874): ActionLog's callers
     # now retry across its restarts, so a persistent fault there (disk
@@ -88,6 +102,27 @@ defmodule IxMcp.Application do
   end
 
   defp loom?, do: is_binary(System.get_env("LOOM_PARENT_VM"))
+
+  # The private warning catalog, loaded the same way TuiLocal loads tui_ex:
+  # an env var naming a compiled OTP app dir whose ebin joins the code path.
+  # The policy module itself stays out of this public tree; only its NAME
+  # crosses, and only at deploy time. Unset means the config default
+  # (Policy.Empty) stands, which is a kernel with no fleet catalog, not a
+  # broken one.
+  defp configure_fleet_policy do
+    case System.get_env("IX_MCP_FLEET_POLICY") do
+      nil ->
+        :ok
+
+      dir ->
+        true = Code.append_path(String.to_charlist(Path.join(dir, "ebin")))
+        module = Module.concat([System.get_env("IX_MCP_FLEET_POLICY_MODULE") || "FleetPolicy"])
+        # A misconfigured path must fail the boot loudly, not fall back to an
+        # empty catalog that reports a healthy fleet it never measured.
+        {:module, ^module} = Code.ensure_loaded(module)
+        Application.put_env(:fleet_mesh, :policy, module)
+    end
+  end
 
   defp agent_runner do
     if loom?(), do: IxMcp.Agents.LoomRunner, else: IxMcp.Agents.CliRunner
@@ -169,6 +204,29 @@ defmodule IxMcp.Application do
     case System.get_env("IX_MCP_STDIO") do
       "1" -> [IxMcp.IssueWatch, IxMcp.SessionWatch]
       _ -> []
+    end
+  end
+
+  # Push feeds: things that arrive while a session is running and should
+  # reach it unasked. A new chat message on any bridged network, a new mail,
+  # and a CI run reaching a verdict; one poll loop each, all through
+  # IxMcp.Inbox.Watcher. All ride the transport flag for the same reason the
+  # issue feed does -- they announce into a user-facing transport and poll an
+  # outside service, so `mix test` and IEx sessions must get neither -- and
+  # each is absent, silently, where there is no such account and no such
+  # forge, because its source answers `:ignore` when it finds no credential
+  # and no configured host. So this list is safe to state unconditionally.
+  defp feeds do
+    case System.get_env("IX_MCP_STDIO") do
+      "1" ->
+        [
+          {IxMcp.Inbox.Watcher, source: IxMcp.Inbox.Beeper},
+          {IxMcp.Inbox.Watcher, source: IxMcp.Inbox.Mail},
+          {IxMcp.Inbox.Watcher, source: IxMcp.Forge.Verdicts}
+        ]
+
+      _ ->
+        []
     end
   end
 

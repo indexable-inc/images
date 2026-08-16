@@ -93,7 +93,7 @@ if $is_macos {
 
 # macOS-specific: Nix and Homebrew config
 if $is_macos {
-    $env.NIX_PATH = $'darwin-config=($env.HOME)/.config/nix/flake.nix:nixpkgs=flake:nixpkgs'
+    $env.NIX_PATH = $'darwin-config=/Volumes/Projects/nix/flake.nix:nixpkgs=flake:nixpkgs'
     $env.HOMEBREW_PREFIX = '/opt/homebrew'
     $env.HOMEBREW_CELLAR = '/opt/homebrew/Cellar'
     $env.HOMEBREW_REPOSITORY = '/opt/homebrew'

@@ -32,13 +32,13 @@ mod publish;
 mod subscribe;
 
 pub use dashboard::{
-    Actor, ActorKind, Dashboard, HistoryChange, HistoryOp, Hub, Input, InputEntry, Merge, Recorder,
-    RecordingInfo, RecordingStore, ServedDashboard, serve_hub,
+    Actor, ActorKind, Dashboard, HistoryChange, HistoryOp, Hub, InputEntry, InputWatcher, Merge,
+    Recorder, RecordingInfo, RecordingStore, ServedDashboard, Subscription, Update, serve_hub,
 };
 pub use error::{Error, Result};
 pub use pane::{
-    DataView, ExecTraceLine, ExecView, HtmlView, Pane, ProducerSnapshot, TerminalView, View,
-    discovery_dir, socket_path,
+    DataView, ExecTraceLine, ExecView, HtmlView, Input, InputLine, Pane, ProducerSnapshot,
+    TerminalView, View, discovery_dir, socket_path,
 };
 pub use publish::{PaneSink, Publisher};
-pub use subscribe::{ProducerEvent, subscribe};
+pub use subscribe::{InputRouter, ProducerEvent, ProducerFeed, subscribe, subscribe_bidi};

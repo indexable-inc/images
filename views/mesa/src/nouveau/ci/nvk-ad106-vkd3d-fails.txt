@@ -1,0 +1,20 @@
+# nouveau 0000:2d:00.0: gsp: mmu fault queued
+# nouveau 0000:2d:00.0: gsp: rc engn:00000001 chid:24 type:31 scope:1 part:233
+# nouveau 0000:2d:00.0: fifo:c00000:0003:0018:[d3d12[1056]] errored - disabling channel
+# nouveau 0000:2d:00.0: d3d12[1056]: channel 24 killed!
+test_uav_counter_null_behavior_dxbc,Crash
+test_uav_counter_null_behavior_dxil,Crash
+
+test_custom_border_color_limits,Fail
+test_derivative_hoisting_dxil,Fail
+
+test_undefined_structured_raw_alias_dxbc,Fail
+test_undefined_structured_raw_alias_dxil,Fail
+test_undefined_structured_raw_read_typed_dxbc,Fail
+test_undefined_structured_raw_read_typed_dxil,Fail
+
+test_large_buffer_descriptors,Crash
+
+test_line_tessellation_dxbc,Fail
+test_line_tessellation_dxil,Fail
+test_tessellation_read_tesslevel,Fail

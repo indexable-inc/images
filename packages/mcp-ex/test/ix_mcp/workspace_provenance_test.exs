@@ -62,17 +62,33 @@ defmodule IxMcp.WorkspaceProvenanceTest do
     refute quiet =~ "changed type under this workspace"
   end
 
-  test "a same-typed takeover is reported as a note, not a type-change warning" do
-    {_a, _} = diagnostics(~s(out = "first"), "A binds out")
-    {_b, warned} = diagnostics(~s(out = "second"), "B binds out")
+  test "a same-typed takeover by a cell that ran alongside is reported as a note" do
+    # `a` is still asleep when `b` binds `out`, so `a`'s own write lands
+    # afterwards and takes the name from a cell it overlapped. That is the
+    # collision this note exists for: two agents live at once.
+    code = "Process.sleep(400); out = \"first\""
+    {a, _} = Jobs.run(code, intent: "A binds out", budget: 0)
+    {_b, _} = diagnostics(~s(out = "second"), "B binds out")
+
+    summary = Jobs.await(a.id)
+    warned = Enum.join(summary.diagnostics, "\n")
 
     assert warned =~ "note: shared binding: `out` was bound"
-    assert warned =~ ~s(intent: "A binds out")
+    assert warned =~ ~s(intent: "B binds out")
+  end
+
+  test "a same-typed rebind after the other cell finished says nothing" do
+    # One agent reusing a scratch name across its own sequential cells. The
+    # note here fired on nearly every cell and carried no information, so it
+    # is suppressed; the type-change warning above is not.
+    {_a, _} = diagnostics(~s(out = "first"), "A binds out")
+    {_b, quiet} = diagnostics(~s(out = "second"), "B binds out")
+    refute quiet =~ "shared binding"
 
     # Same type means no crash waiting downstream, so the reader is not
-    # interrupted; the write side is where the collision is visible.
-    {_c, quiet} = diagnostics("String.length(out)", "A uses out")
-    refute quiet =~ "shared binding"
+    # interrupted either.
+    {_c, still_quiet} = diagnostics("String.length(out)", "A uses out")
+    refute still_quiet =~ "shared binding"
   end
 
   test "a cell rebinding its own variable says nothing" do

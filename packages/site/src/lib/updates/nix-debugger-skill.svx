@@ -5,7 +5,7 @@ title: "`nix-debugger` skill: find what actually caused the rebuild"
 tags: [agent, skills]
 links:
   - label: nix-debugger skill
-    href: https://github.com/indexable-inc/index/blob/main/packages/agent/skills/nix-debugger/SKILL.md
+    href: https://github.com/indexable-inc/index/blob/main/skills/nix-debugger/SKILL.md
 ---
 
 Agents now carry a house skill for the question "why did this rebuild". It collects the tools that answer it from data that already exists: `nix-dag` scores a build plan from evaluation alone and ranks the nodes whose dependents reach them only through an environment variable holding a store path, `whence` names the .nix line that deployed a file or installed a package with zero eval, `nix log <drv>` shows the whole build log rather than the fixed tail nix prints on failure, and `nix store builds --json` lists every in-flight daemon build machine-wide.

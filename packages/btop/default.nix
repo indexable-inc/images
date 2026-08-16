@@ -6,12 +6,8 @@
   lowdown,
   stdenv,
 }: let
-  # The indexable-inc/btop jj megamerge (btop-src input): upstream main plus
-  # the patch DAG (macOS process disk IO sorting, kernel cwd in the process
-  # detail box; see lib/fork-packages.nix). The scheduled fork-sync rebases
-  # the fork repo and floats the input. Shared verbatim between the native
-  # build and the cross build below, so a Mac substituting the cross output
-  # runs the same patched source a native build would compile.
+  # The btop view carries upstream main plus macOS process disk IO sorting and
+  # kernel cwd in the process detail box. Both builds consume the same view.
   patchedSrc = ix.btopSrc;
 
   nativeBtop = btop.overrideAttrs (old: {
@@ -67,6 +63,10 @@
       # The output is a Mach-O arm64 binary; the Linux fixup's ELF strip
       # cannot parse it and would only warn-and-skip, so skip it explicitly.
       dontStrip = true;
+
+      # Cross-compiled: the produced Mach-O binary cannot run on the Linux
+      # build host, so upstream's test target is unreachable here.
+      doCheck = false;
 
       # Same meta as the native build: `platforms` already spans linux (the
       # cross build host) and darwin (the alias consumers), and `mainProgram`

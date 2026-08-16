@@ -35,6 +35,9 @@ in
     dontBuild = true;
     strictDeps = true;
 
+    # Upstream release binary; nothing to test at build time.
+    doCheck = false;
+
     installPhase = ''
       # shell
       runHook preInstall

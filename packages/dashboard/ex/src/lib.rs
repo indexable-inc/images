@@ -236,7 +236,9 @@ mod _dashboard_ex {
         // under this lock. It only pushes into an unbounded channel, so it
         // neither blocks nor re-enters the mirror.
         let mirror = document.mirror.lock();
-        mirror.import(&snapshot).map_err(|error| crdt_error(&error))?;
+        mirror
+            .import(&snapshot)
+            .map_err(|error| crdt_error(&error))?;
         Ok(())
     }
 
@@ -561,13 +563,16 @@ mod _dashboard_ex {
         // dashboard's HTTP handler). Demand backpressure lives one layer up,
         // in the generated stream handle.
         let sink: UnboundedSender<DocEvent> = sender;
-        let subscription = document.mirror.lock().subscribe_root(Arc::new(move |event| {
-            for item in doc_events(&id, &event) {
-                // A closed receiver means the BEAM side dropped the stream;
-                // the subscription is about to be dropped with it.
-                drop(sink.send(item));
-            }
-        }));
+        let subscription = document
+            .mirror
+            .lock()
+            .subscribe_root(Arc::new(move |event| {
+                for item in doc_events(&id, &event) {
+                    // A closed receiver means the BEAM side dropped the stream;
+                    // the subscription is about to be dropped with it.
+                    drop(sink.send(item));
+                }
+            }));
         Ok(UniStream::new(Watch {
             events: UnboundedReceiverStream::new(receiver),
             _subscription: subscription,

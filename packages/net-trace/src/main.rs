@@ -55,7 +55,10 @@ fn main() -> Result<()> {
         Command::Render { dir, json } => {
             let summary = report::summarize(&report::load(&dir)?);
             if json {
-                println!("{}", serde_json::to_string(&summary).wrap_err("serialize summary")?);
+                println!(
+                    "{}",
+                    serde_json::to_string(&summary).wrap_err("serialize summary")?
+                );
             } else {
                 print!("{}", report::markdown(&summary));
             }
@@ -71,7 +74,9 @@ fn main() -> Result<()> {
 /// a persist failure after a finished child is reported on stderr, never as
 /// the gate's exit code. Signal death maps to `128 + signal`.
 fn run(label: &str, dir: &std::path::Path, cmd: &[String]) -> Result<i32> {
-    let (program, args) = cmd.split_first().expect("clap enforces a non-empty command");
+    let (program, args) = cmd
+        .split_first()
+        .expect("clap enforces a non-empty command");
 
     let recorder = Arc::new(Recorder::new());
     let traced = validate_label(label)
@@ -101,7 +106,9 @@ fn run(label: &str, dir: &std::path::Path, cmd: &[String]) -> Result<i32> {
         child.env_remove("no_proxy");
         child.env_remove("NO_PROXY");
     }
-    let status = child.status().wrap_err_with(|| format!("spawn {program}"))?;
+    let status = child
+        .status()
+        .wrap_err_with(|| format!("spawn {program}"))?;
     let code = exit_code(status);
 
     if traced.is_some() {
@@ -129,15 +136,21 @@ fn run(label: &str, dir: &std::path::Path, cmd: &[String]) -> Result<i32> {
 fn persist(dir: &std::path::Path, label: &str, phase: &Phase) -> Result<()> {
     std::fs::create_dir_all(dir).wrap_err_with(|| format!("create {}", dir.display()))?;
     let path = dir.join(format!("{label}.json"));
-    std::fs::write(&path, serde_json::to_vec_pretty(phase).wrap_err("serialize phase")?)
-        .wrap_err_with(|| format!("write {}", path.display()))
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(phase).wrap_err("serialize phase")?,
+    )
+    .wrap_err_with(|| format!("write {}", path.display()))
 }
 
 /// `128 + signal` mirrors the shell convention so the budget worker sees the
 /// same code it would have seen from the unwrapped command.
 fn exit_code(status: std::process::ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    status.code().or_else(|| status.signal().map(|signal| 128 + signal)).unwrap_or(1)
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(1)
 }
 
 /// Labels become file names and, downstream, jq-gated report keys; keep them

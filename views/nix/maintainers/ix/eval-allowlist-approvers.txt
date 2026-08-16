@@ -1,0 +1,16 @@
+# People who may approve a `semantic-approved` divergence in
+# eval-allowlist.toml. One name per line; `#` starts a comment.
+#
+# A semantic-approved entry says the two evaluators are allowed to disagree
+# about what a program MEANS. That is a decision about the language, not a
+# triage note, and eval-allowlist.toml's own header already says only a
+# person may make it. Until this file existed the rule was unenforced: the
+# `approved` field was never parsed at all, so "claude ENG-12068" satisfied
+# it exactly as well as a human would have.
+#
+# The name here must appear in the entry's `approved` field, which is
+# conventionally "<date> <name>[ <note>]".
+#
+# Adding a name to this file is itself the human act, reviewed as a diff.
+
+andrewgazelka

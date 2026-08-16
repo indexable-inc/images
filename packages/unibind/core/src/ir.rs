@@ -1,8 +1,8 @@
 //! The unibind interface representation.
 //!
 //! One [`Interface`] value describes everything a `#[unibind::export]`
-//! module exposes: functions, records, errors, and objects, with data enums
-//! reserved for a later phase. Backends render it into binding code, and
+//! module exposes: functions, records, unit enums, errors, and objects,
+//! with data-carrying enums reserved for a later phase. Backends render it into binding code, and
 //! [`crate::embed`] serializes it into the built artifact so out-of-process
 //! generators can read the same contract.
 
@@ -34,8 +34,8 @@ pub struct Interface {
     pub functions: Vec<Function>,
     /// Plain-data structs, in declaration order.
     pub records: Vec<Record>,
-    /// Plain data enums. Lowering still rejects them; the field keeps the
-    /// serialized layout ready for when they land.
+    /// Unit enums (`#[unibind::enumeration]`), in declaration order: closed
+    /// sets of named alternatives, none carrying data.
     pub enums: Vec<Enum>,
     /// Error enums, each rendered as an exception hierarchy in Python.
     pub errors: Vec<ErrorType>,

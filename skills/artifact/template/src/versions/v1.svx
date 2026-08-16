@@ -1,0 +1,60 @@
+---
+title: Debounce vs throttle
+note: adds throttle and the side-by-side comparison
+---
+
+<script>
+  import Callout from '../lib/components/Callout.svelte';
+</script>
+
+# Debounce vs throttle
+
+Both tame a noisy event stream, but they answer different questions.
+Debounce answers "has the user stopped?"; it waits for a quiet gap
+before firing. Throttle answers "what is happening right now?"; it
+fires at a steady cadence while events keep coming.
+
+```ts
+function debounce<A extends unknown[]>(
+  fn: (...args: A) => void,
+  waitMs: number
+): (...args: A) => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), waitMs);
+  };
+}
+```
+
+Every call resets the timer, so `fn` runs once, `waitMs` after the
+last call. A search box uses this: no request per keystroke, one
+request when typing pauses.
+
+```ts
+function throttle<A extends unknown[]>(
+  fn: (...args: A) => void,
+  intervalMs: number
+): (...args: A) => void {
+  let last = -Infinity;
+  return (...args) => {
+    const now = performance.now();
+    if (now - last >= intervalMs) {
+      last = now;
+      fn(...args);
+    }
+  };
+}
+```
+
+| | Debounce | Throttle |
+| --- | --- | --- |
+| Fires | after the stream goes quiet | during the stream, at a fixed rate |
+| Guarantees | exactly one call per burst | at most one call per interval |
+| Fits | search-as-you-type, autosave | scroll position, drag tracking |
+
+<Callout kind="tip">
+A scroll handler must not debounce: the page would only react after
+scrolling stops. Pick by asking whether silence or cadence carries
+the meaning.
+</Callout>

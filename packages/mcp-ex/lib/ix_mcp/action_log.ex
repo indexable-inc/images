@@ -61,7 +61,7 @@ defmodule IxMcp.ActionLog do
   # The schema is a published contract (#3532): the action-log UI is built
   # against these exact tables, so changes here must be coordinated.
   @create_sessions """
-  CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, last_seen_at TEXT)
+  CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, started_at TEXT NOT NULL, last_seen_at TEXT, parent_session INTEGER REFERENCES sessions(id), spawn_tag TEXT)
   """
 
   @create_topics """
@@ -88,8 +88,29 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE job_output (job_id TEXT NOT NULL REFERENCES jobs(id), seq INTEGER NOT NULL, chunk TEXT NOT NULL, PRIMARY KEY (job_id, seq))
   """
 
-  @create_outbox """
+  # The v5 shape, frozen for the 4 -> 5 migration step exactly as
+  # @create_issue_claims_v6 is frozen for 5 -> 6: the table has since been
+  # generalized past jobs, and a v4 file must arrive at the shape v5 actually
+  # had and then climb the same rungs every other file climbed. History stays
+  # history.
+  @create_outbox_v5 """
   CREATE TABLE outbox (id INTEGER PRIMARY KEY, job_id TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0)
+  """
+
+  # The outbox is the delivery ledger for every durable announcement, not
+  # only for jobs (#3839 built it; #3700's agents need the same
+  # no-silent-death guarantee). `source` names what finished ('jobs' |
+  # 'agents') and `ref` is that source's id, so one queue, one replay, one
+  # ack path serves both.
+  #
+  # `session_id` is the session the announcement is FOR. A job leaves it NULL
+  # because its own ledger row already answers that (jobs.session_id, joined
+  # at read time); an agent final has no ledger row to join to -- the Agents
+  # ledger is in-memory by design -- so it carries the lead session that
+  # spawned the child. The lead, never the child's own directory row: the
+  # lead is who is listening.
+  @create_outbox """
+  CREATE TABLE outbox (id INTEGER PRIMARY KEY, source TEXT NOT NULL DEFAULT 'jobs', ref TEXT, intent TEXT, status TEXT NOT NULL, elapsed_ms INTEGER, result TEXT, created_at TEXT NOT NULL, acked INTEGER NOT NULL DEFAULT 0, session_id INTEGER REFERENCES sessions(id))
   """
 
   # The v6 shape of the issue-claim arbiter (#3880), frozen for the 5 -> 6
@@ -145,6 +166,53 @@ defmodule IxMcp.ActionLog do
   CREATE TABLE fleet_alerts_seen (fingerprint TEXT PRIMARY KEY, predicate TEXT NOT NULL, summary TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL)
   """
 
+  # The RLM event log (`IxMcp.EventLog`): append-only, one row per sub-model
+  # call, cache hit, or budget refusal. Two jobs in one table.
+  #
+  # As an audit trail it answers what a recursive analysis actually spent,
+  # which is the only defence against a run that quietly costs real money.
+  #
+  # As a DERIVATION STORE it is also the memoization cache: `cache_key` is
+  # blake3 over (model, canonical prompt, sorted context ids), so the same
+  # question over the same bytes is answered from the log instead of from the
+  # provider. The cache is not a separate table on purpose -- a cache that can
+  # disagree with the audit trail is a cache that lies about what was spent.
+  # `content_id` names the payload in the CAS (`IxMcp.EventLog.Cas`) when it is
+  # too big to inline, so the log holds an id rather than bytes for the same
+  # reason `IxMcp.Ctx` does.
+  # The kinds `rlm_events.kind` may hold. Reviving a stored kind with
+  # `String.to_atom/1` would let rows grow the atom table (astlog
+  # no-unsafe-to-atom), and `String.to_existing_atom/1` only happens to work
+  # while some loaded module interns the name, which is not a property this
+  # read path can rely on. So the vocabulary is literal here, and a kind this
+  # build does not know comes back as a STRING rather than raising: a row
+  # written by a newer version must stay readable. `IxMcp.EventLog`'s
+  # `@type kind` is the same set and a test pins the two together.
+  #
+  # `:stdlib_call` is the grown stdlib's fitness rung
+  # (`IxMcp.Stdlib.observe/3`): one row per resident-module call, in this
+  # table rather than one of its own, because a second event store would
+  # disagree with this one about what happened. It needs no migration --
+  # `kind` is TEXT, and what the schema version pins is the TABLE, not its
+  # vocabulary.
+  @rlm_kinds [
+    :lm_ask,
+    :lm_result,
+    :lm_cache_hit,
+    :lm_error,
+    :lm_budget_refused,
+    :stdlib_call
+  ]
+  @rlm_kind_index Map.new(@rlm_kinds, &{Atom.to_string(&1), &1})
+
+  @create_rlm_events """
+  CREATE TABLE rlm_events (seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, content_id TEXT, cache_key TEXT, workspace TEXT)
+  """
+
+  @create_rlm_events_cache_index """
+  CREATE INDEX rlm_events_cache_key ON rlm_events (cache_key, seq)
+  """
+
   # index#3539: the schema version is stamped into SQLite's `PRAGMA
   # user_version` header field instead of being re-derived by column
   # sniffing on every open. Sniffing can only classify shapes this binary
@@ -158,8 +226,11 @@ defmodule IxMcp.ActionLog do
   # 4 = the #3546 live cell line, 5 = the #3839 durable job ledger,
   # 6 = the #3880 issue-claim arbiter, 7 = the #3881 session heartbeat and
   # message bus, 8 = the #3883 request bus (issue_claims folded in and
-  # dropped), 9 = the ENG-11209 fleet notification state.
-  @user_version 9
+  # dropped), 9 = the ENG-11209 fleet notification state, 10 = the
+  # ENG-12004 child-session registry (parent_session + spawn_tag),
+  # 11 = the generalized outbox (source/ref/session_id, one queue for jobs
+  # and agents), 12 = the RLM event log and derivation cache (rlm_events).
+  @user_version 12
 
   # How long a statement waits for a sibling instance's write lock before
   # step!/fetch/execute! give up and crash with a diagnosis (#3890). A
@@ -270,7 +341,7 @@ defmodule IxMcp.ActionLog do
 
   # A v4 database predates the durable job ledger (#3839): the three new
   # tables are simply created empty, so pre-#3839 rows are untouched.
-  @migrate_v4_to_v5 [@create_jobs, @create_job_output, @create_outbox]
+  @migrate_v4_to_v5 [@create_jobs, @create_job_output, @create_outbox_v5]
 
   # A v5 database predates the issue-claim arbiter (#3880): the table is
   # simply created empty.
@@ -307,6 +378,39 @@ defmodule IxMcp.ActionLog do
   # poll after the upgrade.
   @migrate_v8_to_v9 [@create_fleet_mutes, @create_fleet_alerts_seen]
 
+  # A v9 database predates the child-session registry (ENG-12004):
+  # `parent_session` marks a row as a lead's subagent (NULL = a peer), and
+  # `spawn_tag` lets the wrapper that spawned this kernel's whole process
+  # tree find its own session row from outside the BEAM.
+  @migrate_v9_to_v10 [
+    "ALTER TABLE sessions ADD COLUMN parent_session INTEGER REFERENCES sessions(id)",
+    "ALTER TABLE sessions ADD COLUMN spawn_tag TEXT"
+  ]
+
+  # A v10 database predates the generalized outbox: the table only ever held
+  # job finishes, so `job_id` becomes `ref`, every standing row is 'jobs' by
+  # the column default, and `session_id` starts NULL -- which is exactly what
+  # a job row means (join `jobs` for it). No row moves and none is rewritten.
+  #
+  # RENAME COLUMN first, then the ADD COLUMNs: SQLite allows ADD COLUMN with
+  # a REFERENCES clause only when the default is NULL, which session_id's is,
+  # and requires a non-null default on a NOT NULL column, which source has.
+  @migrate_v10_to_v11 [
+    "ALTER TABLE outbox RENAME COLUMN job_id TO ref",
+    "ALTER TABLE outbox ADD COLUMN source TEXT NOT NULL DEFAULT 'jobs'",
+    "ALTER TABLE outbox ADD COLUMN session_id INTEGER REFERENCES sessions(id)"
+  ]
+
+  # Frozen at v12: these two statements are a COPY of @create_rlm_events and
+  # @create_rlm_events_cache_index as they stood when the rung was cut, and must
+  # stay a copy. Borrowing the live attributes would let tomorrow's schema edit
+  # silently rewrite the ladder's history, which is the one thing a stamped
+  # ladder exists to prevent.
+  @migrate_v11_to_v12 [
+    "CREATE TABLE rlm_events (seq INTEGER PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, content_id TEXT, cache_key TEXT, workspace TEXT)",
+    "CREATE INDEX rlm_events_cache_key ON rlm_events (cache_key, seq)"
+  ]
+
   # Ordered migrations keyed by the user_version each upgrades FROM. Every
   # step runs in one immediate transaction that also stamps the version it
   # produces, so an interrupted migration leaves the previous consistent,
@@ -319,12 +423,23 @@ defmodule IxMcp.ActionLog do
     {5, @migrate_v5_to_v6},
     {6, @migrate_v6_to_v7},
     {7, @migrate_v7_to_v8},
-    {8, @migrate_v8_to_v9}
+    {8, @migrate_v8_to_v9},
+    {9, @migrate_v9_to_v10},
+    {10, @migrate_v10_to_v11},
+    {11, @migrate_v11_to_v12}
   ]
 
   @insert """
   INSERT INTO actions (at, session_id, topic_id, tool, intent, arguments, is_error, elapsed_ms, status)
   VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'running')
+  """
+
+  # Every durable announcement, whatever its source, lands through this one
+  # statement: a second insert site is how a new source silently acquires a
+  # different column set from the one the delivery path reads back.
+  @insert_outbox """
+  INSERT INTO outbox (source, ref, intent, status, elapsed_ms, result, created_at, acked, session_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   """
 
   # Both updates guard on status = 'running': a finalize is idempotent and a
@@ -349,6 +464,15 @@ defmodule IxMcp.ActionLog do
   @select_job """
   SELECT id, intent, session_name, topic_name, code, status, watch, result, output_bytes, output_dropped, started_at, finished_at, elapsed_ms
   FROM jobs
+  """
+
+  # The owning session is resolved here rather than stored twice: a job's
+  # lives on its own row, an agents row carries its lead's. The join is
+  # narrowed to source = 'jobs' so an agent id that happens to look like a
+  # job id can never pick up a stranger's session.
+  @select_outbox """
+  SELECT o.id, o.source, o.ref, o.intent, o.status, o.elapsed_ms, o.result, COALESCE(o.session_id, j.session_id)
+  FROM outbox o LEFT JOIN jobs j ON j.id = o.ref AND o.source = 'jobs'
   """
 
   @select_request """
@@ -376,7 +500,7 @@ defmodule IxMcp.ActionLog do
   @select_directory """
   SELECT s.id, s.name,
          (SELECT t.name FROM topics t WHERE t.session_id = s.id ORDER BY t.id DESC LIMIT 1),
-         s.started_at, s.last_seen_at
+         s.started_at, s.last_seen_at, s.parent_session, s.spawn_tag
   FROM sessions s ORDER BY s.id
   """
 
@@ -480,25 +604,43 @@ defmodule IxMcp.ActionLog do
   @typedoc """
   A session-directory row (#3881): `topic` is the session's latest topics
   row, `last_seen_at` its heartbeat (nil = it never heartbeat: a pre-#3881
-  row or an instance that never ran the watch).
+  row or an instance that never ran the watch). `parent` set means the row
+  is a lead's subagent, not a peer (ENG-12004); `spawn_tag` is the marker
+  the spawning wrapper passed through `IX_MCP_SPAWN_TAG`, so a process
+  outside the BEAM can find the session it caused.
   """
   @type directory_entry :: %{
           id: integer(),
           name: String.t() | nil,
           topic: String.t() | nil,
           started_at: String.t(),
-          last_seen_at: String.t() | nil
+          last_seen_at: String.t() | nil,
+          parent: integer() | nil,
+          spawn_tag: String.t() | nil
         }
 
   @typedoc """
-  A terminal-transition notification awaiting delivery (#3839). `session_id`
-  is the owning job's session: live delivery is scoped to it, exactly like
-  replay (#3934). `acked` rides along so a row born delivered (a quiet
-  wrapper's, #3934) is never published.
+  What produced an announcement: a background job (#3839) or a subagent's
+  final (#3700). The value decides how the row renders and which id `ref`
+  holds; it is never inferred from the shape of the row.
+  """
+  @type outbox_source :: :jobs | :agents
+
+  @typedoc """
+  A terminal-transition notification awaiting delivery (#3839). `ref` is the
+  finished thing's id in its own `source`'s namespace: a job id, or an agent
+  id. `session_id` is the session the announcement is for -- resolved at read
+  time, from the owning job's row or from the row's own column -- and live
+  delivery is scoped to it exactly like replay (#3934). `acked` rides along
+  so a row born delivered (a quiet wrapper's, #3934) is never published.
+
+  `status` spans the job statuses; an agent final only ever reaches `:done`
+  or `:failed`, since a child has no cancel or reap path of its own.
   """
   @type outbox :: %{
           id: integer(),
-          job_id: String.t(),
+          source: outbox_source(),
+          ref: String.t(),
           intent: String.t() | nil,
           status: Job.status(),
           elapsed_ms: non_neg_integer() | nil,
@@ -512,10 +654,19 @@ defmodule IxMcp.ActionLog do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "Insert a sessions row (name may be nil); returns its id."
-  @spec create_session(String.t() | nil, GenServer.server()) :: integer()
-  def create_session(name, server \\ __MODULE__) do
-    call(server, {:create_session, name, now()})
+  @doc """
+  Insert a sessions row (name may be nil); returns its id.
+
+  Options: `:parent` records the row as a subagent of that session
+  (ENG-12004), `:spawn_tag` the marker an outside spawner passed so it can
+  find this row again. Both default nil, which is an ordinary peer.
+  """
+  @spec create_session(String.t() | nil, GenServer.server(), keyword()) :: integer()
+  def create_session(name, server \\ __MODULE__, opts \\ []) do
+    call(
+      server,
+      {:create_session, name, Keyword.get(opts, :parent), Keyword.get(opts, :spawn_tag), now()}
+    )
   end
 
   @doc "Set an existing session row's name."
@@ -631,15 +782,53 @@ defmodule IxMcp.ActionLog do
   end
 
   @doc """
-  Ack every unacked outbox row of `job_id`; returns the flipped count. The
-  exec reply path calls this once its reply carries the job's outcome, so
-  the finish is never announced twice (#3934). Suppression must not outrun
-  delivery: this runs strictly after the reply is rendered, so a death
-  before that point leaves the row unacked and the announcement fires.
+  Record a subagent's final as a durable announcement (#3700): the same
+  outbox row a job finish gets, so the child's result reaches the lead
+  through the same queue, the same reconnect replay, and the same ack --
+  the no-silent-death invariant is the durable row, not a broadcast.
+
+  `session_id` is the LEAD's session (the one listening), `intent` the label
+  the announcement renders, `elapsed_ms` the child's lifetime. Returns
+  `{:notify, outbox()}` to publish, or `:disabled` when the log is degraded
+  (#3539) -- the caller must fall back to a live push there, because with no
+  row to replay a swallowed final is the exact silence this exists to
+  prevent.
+
+  Deliberately without `finish_job`'s `:already_final` guard: an agent has no
+  ledger row to make terminal and no reaper racing to finalize it, and a
+  steered child finishes once per turn (`IxMcp.Agents.send/2`), so a second
+  final is news rather than a duplicate.
   """
-  @spec ack_job_outbox(String.t(), GenServer.server()) :: non_neg_integer()
-  def ack_job_outbox(job_id, server \\ __MODULE__) when is_binary(job_id) do
-    call(server, {:ack_job_outbox, job_id})
+  @spec announce_agent(
+          String.t(),
+          :done | :failed,
+          String.t() | nil,
+          keyword(),
+          GenServer.server()
+        ) ::
+          {:notify, outbox()} | :disabled
+  def announce_agent(id, status, result, opts \\ [], server \\ __MODULE__)
+      when is_binary(id) and status in [:done, :failed] do
+    call(
+      server,
+      {:announce_agent, id, Atom.to_string(status), result, Keyword.get(opts, :intent),
+       Keyword.get(opts, :elapsed_ms), Keyword.get(opts, :session_id), now()}
+    )
+  end
+
+  @doc """
+  Ack every unacked outbox row of one `source`'s `ref`; returns the flipped
+  count. A reply path calls this once its own reply carries the outcome, so
+  the finish is never announced twice (#3934): the exec reply for a job it
+  waited out, `IxMcp.Agents.await/2` for a child whose final it returned.
+  Suppression must not outrun delivery: this runs strictly after the reply is
+  rendered, so a death before that point leaves the row unacked and the
+  announcement fires.
+  """
+  @spec ack_outbox_ref(outbox_source(), String.t(), GenServer.server()) :: non_neg_integer()
+  def ack_outbox_ref(source, ref, server \\ __MODULE__)
+      when source in [:jobs, :agents] and is_binary(ref) do
+    call(server, {:ack_outbox_ref, Atom.to_string(source), ref})
   end
 
   @doc "The recorded job row, or nil."
@@ -877,6 +1066,53 @@ defmodule IxMcp.ActionLog do
   def fleet_alerts_seen(server \\ __MODULE__), do: call(server, :fleet_alerts_seen)
 
   @doc """
+  The event kinds this build can revive as atoms. Public so the event log's
+  own vocabulary can be cross-checked against storage's: the two drifting
+  apart would silently downgrade a new kind to a string on read.
+  """
+  @spec rlm_kinds() :: [atom()]
+  def rlm_kinds, do: @rlm_kinds
+
+  @doc """
+  Append one RLM event and return its `seq`, or 0 in degraded mode.
+
+  Callers go through `IxMcp.EventLog`, which owns the payload shapes and the
+  CAS spill; this is the storage half only.
+  """
+  @spec append_rlm_event(map(), GenServer.server()) :: non_neg_integer()
+  def append_rlm_event(event, server \\ __MODULE__) when is_map(event) do
+    call(server, {:append_rlm_event, event, now()})
+  end
+
+  @doc """
+  RLM events in `seq` order, oldest first.
+
+  Options: `:after` (exclusive seq cursor, default 0), `:limit` (default
+  1000), `:kind` (one kind or a list). The cursor is the fold's resume point,
+  so a grown log is read forward instead of re-read.
+  """
+  @spec rlm_events(keyword(), GenServer.server()) :: [map()]
+  def rlm_events(opts \\ [], server \\ __MODULE__) do
+    call(
+      server,
+      {:rlm_events, Keyword.get(opts, :after, 0), Keyword.get(opts, :limit, 1_000),
+       Keyword.get(opts, :kind)}
+    )
+  end
+
+  @doc """
+  The newest `lm_result` event for `cache_key`, or nil.
+
+  This is the memoization probe: a hit means this exact question over these
+  exact bytes was already answered, so the answer is a derivation of its
+  inputs rather than a fresh call.
+  """
+  @spec rlm_cached(String.t(), GenServer.server()) :: map() | nil
+  def rlm_cached(cache_key, server \\ __MODULE__) when is_binary(cache_key) do
+    call(server, {:rlm_cached, cache_key})
+  end
+
+  @doc """
   Forget seen fingerprints, so a still-standing condition announces again.
   `:all` clears everything; a predicate id clears just that predicate.
   Returns the number of rows dropped.
@@ -1024,8 +1260,13 @@ defmodule IxMcp.ActionLog do
     {:reply, disabled_reply(request), :disabled}
   end
 
-  def handle_call({:create_session, name, at}, _from, %{db: db} = state) do
-    run(db, "INSERT INTO sessions (name, started_at) VALUES (?, ?)", [name, at])
+  def handle_call({:create_session, name, parent, spawn_tag, at}, _from, %{db: db} = state) do
+    run(
+      db,
+      "INSERT INTO sessions (name, started_at, parent_session, spawn_tag) VALUES (?, ?, ?, ?)",
+      [name, at, parent, spawn_tag]
+    )
+
     {:ok, id} = Sqlite3.last_insert_rowid(db.conn)
     {:reply, id, state}
   end
@@ -1178,11 +1419,7 @@ defmodule IxMcp.ActionLog do
             run(db, @finish, [action_status(status), is_error, elapsed, action_id])
           end
 
-          run(
-            db,
-            "INSERT INTO outbox (job_id, intent, status, elapsed_ms, result, created_at, acked) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [id, intent, status, elapsed, result, at, acked]
-          )
+          run(db, @insert_outbox, ["jobs", id, intent, status, elapsed, result, at, acked, nil])
 
           {:ok, outbox_id} = Sqlite3.last_insert_rowid(db.conn)
           :ok = execute!(db, "COMMIT")
@@ -1190,7 +1427,8 @@ defmodule IxMcp.ActionLog do
           {:notify,
            %{
              id: outbox_id,
-             job_id: id,
+             source: :jobs,
+             ref: id,
              intent: intent,
              status: status_atom(status),
              elapsed_ms: elapsed,
@@ -1201,6 +1439,34 @@ defmodule IxMcp.ActionLog do
       end
 
     {:reply, reply, state}
+  end
+
+  # The agents counterpart of the terminal transition above. One INSERT, no
+  # surrounding transaction and no idempotency guard, because there is no
+  # second table to keep consistent with it: the row IS the record. It is
+  # born unacked -- an agent final always has news in it, and the ack comes
+  # from whoever renders it (`Agents.await/2`, or the delivery flush).
+  def handle_call(
+        {:announce_agent, id, status, result, intent, elapsed_ms, session_id, at},
+        _from,
+        %{db: db} = state
+      ) do
+    run(db, @insert_outbox, ["agents", id, intent, status, elapsed_ms, result, at, 0, session_id])
+    {:ok, outbox_id} = Sqlite3.last_insert_rowid(db.conn)
+
+    {:reply,
+     {:notify,
+      %{
+        id: outbox_id,
+        source: :agents,
+        ref: id,
+        intent: intent,
+        status: status_atom(status),
+        elapsed_ms: elapsed_ms,
+        result: result,
+        session_id: session_id,
+        acked: false
+      }}, state}
   end
 
   def handle_call({:job, id}, _from, %{db: db} = state) do
@@ -1375,6 +1641,49 @@ defmodule IxMcp.ActionLog do
     {:reply, entries, state}
   end
 
+  def handle_call({:append_rlm_event, event, at}, _from, %{db: db} = state) do
+    run(
+      db,
+      "INSERT INTO rlm_events (ts, kind, payload_json, content_id, cache_key, workspace) VALUES (?, ?, ?, ?, ?, ?)",
+      [
+        Map.get(event, :ts) || at,
+        to_string(Map.fetch!(event, :kind)),
+        Map.fetch!(event, :payload_json),
+        Map.get(event, :content_id),
+        Map.get(event, :cache_key),
+        Map.get(event, :workspace)
+      ]
+    )
+
+    {:ok, seq} = Sqlite3.last_insert_rowid(db.conn)
+    {:reply, seq, state}
+  end
+
+  def handle_call({:rlm_events, after_seq, limit, kind}, _from, %{db: db} = state) do
+    {clause, params} = rlm_kind_clause(kind)
+
+    rows =
+      fetch(
+        db,
+        "SELECT seq, ts, kind, payload_json, content_id, cache_key, workspace FROM rlm_events WHERE seq > ?" <>
+          clause <> " ORDER BY seq LIMIT ?",
+        [after_seq] ++ params ++ [limit]
+      )
+
+    {:reply, Enum.map(rows, &rlm_row/1), state}
+  end
+
+  def handle_call({:rlm_cached, cache_key}, _from, %{db: db} = state) do
+    rows =
+      fetch(
+        db,
+        "SELECT seq, ts, kind, payload_json, content_id, cache_key, workspace FROM rlm_events WHERE cache_key = ? AND kind = 'lm_result' ORDER BY seq DESC LIMIT 1",
+        [cache_key]
+      )
+
+    {:reply, if(rows == [], do: nil, else: rlm_row(hd(rows))), state}
+  end
+
   # The INSERT is the decision, not a preceding SELECT: two kernels sharing
   # this file poll independently, and a check-then-insert would let both
   # announce the same fault.
@@ -1448,8 +1757,17 @@ defmodule IxMcp.ActionLog do
 
   def handle_call(:session_directory, _from, %{db: db} = state) do
     entries =
-      for [id, name, topic, started_at, last_seen_at] <- fetch(db, @select_directory, []) do
-        %{id: id, name: name, topic: topic, started_at: started_at, last_seen_at: last_seen_at}
+      for [id, name, topic, started_at, last_seen_at, parent, spawn_tag] <-
+            fetch(db, @select_directory, []) do
+        %{
+          id: id,
+          name: name,
+          topic: topic,
+          started_at: started_at,
+          last_seen_at: last_seen_at,
+          parent: parent,
+          spawn_tag: spawn_tag
+        }
       end
 
     {:reply, entries, state}
@@ -1488,14 +1806,16 @@ defmodule IxMcp.ActionLog do
     {sql, params} =
       case session_id do
         nil ->
-          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result, j.session_id " <>
-             "FROM outbox o LEFT JOIN jobs j ON j.id = o.job_id WHERE o.acked = 0 ORDER BY o.id",
-           []}
+          {@select_outbox <> " WHERE o.acked = 0 ORDER BY o.id", []}
 
         sid ->
-          {"SELECT o.id, o.job_id, o.intent, o.status, o.elapsed_ms, o.result, j.session_id " <>
-             "FROM outbox o JOIN jobs j ON j.id = o.job_id " <>
-             "WHERE j.session_id IS ? AND o.acked = 0 ORDER BY o.id", [sid]}
+          # LEFT JOIN, not the inner join this used to be: an agents row has
+          # no jobs row to match, and an inner join silently dropped every
+          # announcement that was not a job's. COALESCE picks whichever side
+          # holds the owning session.
+          {@select_outbox <>
+             " WHERE COALESCE(o.session_id, j.session_id) IS ? AND o.acked = 0 " <>
+             "ORDER BY o.id", [sid]}
       end
 
     {:reply, Enum.map(fetch(db, sql, params), &outbox_row_to_map/1), state}
@@ -1503,9 +1823,14 @@ defmodule IxMcp.ActionLog do
 
   # The reply-time suppression flip (#3934): one UPDATE, no read-back --
   # a job has at most one outbox row in the normal path, and a ledger-retry
-  # duplicate deserves the same silence.
-  def handle_call({:ack_job_outbox, job_id}, _from, %{db: db} = state) do
-    run(db, "UPDATE outbox SET acked = 1 WHERE job_id = ? AND acked = 0", [job_id])
+  # duplicate deserves the same silence. Scoped by source as well as ref, so
+  # a job and an agent that happen to share an id cannot ack each other.
+  def handle_call({:ack_outbox_ref, source, ref}, _from, %{db: db} = state) do
+    run(db, "UPDATE outbox SET acked = 1 WHERE source = ? AND ref = ? AND acked = 0", [
+      source,
+      ref
+    ])
+
     {:ok, changes} = Sqlite3.changes(db.conn)
     {:reply, changes, state}
   end
@@ -1584,6 +1909,11 @@ defmodule IxMcp.ActionLog do
   # can, and the same reasoning makes fleet_mutes (ENG-11209) the test for v9.
   # Reading these in the wrong order silently mis-dates the file and runs a
   # migration ladder from the wrong rung.
+  # Column-only migrations past v9 (the generalized outbox) add no table, so
+  # no probe here can see them: an unstamped file that has fleet_mutes is
+  # reported as current. That is safe rather than lucky -- stamping predates
+  # every table this probe can find, so a file reaching v9's shape was
+  # already being stamped and never lands in this branch.
   defp sniff_table_version(db) do
     cond do
       table_exists?(db, "fleet_mutes") -> @user_version
@@ -1593,6 +1923,26 @@ defmodule IxMcp.ActionLog do
       not table_exists?(db, "session_messages") -> 6
       true -> 7
     end
+  end
+
+  defp rlm_row([seq, ts, kind, payload_json, content_id, cache_key, workspace]) do
+    %{
+      seq: seq,
+      ts: ts,
+      kind: Map.get(@rlm_kind_index, kind, kind),
+      payload_json: payload_json,
+      content_id: content_id,
+      cache_key: cache_key,
+      workspace: workspace
+    }
+  end
+
+  defp rlm_kind_clause(nil), do: {"", []}
+  defp rlm_kind_clause(kind) when is_atom(kind) or is_binary(kind), do: rlm_kind_clause([kind])
+
+  defp rlm_kind_clause(kinds) when is_list(kinds) do
+    placeholders = Enum.map_join(kinds, ", ", fn _ -> "?" end)
+    {" AND kind IN (#{placeholders})", Enum.map(kinds, &to_string/1)}
   end
 
   defp table_exists?(db, table) do
@@ -1615,6 +1965,8 @@ defmodule IxMcp.ActionLog do
         @create_session_messages,
         @create_fleet_mutes,
         @create_fleet_alerts_seen,
+        @create_rlm_events,
+        @create_rlm_events_cache_index,
         stamp(),
         "COMMIT"
       ]
@@ -1634,12 +1986,17 @@ defmodule IxMcp.ActionLog do
 
   defp stamp(version \\ @user_version), do: "PRAGMA user_version = #{version}"
 
-  defp disabled_reply({:create_session, _name, _at}), do: 0
+  defp disabled_reply({:create_session, _name, _parent, _tag, _at}), do: 0
   defp disabled_reply({:create_topic, _session_id, _name, _at}), do: 0
   defp disabled_reply({:start_action, _action}), do: 0
 
   defp disabled_reply({:finish_job, _id, _status, _result, _quiet, _at, _start}),
     do: :already_final
+
+  defp disabled_reply(
+         {:announce_agent, _id, _status, _result, _intent, _elapsed, _session_id, _at}
+       ),
+       do: :disabled
 
   defp disabled_reply({:post_request, _kind, _ref, _title, _body, _session_id, _at}),
     do: :disabled
@@ -1676,10 +2033,19 @@ defmodule IxMcp.ActionLog do
   defp disabled_reply({:recent_jobs, _session_id, _n}), do: []
   defp disabled_reply({:unacked_outbox, _session_id}), do: []
   defp disabled_reply({:ack_outbox, _ids}), do: 0
-  defp disabled_reply({:ack_job_outbox, _job_id}), do: 0
+  defp disabled_reply({:ack_outbox_ref, _source, _ref}), do: 0
   defp disabled_reply({:recent, _n}), do: []
   defp disabled_reply(:sessions), do: []
   defp disabled_reply(:topics), do: []
+  # A dropped event must not read as a cheap call: 0 says "not recorded", and
+  # `IxMcp.LM` treats an unrecorded call as uncacheable rather than as a hit.
+  # nil for the probe is the fail-closed answer -- a degraded log cannot claim a
+  # cached result exists, or a whole analysis would be answered from a cache
+  # that is not there.
+  defp disabled_reply({:append_rlm_event, _event, _at}), do: 0
+  defp disabled_reply({:rlm_events, _after, _limit, _kind}), do: []
+  defp disabled_reply({:rlm_cached, _key}), do: nil
+
   defp disabled_reply(_request), do: :ok
 
   defp table_columns(db, table) do
@@ -1824,6 +2190,12 @@ defmodule IxMcp.ActionLog do
   defp status_atom("failed"), do: :failed
   defp status_atom("cancelled"), do: :cancelled
   defp status_atom("killed"), do: :killed
+
+  # No catch-all: an unknown source means a newer binary wrote this row, and
+  # the version guard in `ensure_version/1` is what should have refused the
+  # file. Crashing here beats rendering someone else's announcement as a job.
+  defp outbox_source_atom("jobs"), do: :jobs
+  defp outbox_source_atom("agents"), do: :agents
 
   defp job_row_to_map([
          id,
@@ -1989,10 +2361,11 @@ defmodule IxMcp.ActionLog do
     }
   end
 
-  defp outbox_row_to_map([id, job_id, intent, status, elapsed_ms, result, session_id]) do
+  defp outbox_row_to_map([id, source, ref, intent, status, elapsed_ms, result, session_id]) do
     %{
       id: id,
-      job_id: job_id,
+      source: outbox_source_atom(source),
+      ref: ref,
       intent: intent,
       status: status_atom(status),
       elapsed_ms: elapsed_ms,

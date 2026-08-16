@@ -38,8 +38,22 @@ impl TuiInstance {
     /// the core defaults (80x24, 10,000 lines). `env` adds per-session
     /// identity/config pairs; the core forces `TERM`/`COLORTERM` after them,
     /// so those two always win.
+    ///
+    /// The `agent_*` group declares the terminal as an agent on the
+    /// dashboard: `agent_kind` labels it and switches the group on;
+    /// `busy_marker`/`gate_markers` feed status inference; `session_log`
+    /// (`"claude"` or `"codex"`) makes the producer tail the agent's own
+    /// session log into a transcript pane, resolved from `agent_cwd` (and
+    /// `agent_log_root` when the child runs with a redirected config dir).
     #[new]
-    #[pyo3(signature = (command, args=None, rows=None, cols=None, scrollback_lines=None, env=None))]
+    #[pyo3(signature = (command, args=None, rows=None, cols=None, scrollback_lines=None, env=None,
+                        agent_kind=None, busy_marker=None, gate_markers=None, session_log=None,
+                        agent_cwd=None, agent_log_root=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a Python constructor's keyword surface; grouping into a \
+                  struct would push a second pyclass at every caller"
+    )]
     fn new(
         py: Python<'_>,
         command: String,
@@ -48,6 +62,12 @@ impl TuiInstance {
         cols: Option<u16>,
         scrollback_lines: Option<usize>,
         env: Option<std::collections::HashMap<String, String>>,
+        agent_kind: Option<String>,
+        busy_marker: Option<String>,
+        gate_markers: Option<Vec<String>>,
+        session_log: Option<String>,
+        agent_cwd: Option<String>,
+        agent_log_root: Option<String>,
     ) -> PyResult<Self> {
         let manager = global_manager();
         let args = args.unwrap_or_default();
@@ -64,6 +84,28 @@ impl TuiInstance {
         }
         if let Some(env) = env {
             config.env = env.into_iter().collect();
+        }
+        if let Some(kind) = agent_kind {
+            let session_log = match session_log.as_deref() {
+                Some("claude") => Some(tui::SessionLogKind::Claude),
+                Some("codex") => Some(tui::SessionLogKind::Codex),
+                // An unknown family is refused rather than silently untailed:
+                // the caller asked for a transcript it would never get.
+                Some(other) => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "unknown session_log {other:?}: expected \"claude\" or \"codex\""
+                    )));
+                }
+                None => None,
+            };
+            config.agent = Some(tui::AgentConfig {
+                kind,
+                busy_marker,
+                gate_markers: gate_markers.unwrap_or_default(),
+                session_log,
+                cwd: agent_cwd.map(std::path::PathBuf::from),
+                log_root: agent_log_root.map(std::path::PathBuf::from),
+            });
         }
 
         let inner = py.detach(move || manager.spawn(command, args, config))?;

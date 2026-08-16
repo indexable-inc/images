@@ -68,6 +68,27 @@ defmodule IxMcp.UTF8 do
   def truncate(binary, max_bytes) when byte_size(binary) <= max_bytes, do: binary
   def truncate(binary, max_bytes), do: cut(binary, max_bytes)
 
+  @doc """
+  The longest SUFFIX of `binary` at most `max_bytes` long that does not begin
+  inside a multibyte codepoint.
+
+  `truncate/2`'s mirror image, and the one a captured stderr needs: a byte-exact
+  tail is where the diagnostic lives, so keeping the prefix throws away the part
+  the reader came for. Skipping the leading continuation bytes is what keeps the
+  result off the #3538 invalid-binary path.
+  """
+  @spec truncate_tail(String.t(), non_neg_integer()) :: String.t()
+  def truncate_tail(binary, max_bytes) when byte_size(binary) <= max_bytes, do: binary
+
+  def truncate_tail(binary, max_bytes) do
+    binary
+    |> binary_part(byte_size(binary) - max_bytes, max_bytes)
+    |> drop_continuation()
+  end
+
+  defp drop_continuation(<<0b10::2, _low_bits::6, rest::binary>>), do: drop_continuation(rest)
+  defp drop_continuation(binary), do: binary
+
   defp cut(_binary, 0), do: ""
 
   # A continuation byte (0b10xxxxxx) right after the cut means the cut

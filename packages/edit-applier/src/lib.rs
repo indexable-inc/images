@@ -75,7 +75,7 @@ pub fn check_overlaps(paths: &[PathBuf], edits: &[Edit]) -> Result<(), OverlapEr
         )]
         if first.file == second.file && second.start < first.end {
             return OverlapSnafu {
-                path: paths[first.file].clone(),
+                path: paths.get(first.file).cloned().unwrap_or_default(),
                 first_start: first.start,
                 first_end: first.end,
                 second_start: second.start,
@@ -97,14 +97,19 @@ pub fn check_overlaps(paths: &[PathBuf], edits: &[Edit]) -> Result<(), OverlapEr
 pub fn apply(files: &[Source], edits: &[Edit]) -> Vec<FileRewrite> {
     let mut by_file: Vec<Vec<&Edit>> = vec![Vec::new(); files.len()];
     for edit in edits {
-        by_file[edit.file].push(edit);
+        // An edit naming a file outside `files` has no text to splice into, so
+        // there is nothing to apply it to; see the `file` note on [`Edit`].
+        if let Some(bucket) = by_file.get_mut(edit.file) {
+            bucket.push(edit);
+        }
     }
-    by_file
-        .into_iter()
-        .enumerate()
+    // `by_file` was built with one bucket per file, so zipping pairs each
+    // bucket with its own source without indexing either.
+    files
+        .iter()
+        .zip(by_file)
         .filter(|(_, edits)| !edits.is_empty())
-        .map(|(file, mut file_edits)| {
-            let (path, text) = &files[file];
+        .map(|((path, text), mut file_edits)| {
             file_edits.sort();
             let mut content = text.clone();
             for edit in file_edits.into_iter().rev() {

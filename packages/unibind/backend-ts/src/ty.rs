@@ -17,12 +17,20 @@ pub struct TyCtx<'a> {
     /// cannot survive napi-derive's helper modules.
     pub user: &'a Ident,
     pub objects: &'a [ir::Object],
+    pub enums: &'a [ir::Enum],
     pub mirrored: &'a [String],
 }
 
 impl TyCtx<'_> {
     pub fn object(&self, name: &str) -> Option<&ir::Object> {
         self.objects.iter().find(|object| object.name == name)
+    }
+
+    /// The unit enum a [`ir::Type::Named`] refers to, when it names one. A
+    /// declared enum crosses as its wire string, so this is what tells the
+    /// declaration and both conversions apart from a record.
+    pub fn unit_enum(&self, name: &str) -> Option<&ir::Enum> {
+        self.enums.iter().find(|declared| declared.name == name)
     }
 
     /// The mirror struct standing in for record `name`, when it has one
@@ -130,6 +138,13 @@ pub fn decl(ty: &ir::Type, ctx: &TyCtx<'_>, level: Level) -> Result<TokenStream,
             if let Some(object) = ctx.object(name) {
                 let handle = object_handle_ident(object);
                 quote!(#handle)
+            } else if ctx.unit_enum(name).is_some() {
+                // A unit enum crosses as its wire string: napi carries it as
+                // a JavaScript string, which the `.d.ts` narrows to the union
+                // of that enum's literals. `crate::convert` owns both halves
+                // of the mapping, including the refusal of a string outside
+                // the set.
+                quote!(::std::string::String)
             } else if let Some(mirror) = ctx.mirror(name) {
                 quote!(#mirror)
             } else {

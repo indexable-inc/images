@@ -1,0 +1,24 @@
+{
+  "rustc-ix-src": {
+    "owner": "indexable-inc",
+    "repo": "rustc",
+    "rev": "42daae19928efe7951b36c03819142c88683cf21",
+    "hash": "sha256-D4ox2bVCK31CjfAxjrASwi4w4UdujibpQEbiqpZfRBU=",
+    "version": "1.99.0",
+    "prefetch": "unpack"
+  },
+  "llvm-project-libunwind-src": {
+    "owner": "rust-lang",
+    "repo": "llvm-project",
+    "rev": "21cf28432798952d942bacc6bcee3a328faa3638",
+    "hash": "sha256-Md5uOemQ5pLBjYzEXZxqPjNhxay89Rvka0rAT1jurcM=",
+    "prefetch": "manual"
+  },
+  "backtrace-src": {
+    "owner": "rust-lang",
+    "repo": "backtrace-rs",
+    "rev": "d902726a1dcdc1e1c66f73d1162181b5423c645b",
+    "hash": "sha256-MMyY73c7q3bRXJqXkRT1Jz2xhCE1PPvsQNQkLv3V+Co=",
+    "prefetch": "unpack"
+  }
+}

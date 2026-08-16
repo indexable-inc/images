@@ -1,0 +1,36 @@
+# vim: filetype=meson
+
+option(
+  'doc-gen',
+  type : 'boolean',
+  value : false,
+  description : 'Generate documentation',
+)
+
+option(
+  'unit-tests',
+  type : 'boolean',
+  value : true,
+  description : 'Build unit tests',
+)
+
+option(
+  'bindings',
+  type : 'boolean',
+  value : true,
+  description : 'Build language bindings (e.g. Perl)',
+)
+
+option(
+  'benchmarks',
+  type : 'boolean',
+  value : false,
+  description : 'Build benchmarks (requires gbenchmark)',
+)
+
+option(
+  'json-schema-checks',
+  type : 'boolean',
+  value : true,
+  description : 'Check JSON schema validity of schemas and examples (requires jv)',
+)

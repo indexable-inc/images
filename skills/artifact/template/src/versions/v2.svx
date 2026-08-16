@@ -1,0 +1,99 @@
+---
+title: Debounce vs throttle
+note: adds the timeline figure; trailing-edge caveat
+---
+
+<script>
+  import Callout from '../lib/components/Callout.svelte';
+  import Figure from '../lib/components/Figure.svelte';
+</script>
+
+# Debounce vs throttle
+
+Both tame a noisy event stream, but they answer different questions.
+Debounce answers "has the user stopped?"; it waits for a quiet gap
+before firing. Throttle answers "what is happening right now?"; it
+fires at a steady cadence while events keep coming.
+
+<Figure caption="The same burst of events (top), debounced (middle), throttled (bottom).">
+<svg viewBox="0 0 640 150" role="img" aria-label="timeline comparing debounce and throttle">
+  <g style="font-family: var(--font-mono); font-size: 11px; fill: var(--fg-muted)">
+    <text x="0" y="28">events</text>
+    <text x="0" y="78">debounce</text>
+    <text x="0" y="128">throttle</text>
+  </g>
+  <g style="stroke: var(--border)">
+    <line x1="90" y1="24" x2="620" y2="24" />
+    <line x1="90" y1="74" x2="620" y2="74" />
+    <line x1="90" y1="124" x2="620" y2="124" />
+  </g>
+  <g style="fill: var(--fg-muted)">
+    <circle cx="110" cy="24" r="4" />
+    <circle cx="130" cy="24" r="4" />
+    <circle cx="145" cy="24" r="4" />
+    <circle cx="185" cy="24" r="4" />
+    <circle cx="200" cy="24" r="4" />
+    <circle cx="380" cy="24" r="4" />
+    <circle cx="395" cy="24" r="4" />
+    <circle cx="415" cy="24" r="4" />
+  </g>
+  <g style="fill: var(--accent)">
+    <circle cx="260" cy="74" r="5" />
+    <circle cx="475" cy="74" r="5" />
+    <circle cx="110" cy="124" r="5" />
+    <circle cx="200" cy="124" r="5" />
+    <circle cx="380" cy="124" r="5" />
+  </g>
+</svg>
+</Figure>
+
+```ts
+function debounce<A extends unknown[]>(
+  fn: (...args: A) => void,
+  waitMs: number
+): (...args: A) => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), waitMs);
+  };
+}
+```
+
+Every call resets the timer, so `fn` runs once, `waitMs` after the
+last call. A search box uses this: no request per keystroke, one
+request when typing pauses.
+
+```ts
+function throttle<A extends unknown[]>(
+  fn: (...args: A) => void,
+  intervalMs: number
+): (...args: A) => void {
+  let last = -Infinity;
+  return (...args) => {
+    const now = performance.now();
+    if (now - last >= intervalMs) {
+      last = now;
+      fn(...args);
+    }
+  };
+}
+```
+
+| | Debounce | Throttle |
+| --- | --- | --- |
+| Fires | after the stream goes quiet | during the stream, at a fixed rate |
+| Guarantees | exactly one call per burst | at most one call per interval |
+| Fits | search-as-you-type, autosave | scroll position, drag tracking |
+
+<Callout kind="tip">
+A scroll handler must not debounce: the page would only react after
+scrolling stops. Pick by asking whether silence or cadence carries
+the meaning.
+</Callout>
+
+<Callout kind="warn">
+This throttle drops the trailing call: events landing inside the last
+interval never fire. Track the final position separately, or add a
+trailing timer, before using it for anything stateful.
+</Callout>

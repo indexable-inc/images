@@ -1,0 +1,15 @@
+{
+  programs.opencode = {
+    enable = true;
+    settings = {
+      model = "anthropic/claude-sonnet-4-20250514";
+      autoshare = false;
+      autoupdate = true;
+    };
+  };
+  nmt.script = ''
+    assertFileExists home-files/.config/opencode/opencode.json
+    assertFileContent home-files/.config/opencode/opencode.json \
+      ${./opencode.json}
+  '';
+}

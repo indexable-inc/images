@@ -6,6 +6,7 @@
 //! wire layouts cannot drift apart); this emitter only decides where the
 //! class lands, mapping the package's dots onto directories.
 
+use unibind_core::docs;
 use unibind_core::ir::Interface;
 
 use crate::host::{EmitError, HostEmitter, HostFile};
@@ -24,6 +25,10 @@ impl HostEmitter for JvmEmitter {
     }
 
     fn emit(&self, interface: &Interface) -> Result<Vec<HostFile>, EmitError> {
+        // Intra-doc links resolve into this language's spelling before
+        // anything renders a doc comment; see `unibind_core::docs`.
+        let interface = &docs::resolve(interface, docs::Language::Jvm)
+            .map_err(|error| EmitError { message: error.to_string() })?;
         let host = unibind_backend_jvm::host_class(interface, self.package.as_deref()).map_err(
             |error| EmitError {
                 message: error.message,

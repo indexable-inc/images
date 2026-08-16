@@ -6,8 +6,8 @@ tags: [nix, flakes, fork]
 links:
   - label: PR 3750
     href: https://github.com/indexable-inc/index/pull/3750
-  - label: patch 0030
-    href: https://github.com/indexable-inc/index/blob/main/packages/nix/patches/0030-libflake-stamp-submodule-metadata-on-relative-path-f.patch
+  - label: nix fork commit
+    href: https://github.com/indexable-inc/nix/commit/17bb99301a86caa9f63a765abd162165089de0d9
 ---
 
 A `path:./submodule` flake input used to be a metadata black hole: no

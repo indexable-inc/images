@@ -165,11 +165,191 @@
           description = "Use cargo-nextest for parallel test execution.";
         };
       };
+      # Compile-scope rustc knobs for the cargo-unit engine only (the
+      # `buildPackage` cargo path never sees them, so a caller-supplied stable
+      # toolchain there cannot trip over a `-Z` flag). Every flag here salts
+      # unit identity: flipping one rebuilds the whole Rust workspace in CI.
+      #
+      # Candidates from the nightly-2026-05-27 `-Z help` sweep that were
+      # REJECTED, with the evidence, so nobody re-proposes them blind:
+      #
+      # - `-Zthreads=N` (parallel frontend): real wall-time win on a large
+      #   frontend (vcfs dev-profile lib unit: real 5.4 s at threads=1, 3.4 s
+      #   at 4, 2.8 s at 8; tokio release lib 4.1 s to 3.0 s at 4), but
+      #   byte-NONDETERMINISTIC on this nightly: threads=4 produced 3+
+      #   distinct rlib/rmeta outputs in 5 vcfs runs and 5 distinct in 5
+      #   tokio runs; threads=8 produced 5 distinct outputs in 5 vcfs runs
+      #   (sizes wobbling by ~1.7 kB run to run). In a content-addressed store that defeats early cutoff
+      #   and triggers spurious downstream rebuilds, which disqualifies the
+      #   flag regardless of the wall-time win. Byte-diff evidence for a
+      #   possible compiler-side fix: of the 258 rlib members only lib.rmeta
+      #   (diffs from header offset 0x8, then 1-2 byte diffs clustered around
+      #   0x2ef6a and on, total size delta ~1.7 kB) and exactly one codegen
+      #   unit object (cgu.219; same size, identical symbol table, diffs
+      #   confined to the embedded .llvmbc bitcode: six 3-4 byte ranges near
+      #   0x10c8 and one 26-byte range at 0x3001) varied; all machine-code
+      #   sections were byte-identical. A link-dominated bin unit
+      #   (orchestrator, opt-level 3, 248 MB output) showed no variance in 3
+      #   runs and no wall-time win (50 s either way). No option is exposed:
+      #   a knob that poisons the CA store is a footgun; re-evaluate against
+      #   a future toolchain bump as a measurement, not a config flip.
+      # - `-Zshare-generics=off`: on this nightly the default is ON at
+      #   opt-level 0/1 and OFF at opt-level 2/3 (verified by symbol
+      #   inspection: at opt 0 a dependent imports the upstream instantiation,
+      #   with =off it defines a local copy). Forcing =off at the dev profile
+      #   grew the vcfs rlib from 69,848,774 B to 72,369,374 B with no
+      #   wall-time win (5.4 s vs 5.7 s), and it buys no cache independence:
+      #   the upstream unit is already a nix input of the dependent, so the
+      #   coupling it removes is one nix already tracks.
+      # - `--remap-path-scope` (stable on this nightly): nothing to widen.
+      #   The engine's `--remap-path-prefix` already applies to every scope by
+      #   default; measured rlib+rmeta of a workspace unit contain zero
+      #   /nix/store strings, and 5 from-scratch rebuilds of the same unit
+      #   were byte-identical. The one store-path leak was the dep-info .d
+      #   file, which rustc exempts from remapping; fixed in the renderer by
+      #   not installing it (see render.rs install phase), not by scoping.
+      # - `-Zlocation-detail=none`: changes runtime behavior (panic locations
+      #   lose file/line fleet-wide), and measured no reproducibility win to
+      #   pay for it: with debuginfo=0 and both `-Zlocation-detail=none` and
+      #   `-Zincremental-ignore-spans=yes`, a dependent's rlib still changed
+      #   when a dependency's lines shifted (the dependency SVH is
+      #   span-sensitive on this nightly and is baked into dependent
+      #   metadata). Reject as default; revisit only with fleet consent to
+      #   degraded panic messages.
+      # - `-Zincremental-ignore-spans=yes`: no observable effect for us. The
+      #   engine never uses `-Cincremental`, and the flag did not make the
+      #   rmeta span-insensitive on this nightly (comment-shift test above).
+      compiler = {
+        embedMetadata = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = ''
+            Embed full crate metadata in rlibs (`-Zembed-metadata=no` when
+            false, the RFC 3763 cargo `-Zno-embed-metadata` scheme).
+
+            The engine already emits a separate full .rmeta next to every
+            lib rlib (`--emit dep-info,metadata,link`), so the embedded copy
+            is pure duplication. When this is off, dependents pass the crate
+            twice, `--extern name=<rlib>` plus `--extern name=<sibling
+            .rmeta>` (cargo's -Zno-embed-metadata scheme; rustc does not
+            fall back to `-L` search for an --extern-pinned crate), so
+            compiles read the full .rmeta and links consume the thin rlib.
+            Off by default on measurement (nightly-2026-05-27, x86_64-linux):
+            tokio release-profile rlib 22,697,770 B to 13,263,482 B and vcfs
+            dev-profile rlib 69,848,774 B to 58,345,910 B, .rmeta unchanged
+            and compile wall time flat, with every configuration built 5
+            times and no byte variance observed. Verified off: dependent
+            compiles, bin links, and rustdoc/doctest invocations all resolve,
+            and a dependent compiled with the dual extern is byte-identical
+            to one compiled against the same full rlib alone. Proc-macros and
+            dylib crate types keep embedded metadata (the renderer exempts
+            them; their dylib is the metadata carrier).
+          '';
+        };
+        # The ix rustc fork's rmeta byte-stability flags
+        # (indexable-inc/rustc PR #2, pinned at packages/rustc-ix). They make
+        # a lib unit's .rmeta byte-identical across non-interface edits, which
+        # is what lets content-addressed early cutoff stop an edit's rebuild
+        # cascade at the first crate whose output converges. Fork-only: the
+        # default nightly hard-errors on them ("unknown unstable option"), so
+        # resolve.nix refuses an EXPLICIT selection at eval unless the graph's
+        # toolchain records a fork rev (packages/rustc-ix passthru.forkRev).
+        #
+        # Each option defaults to AUTO (null / "auto"): the trio is ON, in
+        # the cutoff mode, for exactly the graphs whose toolchain is the
+        # fork, and off everywhere else. Auto rather than plain true because
+        # the flags cannot even parse on an upstream toolchain, and plain
+        # false would re-ask every fork-toolchain caller to restate the
+        # engine's whole reason for carrying the fork.
+        #
+        # The auto set is the FULL trio with stripSpans = "all", on evidence:
+        # the fork PR's per-edit-class table and the local reproduction
+        # (chain-a fixture crate, opt 0, debuginfo 0: a comment-line
+        # insertion leaves the rmeta byte-identical with the trio, and
+        # differs without) show only the full trio stabilizes general comment
+        # edits and whole-line shifts; each flag alone leaves residual churn
+        # (isolation runs in the fork PR: with spans and src-hash handled but
+        # contentSvh off, exactly the 16 SVH bytes still differ). stripSpans
+        # was auto-OFF between #10170 and the 42daae19928e pin, while the
+        # fork rev of the day erased hygiene along with span locations and
+        # ICEd every reader of an affected .rmeta; resolve.nix, where the
+        # auto values resolve, carries that history and the re-flip evidence.
+        #
+        # What the auto default trades away, for a graph that ships debugged
+        # binaries rather than CI checks: dependents' "defined here"
+        # diagnostic notes into fork-built crates, dependent-side debuginfo
+        # declaration attribution for functions inlined from them (both from
+        # stripSpans = "all"; "non-exported" costs nothing in DWARF but only
+        # holds byte-position-preserving edits identical), and cross-crate
+        # diagnostic source snippets degraded to file:line:col (from
+        # normalizeSrcHash; the zeroed hash never verifies, so dependents
+        # never quote stale source). A fork-toolchain graph that wants those
+        # back sets the options to their off values explicitly.
+        rmetaStability = {
+          contentSvh = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            description = ''
+              Derive the SVH embedded in crate metadata from the encoded
+              metadata bytes (`-Zrmeta-content-svh`), so it is stable exactly
+              when the rest of the metadata is. Trades away nothing
+              user-visible (the loader's link-time SVH equality check keeps
+              working); rejected by the fork with `-Cincremental`, which this
+              engine never passes. null (default) = auto: on exactly when the
+              graph's toolchain is the ix rustc fork.
+            '';
+          };
+          stripSpans = lib.mkOption {
+            type = lib.types.enum ["auto" "off" "non-exported" "all"];
+            default = "auto";
+            description = ''
+              Replace spans with dummies when encoding crate metadata
+              (`-Zrmeta-strip-spans=<mode>`), so encoded bytes do not depend
+              on source positions. "non-exported" preserves spans in exported
+              MIR bodies and costs nothing in dependents' debuginfo, but only
+              byte-position-preserving edits stay identical. "all" is the
+              cutoff mode: general comment edits and line shifts stay
+              identical, at the cost of dependents' "defined here" diagnostic
+              notes into this crate and, for functions inlined from this
+              crate, dependent-side debuginfo declaration attribution (the
+              fork PR documents both, with DWARF verification either way).
+              "auto" (default) resolves to "off" on every toolchain, the ix
+              rustc fork included: the pinned fork rev writes .rmeta under
+              this flag that ICEs the crates which read it (resolve.nix
+              carries the reproduction). Setting "all" or "non-exported"
+              explicitly still works and is still fork-guarded; that is how
+              the cutoff check keeps the capability under test.
+            '';
+          };
+          normalizeSrcHash = lib.mkOption {
+            type = lib.types.nullOr lib.types.bool;
+            default = null;
+            description = ''
+              Zero the per-file source content hashes in crate metadata
+              (`-Zrmeta-normalize-src-hash`), the 16 bytes of MD5 that
+              otherwise churn on any file edit even at debuginfo 0. Dependents
+              degrade cross-crate diagnostic snippets into this crate to
+              file:line:col (the zeroed hash never verifies, so they never
+              quote stale source). null (default) = auto: on exactly when the
+              graph's toolchain is the ix rustc fork.
+            '';
+          };
+        };
+      };
       linker = {
         useMold = lib.mkOption {
           type = lib.types.bool;
           default = pkgs.stdenv.hostPlatform.isLinux;
-          description = "Link with mold on Linux.";
+          description = ''
+            Link with mold on Linux.
+
+            Kept over lld and wild on measurement rather than reputation: all
+            three are within 3% on wall time for our largest binary, and the
+            linker is only 1.3 to 1.8 GB of a 15 GB link step that rustc
+            dominates. The numbers and the revisit condition are in
+            `packages/clang-mold-musl/default.nix`, which is where the musl
+            target actually selects a linker.
+          '';
         };
         useLld = lib.mkOption {
           type = lib.types.bool;

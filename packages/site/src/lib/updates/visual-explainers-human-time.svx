@@ -4,7 +4,7 @@ postedAt: '2026-07-19T05:20:00-07:00'
 title: visual explainers render human time in the reader's timezone
 links:
   - label: 'visual-explainers skill'
-    href: 'https://github.com/indexable-inc/index/blob/main/packages/agent/skills/visual-explainers/SKILL.md'
+    href: 'https://github.com/indexable-inc/index/blob/main/skills/visual-explainers/SKILL.md'
 tags:
   - agent
 ---

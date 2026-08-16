@@ -2,9 +2,7 @@
   ix,
   lib,
 }: let
-  # The indexable-inc/jj jj megamerge (jj-src input): upstream main plus the
-  # submodule series. The input is pinned by rev and never floats under the
-  # fork-sync cron; see the jj-src comment in flake.nix.
+  # The jj view carries the submodule and view-management commits.
   source = ix.jjSrc;
 
   workspace = ix.cargoUnit.buildWorkspace {
@@ -35,6 +33,59 @@
         "-p"
         "jj-views"
       ]
+      # A third execution, with `--tests`, is what makes the fork's own test
+      # suites exist as units at all. Without it `workspace.testChecksByTarget`
+      # is empty and `ciChecks.rust-jj` holds exactly two entries, both clippy
+      # (clippy-jj-vfs, clippy-jj-views), so a change to the fork compiles and
+      # nothing runs it. Measured on the workspace-add fix (a9df7a0ec4d1, +182
+      # /-20 with 138 new lines in cli/tests/test_workspaces.rs): the gate saw
+      # candidate=923 identical=908 changed=15 and index-rust-jj was not among
+      # the 15 -- the only fork derivation it rebuilt was the release binary.
+      # jj-lib is listed because its `runner` target is where the backend and
+      # git-interop tests live; widening here leaves the shipped roots
+      # byte-identical, same as the execution above.
+      [
+        "-p"
+        "jj-cli"
+        "-p"
+        "jj-lib"
+        "-p"
+        "jj-vfs"
+        "-p"
+        "jj-views"
+        "--tests"
+      ]
+    ];
+    # jj's own test suites shell out to the `git` binary: testutils/src/git.rs
+    # spawns `git clone`, and cli/tests/test_views_command.rs spawns `git`
+    # directly. The nix test sandbox has no git otherwise, so those tests panic
+    # spawning it (`Os { code: 2, NotFound }`) rather than failing on anything
+    # jj did. Same shape as the `clone-cli` and `mirror` entries in
+    # lib/rust/workspace.nix.
+    packageTestInputs = {
+      jj-cli = [ix.pkgs.git];
+      # jj-lib's test_ssh_signing drives `ssh-keygen`/`ssh` as well.
+      jj-lib = [
+        ix.pkgs.git
+        ix.pkgs.openssh
+      ];
+    };
+    # Two clusters that cargo-unit's out-of-band runner cannot satisfy, and
+    # that say nothing about jj. Both were measured, not guessed; the count is
+    # the failing-test count each accounts for.
+    testPolicyByPackage.jj-cli.skip = [
+      # 14 tests. assert_cmd's `cargo_bin()` reads `CARGO_BIN_EXE_fake-formatter`
+      # from the ENVIRONMENT at run time. Cargo injects that variable only when
+      # cargo itself runs the integration test; cargo-unit compiles the test
+      # binary and hands it to nextest, so it is unset and the tests panic
+      # before exercising anything.
+      "test_run_command::"
+      # 1 test. insta resolves `snapshot_path => "."` by asking `cargo metadata`
+      # for the workspace root. There is no cargo in the test sandbox, so insta
+      # logs "cargo metadata failed ... will use manifest directory as fallback"
+      # and looks for cli-reference@.md.snap in the wrong directory, reporting
+      # the whole (present, current) file as a new snapshot.
+      "test_generate_md_cli_help::"
     ];
     # The repo-owned quality gates are for crates we own; upstream jj answers
     # to its own CI.
@@ -77,12 +128,19 @@ in
         # and it means adding a crate there is the only edit needed.
         tests =
           (old.passthru.tests or {})
-          // lib.mapAttrs' (name: lib.nameValuePair "clippy-${name}") workspace.clippyByPackage;
+          // lib.mapAttrs' (name: lib.nameValuePair "clippy-${name}") workspace.clippyByPackage
+          # Same reason the clippy map is wired by hand: `ciChecks` only picks up
+          # the ROOT package's own gates. `testChecksByTarget` is one nextest
+          # derivation per test TARGET (19 of them here), which is deliberate --
+          # the per-#[test] `tests.<target>.cases` map goes through a shared
+          # manifest IFD that builds every test binary in the graph, and buys
+          # nothing a whole-target run does not already report.
+          // lib.mapAttrs' (name: lib.nameValuePair "test-${name}") workspace.testChecksByTarget;
       };
     meta =
       (old.meta or {})
       // {
-        description = "Jujutsu with index's git submodule series";
+        description = "Jujutsu with index's submodule and view workflows";
         homepage = "https://github.com/jj-vcs/jj";
         license = lib.licenses.asl20;
         mainProgram = "jj";

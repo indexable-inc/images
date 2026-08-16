@@ -1,0 +1,121 @@
+// Copyright 2024 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::io;
+use std::io::Write as _;
+
+use jj_lib::repo_path::RepoPathUiConverter;
+use jj_lib::working_copy::SnapshotStats;
+use jj_lib::working_copy::UntrackedReason;
+use tracing::instrument;
+
+use crate::cli_util::CommandHelper;
+use crate::cli_util::print_large_file_hint;
+use crate::cli_util::print_untracked_files;
+use crate::command_error::CommandError;
+use crate::ui::Ui;
+
+/// Start tracking specified paths in the working copy
+///
+/// Without arguments, all paths that are not ignored will be tracked.
+///
+/// By default, new files in the working copy are automatically tracked, so
+/// this command has no effect.
+/// You can configure which paths to automatically track by setting
+/// `snapshot.auto-track` (e.g. to `"none()"` or `"glob:**/*.rs"`). Files that
+/// don't match the pattern can be manually tracked using this command. The
+/// default pattern is `all()`.
+#[derive(clap::Args, Clone, Debug)]
+pub(crate) struct FileTrackArgs {
+    /// Paths to track
+    #[arg(required = true, value_name = "FILESETS", value_hint = clap::ValueHint::AnyPath)]
+    paths: Vec<String>,
+
+    /// Track paths even if they're ignored or too large
+    ///
+    /// By default, `jj file track` will not track files that are ignored by
+    /// .gitignore or exceed the maximum file size. This flag overrides those
+    /// restrictions, explicitly tracking the specified paths.
+    #[arg(long)]
+    include_ignored: bool,
+}
+
+#[instrument(skip_all)]
+pub(crate) async fn cmd_file_track(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &FileTrackArgs,
+) -> Result<(), CommandError> {
+    let (mut workspace_command, auto_stats, _) = command.workspace_helper_with_stats(ui).await?;
+    let matcher = workspace_command
+        .parse_file_patterns(ui, &args.paths)?
+        .to_matcher();
+
+    let mut options = workspace_command.snapshot_options_with_start_tracking_matcher(&matcher)?;
+    if args.include_ignored {
+        options.force_tracking_matcher = &matcher;
+    }
+
+    let mut tx = workspace_command.start_transaction().into_inner();
+    let (mut locked_ws, _wc_commit) = workspace_command.start_working_copy_mutation().await?;
+    let (_tree, track_stats) = locked_ws.locked_wc().snapshot(&options).await?;
+    let num_rebased = tx.repo_mut().rebase_descendants().await?;
+    if num_rebased > 0 {
+        writeln!(ui.status(), "Rebased {num_rebased} descendant commits.")?;
+    }
+    let repo = tx.commit("track paths").await?;
+    locked_ws.finish(repo.op_id().clone()).await?;
+    print_track_snapshot_stats(
+        ui,
+        auto_stats,
+        track_stats,
+        workspace_command.env().path_converter(),
+    )?;
+    Ok(())
+}
+
+pub fn print_track_snapshot_stats(
+    ui: &Ui,
+    mut auto_stats: SnapshotStats,
+    track_stats: SnapshotStats,
+    path_converter: &RepoPathUiConverter,
+) -> io::Result<()> {
+    let mut untracked_paths = track_stats.untracked_paths;
+    for (path, reason) in &mut untracked_paths {
+        if !matches!(reason, UntrackedReason::FileNotAutoTracked) {
+            continue;
+        }
+        if let Some(old_reason) = auto_stats.untracked_paths.remove(path) {
+            *reason = old_reason;
+        }
+    }
+
+    print_untracked_files(ui, &untracked_paths, path_converter)?;
+
+    let (large_files, sizes): (Vec<_>, Vec<_>) = untracked_paths
+        .iter()
+        .filter_map(|(path, reason)| match reason {
+            UntrackedReason::FileTooLarge { size, .. } => Some((path, *size)),
+            UntrackedReason::FileNotAutoTracked => None,
+        })
+        .unzip();
+    if let Some(size) = sizes.iter().max() {
+        let large_files_list: Vec<_> = large_files
+            .iter()
+            .map(|path| path_converter.format_file_path(path))
+            .collect();
+        print_large_file_hint(ui, *size, Some(&large_files_list))?;
+    }
+    Ok(())
+}

@@ -1,0 +1,51 @@
+name: ci-wasm32-wasi
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      GHC: 9.10.1.20241021
+    steps:
+      - name: Install GHCup
+        id: ghcup
+        uses: haskell/ghcup-setup@v1
+        with:
+          cabal: latest-prerelease
+          config: |
+            url-source:
+              - GHCupURL
+              - cross
+              - prereleases
+
+      - name: setup-ghc-wasm32-wasi
+        run: |
+          set -eux
+          pushd $(mktemp -d)
+          git clone https://gitlab.haskell.org/ghc/ghc-wasm-meta.git
+          cd ghc-wasm-meta/
+          export SKIP_GHC=yes
+          ./setup.sh
+          popd
+          source ~/.ghc-wasm/env
+          ghc=$(ghcup -s cross list -r -t ghc -o | grep wasm | tail -1 | awk '{ print $2 }')
+          ghcup install ghc --set ${ghc} -- --host=x86_64-linux --with-intree-gmp --with-system-libffi
+
+      - uses: actions/checkout@v4
+
+      - name: test
+        run: |
+          set -eux
+
+          source ~/.ghc-wasm/env
+          cabal update
+
+          cp ~/.ghc-wasm/wasi-sdk/share/misc/config.* .
+          autoreconf -i
+
+          cabal --project-file=cabal.project.wasm32-wasi build -w wasm32-wasi-ghc --with-ghc-pkg=wasm32-wasi-ghc-pkg --with-hsc2hs=wasm32-wasi-hsc2hs --with-gcc=wasm32-wasi-clang
+
+          ./test-wasm32-wasi.mjs

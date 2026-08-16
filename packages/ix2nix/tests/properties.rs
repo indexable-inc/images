@@ -28,28 +28,28 @@ fn ident() -> impl Generator<String> {
 fn type_name() -> impl Generator<String> {
     gs::sampled_from(
         &[
-        "string",
-        "bool",
-        "int",
-        "float",
-        "u8",
-        "u16",
-        "u32",
-        "i8",
-        "i16",
-        "i32",
-        "port",
-        "path",
-        "nonEmptyStr",
-        "drv",
-        "any",
-        "unknown",
-        "object",
-        // The alias `program` always declares. Included so generated schemas
-        // actually contain `$ref`s for the resolution property to check --
-        // without it that property would pass on every input by finding
-        // nothing.
-        "T0",
+            "string",
+            "bool",
+            "int",
+            "float",
+            "u8",
+            "u16",
+            "u32",
+            "i8",
+            "i16",
+            "i32",
+            "port",
+            "path",
+            "nonEmptyStr",
+            "drv",
+            "any",
+            "unknown",
+            "object",
+            // The alias `program` always declares. Included so generated schemas
+            // actually contain `$ref`s for the resolution property to check --
+            // without it that property would pass on every input by finding
+            // nothing.
+            "T0",
         ][..],
     )
     .map(str::to_owned)
@@ -106,7 +106,14 @@ fn expr() -> impl Generator<String> {
         gs::sampled_from(
             // The last two exercise the renderer's escaping: a real template
             // interpolation, and a plain string containing literal `${`.
-            &["true", "false", "null", "\"s\"", "`t ${a} x`", "\"has \\${ curly\""][..],
+            &[
+                "true",
+                "false",
+                "null",
+                "\"s\"",
+                "`t ${a} x`",
+                "\"has \\${ curly\""
+            ][..],
         )
         .map(str::to_owned),
         ident()
@@ -138,8 +145,12 @@ fn expr() -> impl Generator<String> {
         },
     );
     let call = hegel::tuples!(ident(), node.generator()).map(|(f, a)| format!("{f}({a})"));
-    let binary = hegel::tuples!(node.generator(), gs::sampled_from(&["+", "==", "&&"][..]), node.generator())
-        .map(|(l, op, r)| format!("({l} {op} {r})"));
+    let binary = hegel::tuples!(
+        node.generator(),
+        gs::sampled_from(&["+", "==", "&&"][..]),
+        node.generator()
+    )
+    .map(|(l, op, r)| format!("({l} {op} {r})"));
     let ternary = hegel::tuples!(node.generator(), node.generator(), node.generator())
         .map(|(c, t, e)| format!("({c} ? {t} : {e})"));
     let member = hegel::tuples!(ident(), ident()).map(|(base, field)| format!("{base}.{field}"));

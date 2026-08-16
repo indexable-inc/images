@@ -1,0 +1,92 @@
+name: Pull request reviews
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  check-author:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+      issues: write
+    steps:
+      - name: Check if PR author is a contributor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { pull_request, review } = context.payload;
+            const { owner, repo } = context.repo;
+
+            const author = pull_request.user.login;
+            const reviewer = review.user.login;
+
+            const blacklistedAuthors = [
+              "dependabot[bot]",
+            ];
+
+            if (blacklistedAuthors.includes(author)) {
+              core.info("Author is blacklisted from nudge, skipping.");
+              return;
+            }
+
+            if (reviewer === author) {
+              core.info("Author reviewed their own pull request, skipping.");
+              return;
+            }
+
+            const getPermissionLevel = async (username) => {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                username,
+                owner,
+                repo,
+              });
+
+              return data.permission;
+            };
+
+            const isMaintainer = async (username) =>
+              ["maintain", "admin"].includes(await getPermissionLevel(username));
+
+            const isContributor = async (username) =>
+              ["write", "maintain", "admin"].includes(await getPermissionLevel(username));
+
+            if (await isContributor(author)) {
+              core.info(`Author @${author} already has write access.`);
+              return;
+            }
+
+            if (!await isMaintainer(reviewer)) {
+              core.info(`Reviewer @${reviewer} is not a maintainer.`);
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              issue_number: pull_request.number,
+              per_page: 100,
+              owner,
+              repo,
+            });
+
+            const nudgeMarker = "<!-- @jj-vcs/contributors nudge -->";
+
+            if (comments.some(c => (c.body || "").includes(nudgeMarker))) {
+              core.info("Reviewer has already been nudged.");
+              return;
+            };
+
+            const body = `Hey @martinvonz! Please `
+              + `make sure to add ${author} to jj-vcs/contributors so they `
+              + "can merge their pull request. Feel free to also drop a note "
+              + "in Discord so they can get their contributor role. Thanks!";
+
+            await github.rest.issues.createComment({
+              issue_number: pull_request.number,
+              body: nudgeMarker + body,
+              owner,
+              repo,
+            });
+
+            core.notice(`Pinged martinvonz to add ${author} to jj-vcs/contributors.`);

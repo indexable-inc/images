@@ -166,6 +166,22 @@
     # autoMemoryDirectory would silently revert to the per-project
     # ~/.claude/projects/<slug>/memory default instead of disabling.
     env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+    # Let a subagent delegate. Claude Code allows one layer of subagents below
+    # the main conversation by default, so every delegated task is a leaf: an
+    # agent that needs to fan out has to inline the work instead, and the Agent
+    # tool refuses with "Subagent nesting limit reached (depth 1 of 1)". Two is
+    # the smallest value that makes delegation compose.
+    #
+    # Rides `extraSettings` here rather than
+    # `programs.claude-code.defaults.env`, for the same reason omitRules does
+    # below: the module folds `defaults` only into basePackage.override, and
+    # `package = claudeCode` discards the defaulted package, so a value set
+    # there evaluates fine and never reaches the render (index#3537).
+    #
+    # A string, not an int: the var is validated as digits-only and anything
+    # that does not parse is ignored, so a wrong type reads as no change at all
+    # rather than as an error.
+    env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH = "2";
     enabledPlugins = {
       "ix-docs@ix" = true;
       "ix@ix" = true;
@@ -236,41 +252,30 @@
     # the wrapper's computed render between the house defaults and the
     # controlled keys; the render is enforced through the managed layer.
     extraSettings = claudeSettings;
-    # One personal opt-in left. SendMessage, ReportFindings and Monitor used to
-    # be stated here too; #4224 made them house defaults, since each is named
-    # by a tool description every session receives, so restating them would
-    # only hide the day the default changes back.
-    #   ScheduleWakeup - /loop dynamic pacing has no other way to set its own
-    #     next wake-up, and nothing in the house prompt or tool set asks for it,
-    #     which is why the house default leaves it off.
-    systemTools = {
-      ScheduleWakeup = true;
-    };
+    # Strict kernel-only mode: the index Elixir kernel is the entire tool
+    # surface. The wrapper empties the built-in tool table and bakes only the
+    # `index` MCP server, denying the rest by name so a project `.mcp.json`
+    # cannot merge one back in (claude-code/default.nix,
+    # agent/policy/permissions.nix). It folds AFTER caller `systemTools`, so
+    # an opt-in stated here would be dead config; the old ScheduleWakeup
+    # opt-in went with it.
+    # kernelOnly = true; # 2026-08-07: disabled -- kernel-only default was too
+    # restrictive in practice (Bash/Read/Edit denied everywhere); `claude-kernel`
+    # in home.nix keeps a kernel-only binary for when that posture is wanted.
     # Personal opt-outs from the fleet posture: run the model's native 1M
     # window (no DISABLE_1M clamp, no AUTO_COMPACT_WINDOW override).
     features = {
       context1M = true;
       autoCompactWindow = null;
     };
-    # Prompt rule opt-outs live HERE, not on
-    # programs.claude-code.systemPrompt.omitRules: the module folds that
-    # option only into basePackage.override, and the explicit `package =
-    # claudeCode` below discards the defaulted package, so the option
-    # silently shipped prompts WITH the forceMerge rule while
-    # protectedMergeGuard below already allowed force-merging (index#3537).
-    # backgroundSubagents is omitted because this machine wants the opposite
-    # preference: native harness subagents over the kernel's depth-1 Agents.*
-    # surface (reverses the index#3700 default), with the kernel still owning
-    # shell/file/search. Until #4224 the rule also claimed those harness tools
-    # were absent, which is no longer why it is dropped.
-    omitRules = agentPromptOmitRules ++ ["backgroundSubagents"];
-    # Matches agentPromptOmitRules `forceMerge` above: without this the baked
-    # `Bash(gh pr merge*--admin*)` denies still hard-block what the omitted
-    # rule permits.
-    protectedMergeGuard = false;
-    # appendSystemPrompt (house rules appended to the stock prompt) comes from
-    # the package default. Set `appendSystemPrompt = null;` here to ship the
-    # stock prompt alone on this machine.
+    # Empty system prompt, REPLACING the stock one: the wrapper materializes
+    # the string to a store file and bakes `--system-prompt-file=<it>`, so
+    # sessions start with no system prompt at all (`null` here would ship the
+    # stock prompt instead). With `systemPrompt` explicit the wrapper ignores
+    # `omitRules`, so none are stated; `protectedMergeGuard` returns to its
+    # default because kernelOnly denies Bash outright, admin-merge patterns
+    # included.
+    systemPrompt = "";
   };
 
   # House MCP registry, index/lib/util/mcp.nix, is the SINGLE source both
@@ -323,13 +328,13 @@
   };
 
   # Shared skill source: the index repo's SKILL.md bundles (open Agent-Skills
-  # standard, `packages/agent/skills`) plus any consumer-local skills, built
+  # standard, `skills`) plus any consumer-local skills, built
   # into ONE directory and delivered to BOTH agents bare (no plugin namespace,
   # so `/<skill>` on Claude and `$<skill>` / implicit on Codex): Claude via
   # `programs.claude-code.skills`, Codex via the upstream
   # `programs.codex.skills`. Replaces the old per-agent Claude plugin wrapper.
   # Built through `skills.mkSkillsDir` rather than handed the bare
-  # `packages/agent/skills` directory, because that directory is only the
+  # `skills` directory, because that directory is only the
   # repo-local half of the catalog: skills vendored from packaged upstreams
   # (`vendoredSources`, currently agent-browser) resolve against `pkgs` inside
   # mkSkillsDir and never reach disk on the bare path. It is also the only
@@ -416,10 +421,6 @@ in {
     {
       assertion = cfg.packages.typenix != null;
       message = "users.andrewgazelka.packages.typenix must be set for the workstation profile.";
-    }
-    {
-      assertion = cfg.packages.noxLsp != null;
-      message = "users.andrewgazelka.packages.noxLsp must be set for the workstation profile.";
     }
     {
       assertion = cfg.paths.vscodeIslands != null;
@@ -514,11 +515,12 @@ in {
       #    ToolSearch fetch (default would defer once MCP defs cross a char cap).
       #  - CLAUDE_CODE_DISABLE_CRON=1 → drops the scheduling/loop tools
       #    (CronCreate/CronDelete/CronList).
-      # Agent teams follow the index claude-code wrapper's env_defaults, which
-      # derive CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS from the SendMessage tool
-      # row so the var and the permission cannot disagree (#4224); the context
-      # window clamp is baked into the wrapper's settings render (index#2167).
-      # No per-machine override for either here.
+      # Agent teams (mesh teammate sessions) are off: the wrapper's
+      # features.agentTeams defaults false, matching upstream. SendMessage
+      # stays on independently -- subagent continuation is stock and does not
+      # need the teams env (decoupled 2026-08-04; was derived from the tool
+      # row under the old #4224 belief). Context window clamp is baked into
+      # the wrapper's settings render (index#2167).
       ENABLE_TOOL_SEARCH = "false";
       CLAUDE_CODE_DISABLE_CRON = "1";
     }
@@ -594,7 +596,18 @@ in {
       libgit2 # C library implementing git core methods (linked against by other tools)
       gh # GitHub CLI (PRs, issues, gists, auth, runs)
       tea # Forgejo/Gitea CLI (pull requests, issues, releases)
-      jujutsu # `jj` — Git-compatible VCS with first-class branches/operations
+      b4 # `b4`: fetch a kernel patch series or thread from lore.kernel.org by message-id (`b4 mbox <msgid>`, `b4 am`); the CLI path to kernel mailing-list archives, so agents stop driving a browser to read lore. Note it will not create `-o <dir>`: fetch succeeds, then the write dies with FileNotFoundError (ENG-12940)
+      # `jj` from the indexable-inc/jj fork rather than nixpkgs' jujutsu: the
+      # fork carries `jj views fetch` and `jj views push`, which drive the
+      # derived subtrees this config depends on (ix/ is one). nixpkgs' build
+      # has no `views` subcommand at all, so the pin in flake.nix reaches
+      # nothing unless this line names the fork package.
+      indexPkgs.jj # `jj` — Git-compatible VCS with first-class branches/operations
+      # The standalone view tool, packaged apart from `jj` because it is not part
+      # of the VCS anyone installs. `jj views fetch` does the import internally in
+      # the normal case, so this is only reached when a view has diverged and has
+      # to be integrated by hand -- which is exactly when being without it hurts.
+      indexPkgs.jj-views
       # jj-starship  # slow to build from source (jj-lib); indexPkgs.vcs-prompt renders the same segment
       lazygit # TUI for git (stage, commit, branch, rebase visually)
       delta # syntax-highlighted git diff/blame pager
@@ -789,13 +802,6 @@ in {
           exec ${cfg.packages.typenix}/bin/typenix --lsp --stdio "$@"
         '';
       })
-      # nox-lsp: Nix language server over the nox arena evaluator (nox
-      # docs/lsp.md) — eval-backed hovers/completions, embedded-language
-      # delegation, provenance jumps. Zed's Nix language points at it
-      # (config/zed/settings.nix); supplied host-native by the consuming
-      # flake like typenix above.
-      cfg.packages.noxLsp
-      bash-language-server # nox-lsp delegates embedded bash strings to it (must be on PATH)
       # Experimental: MLsub/SimpleSub type checker LSP for Nix (Nix-native).
       # https://github.com/JRMurr/tix — Cursor/Zed point at tix-lsp.
       # inputs.tix.packages.${pkgs.stdenv.hostPlatform.system}.default
@@ -972,21 +978,6 @@ in {
           "if".app-name-regex-substring = "ix-term";
           run = "layout tiling";
         }
-        # test-ide's fleet dashboard is the same shape: a Tauri window with
-        # titleBarStyle "Overlay", so AppKit reports no close, minimize or zoom
-        # button and aerospace floats it even though the subrole reads
-        # AXStandardWindow. Measured 2026-07-30: window 2287 sat at x=3200
-        # w=2080 across the Ghostty grid until `aerospace layout tiling` snapped
-        # it to a 1175x432 cell. The regex catches `npm run tauri dev`, whose
-        # binary carries no bundle id.
-        {
-          "if".app-id = "dev.andrewgazelka.fleet";
-          run = "layout tiling";
-        }
-        {
-          "if".app-name-regex-substring = "fleet";
-          run = "layout tiling";
-        }
         {
           "if".app-id = "com.paulsolt.SuperEasyTimerMac";
           run = "layout floating";
@@ -1118,9 +1109,9 @@ in {
     yamlFormat.generate "andrewgazelka-k9s-main-skin.yaml" yamlStructured.k9s-skins-main;
 
   # jj (Jujutsu): out-of-store symlink into the personal config repo so jj
-  # settings (megamerge revset aliases and friends) are editable live, no
-  # rebuild between tweaks. Requested 2026-07-22 with the jj megamerge fork
-  # migration; the old structured jj-config entry moved into that file.
+  # settings (view revset aliases and related settings) are editable live, no
+  # rebuild between tweaks. Requested 2026-07-22 with the jj source workflow;
+  # the old structured jj-config entry moved into that file.
   home.file.".config/jj/config.toml".source =
     config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.config/nix/jj/config.toml";
 
@@ -1407,6 +1398,11 @@ in {
 
   programs.starship = {
     enable = true;
+    # The forked prompt (index packages/starship): upstream resolves the repo
+    # root through gix, so a non-colocated jj workspace -- the shape of the
+    # config repo here -- had its absolute path printed instead of its name,
+    # and every `require_repo` custom module below was silently skipped.
+    package = indexPkgs.starship;
     # Store-backed, not an out-of-store symlink: both hydra and the nixos VM
     # render the identical prompt from one definition, regardless of where each
     # host's repo clone lives. nushell loads starship via its own vendor

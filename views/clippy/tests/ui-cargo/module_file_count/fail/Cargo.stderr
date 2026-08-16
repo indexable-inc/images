@@ -1,0 +1,11 @@
+error: module `src/big_mod` has 4 files (max 3)
+ --> src/main.rs:4:1
+  |
+4 | mod big_mod;
+  | ^^^^^^^^^^^^
+  |
+  = help: split into sub-modules to keep each directory focused
+  = note: `-D clippy::module-file-count` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(clippy::module_file_count)]`
+
+error: could not compile `module_file_count` (bin "module_file_count") due to 1 previous error

@@ -1,0 +1,6 @@
+# Pin the style rules rather than leaving them to whatever rustfmt the shell
+# supplies. The binary is not pinned here (there is no rust-toolchain.toml and
+# the dev shell has no cargo, ENG-12458), so a nixpkgs bump can move rustfmt
+# under the gate below; naming the style edition removes the largest source of
+# that drift, which is the edition-derived defaults for import ordering.
+style_edition = "2024"

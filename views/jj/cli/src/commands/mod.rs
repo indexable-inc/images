@@ -1,0 +1,254 @@
+// Copyright 2020 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+mod abandon;
+mod absorb;
+mod arrange;
+#[cfg(feature = "bench")]
+mod bench;
+mod bisect;
+mod bookmark;
+mod commit;
+mod config;
+mod debug;
+mod describe;
+mod diff;
+mod diffedit;
+mod duplicate;
+mod edit;
+mod evolog;
+mod file;
+mod fix;
+#[cfg(feature = "fs")]
+mod fs;
+#[cfg(feature = "git")]
+mod gerrit;
+#[cfg(feature = "git")]
+mod git;
+mod help;
+mod interdiff;
+mod log;
+mod metaedit;
+mod new;
+mod next;
+mod operation;
+mod parallelize;
+mod prev;
+mod rebase;
+mod redo;
+mod resolve;
+mod restore;
+mod revert;
+mod root;
+mod run;
+mod show;
+mod sign;
+mod simplify_parents;
+mod sparse;
+mod split;
+mod squash;
+mod status;
+mod tag;
+mod undo;
+mod unsign;
+mod util;
+mod version;
+#[cfg(feature = "views")]
+mod views;
+mod workspace;
+
+use std::fmt::Debug;
+
+use clap::CommandFactory as _;
+use clap::FromArgMatches as _;
+use clap::Subcommand as _;
+use clap::builder::Styles;
+use clap::builder::styling::AnsiColor;
+use clap_complete::engine::SubcommandCandidates;
+use tracing::instrument;
+
+use crate::cli_util::Args;
+use crate::cli_util::CommandHelper;
+use crate::command_error::CommandError;
+use crate::complete;
+use crate::ui::Ui;
+
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Yellow.on_default().bold())
+    .usage(AnsiColor::Yellow.on_default().bold())
+    .literal(AnsiColor::Green.on_default().bold())
+    .placeholder(AnsiColor::Green.on_default());
+
+#[derive(clap::Parser, Clone, Debug)]
+#[command(styles = STYLES)]
+#[command(disable_help_subcommand = true)]
+#[command(after_long_help = help::show_keyword_hint_after_help())]
+#[command(add = SubcommandCandidates::new(complete::aliases))]
+// A repeated argument is accepted, and the last occurrence wins. This is a
+// propagated setting, so it also applies to subcommands and to custom commands
+// and global arguments registered by `CliRunner`. Arguments that can be
+// specified multiple times, such as `--config`, keep all of their values.
+#[command(args_override_self = true)]
+enum Command {
+    Abandon(abandon::AbandonArgs),
+    Absorb(absorb::AbsorbArgs),
+    Arrange(arrange::ArrangeArgs),
+    #[cfg(feature = "bench")]
+    #[command(subcommand)]
+    Bench(bench::BenchCommand),
+    #[command(subcommand)]
+    Bisect(bisect::BisectCommand),
+    #[command(subcommand)]
+    Bookmark(bookmark::BookmarkCommand),
+    Commit(commit::CommitArgs),
+    #[command(subcommand)]
+    Config(config::ConfigCommand),
+    #[command(subcommand)]
+    Debug(debug::DebugCommand),
+    Describe(describe::DescribeArgs),
+    Diff(diff::DiffArgs),
+    Diffedit(diffedit::DiffeditArgs),
+    Duplicate(duplicate::DuplicateArgs),
+    Edit(edit::EditArgs),
+    #[command(alias = "obslog", visible_alias = "evolution-log")]
+    Evolog(evolog::EvologArgs),
+    #[command(subcommand)]
+    File(file::FileCommand),
+    #[cfg(feature = "fs")]
+    #[command(subcommand)]
+    Fs(fs::FsCommand),
+    Fix(fix::FixArgs),
+    #[cfg(feature = "git")]
+    #[command(subcommand)]
+    Gerrit(gerrit::GerritCommand),
+    #[cfg(feature = "git")]
+    #[command(subcommand)]
+    Git(git::GitCommand),
+    Help(help::HelpArgs),
+    Interdiff(interdiff::InterdiffArgs),
+    Log(log::LogArgs),
+    Metaedit(metaedit::MetaeditArgs),
+    New(new::NewArgs),
+    Next(next::NextArgs),
+    #[command(subcommand)]
+    #[command(visible_alias = "op")]
+    Operation(operation::OperationCommand),
+    Parallelize(parallelize::ParallelizeArgs),
+    Prev(prev::PrevArgs),
+    Rebase(rebase::RebaseArgs),
+    Redo(redo::RedoArgs),
+    Resolve(resolve::ResolveArgs),
+    Restore(restore::RestoreArgs),
+    Revert(revert::RevertArgs),
+    Root(root::RootArgs),
+    Run(run::RunArgs),
+    Show(show::ShowArgs),
+    Sign(sign::SignArgs),
+    SimplifyParents(simplify_parents::SimplifyParentsArgs),
+    #[command(subcommand)]
+    Sparse(sparse::SparseCommand),
+    Split(split::SplitArgs),
+    Squash(squash::SquashArgs),
+    Status(status::StatusArgs),
+    #[command(subcommand)]
+    Tag(tag::TagCommand),
+    Undo(undo::UndoArgs),
+    Unsign(unsign::UnsignArgs),
+    #[command(subcommand)]
+    Util(util::UtilCommand),
+    Version(version::VersionArgs),
+    #[cfg(feature = "views")]
+    #[command(subcommand)]
+    Views(views::ViewsCommand),
+    #[command(subcommand)]
+    Workspace(workspace::WorkspaceCommand),
+}
+
+pub fn default_app() -> clap::Command {
+    Command::augment_subcommands(Args::command())
+}
+
+#[instrument(skip_all)]
+pub async fn run_command(ui: &mut Ui, command_helper: &CommandHelper) -> Result<(), CommandError> {
+    let subcommand = Command::from_arg_matches(command_helper.matches()).unwrap();
+    match &subcommand {
+        Command::Abandon(args) => abandon::cmd_abandon(ui, command_helper, args).await,
+        Command::Absorb(args) => absorb::cmd_absorb(ui, command_helper, args).await,
+        #[cfg(feature = "bench")]
+        Command::Bench(args) => bench::cmd_bench(ui, command_helper, args).await,
+        Command::Bisect(args) => bisect::cmd_bisect(ui, command_helper, args).await,
+        Command::Bookmark(args) => bookmark::cmd_bookmark(ui, command_helper, args).await,
+        Command::Commit(args) => commit::cmd_commit(ui, command_helper, args).await,
+        Command::Config(args) => config::cmd_config(ui, command_helper, args).await,
+        Command::Debug(args) => debug::cmd_debug(ui, command_helper, args).await,
+        Command::Describe(args) => describe::cmd_describe(ui, command_helper, args).await,
+        Command::Diff(args) => diff::cmd_diff(ui, command_helper, args).await,
+        Command::Diffedit(args) => diffedit::cmd_diffedit(ui, command_helper, args).await,
+        Command::Duplicate(args) => duplicate::cmd_duplicate(ui, command_helper, args).await,
+        Command::Edit(args) => edit::cmd_edit(ui, command_helper, args).await,
+        Command::Evolog(args) => evolog::cmd_evolog(ui, command_helper, args).await,
+        Command::File(args) => file::cmd_file(ui, command_helper, args).await,
+        #[cfg(feature = "fs")]
+        Command::Fs(args) => fs::cmd_fs(ui, command_helper, args).await,
+        Command::Fix(args) => fix::cmd_fix(ui, command_helper, args).await,
+        #[cfg(feature = "git")]
+        Command::Gerrit(sub_args) => gerrit::cmd_gerrit(ui, command_helper, sub_args).await,
+        #[cfg(feature = "git")]
+        Command::Git(args) => git::cmd_git(ui, command_helper, args).await,
+        Command::Help(args) => help::cmd_help(ui, command_helper, args).await,
+        Command::Arrange(args) => arrange::cmd_arrange(ui, command_helper, args).await,
+        Command::Interdiff(args) => interdiff::cmd_interdiff(ui, command_helper, args).await,
+        Command::Log(args) => log::cmd_log(ui, command_helper, args).await,
+        Command::Metaedit(args) => metaedit::cmd_metaedit(ui, command_helper, args).await,
+        Command::New(args) => new::cmd_new(ui, command_helper, args).await,
+        Command::Next(args) => next::cmd_next(ui, command_helper, args).await,
+        Command::Operation(args) => operation::cmd_operation(ui, command_helper, args).await,
+        Command::Parallelize(args) => parallelize::cmd_parallelize(ui, command_helper, args).await,
+        Command::Prev(args) => prev::cmd_prev(ui, command_helper, args).await,
+        Command::Rebase(args) => rebase::cmd_rebase(ui, command_helper, args).await,
+        Command::Redo(args) => redo::cmd_redo(ui, command_helper, args).await,
+        Command::Resolve(args) => resolve::cmd_resolve(ui, command_helper, args).await,
+        Command::Restore(args) => restore::cmd_restore(ui, command_helper, args).await,
+        Command::Revert(args) => revert::cmd_revert(ui, command_helper, args).await,
+        Command::Root(args) => root::cmd_root(ui, command_helper, args).await,
+        Command::Run(args) => run::cmd_run(ui, command_helper, args).await,
+        Command::SimplifyParents(args) => {
+            simplify_parents::cmd_simplify_parents(ui, command_helper, args).await
+        }
+        Command::Show(args) => show::cmd_show(ui, command_helper, args).await,
+        Command::Sign(args) => sign::cmd_sign(ui, command_helper, args).await,
+        Command::Sparse(args) => sparse::cmd_sparse(ui, command_helper, args).await,
+        Command::Split(args) => split::cmd_split(ui, command_helper, args).await,
+        Command::Squash(args) => squash::cmd_squash(ui, command_helper, args).await,
+        Command::Status(args) => status::cmd_status(ui, command_helper, args).await,
+        Command::Tag(args) => tag::cmd_tag(ui, command_helper, args).await,
+        Command::Undo(args) => undo::cmd_undo(ui, command_helper, args).await,
+        Command::Unsign(args) => unsign::cmd_unsign(ui, command_helper, args).await,
+        Command::Util(args) => util::cmd_util(ui, command_helper, args).await,
+        Command::Version(args) => version::cmd_version(ui, command_helper, args).await,
+        #[cfg(feature = "views")]
+        Command::Views(args) => views::cmd_views(ui, command_helper, args).await,
+        Command::Workspace(args) => workspace::cmd_workspace(ui, command_helper, args).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_app() {
+        default_app().debug_assert();
+    }
+}

@@ -3,7 +3,7 @@
 # `rustPlatform.buildRustPackage` recipe so that:
 #   - cross-compilation to Darwin falls out of `target = "aarch64-apple-darwin"`
 #     (the RFC 0009 apple SDK toolchain), instead of needing a real Mac; and
-#   - a codex-src bump rebuilds only the crates whose sources changed, not the
+#   - a Codex view update rebuilds only the crates whose sources changed, not the
 #     whole vendored world (the fork bumps constantly).
 #
 # The C/C++ heavy dependencies (`webrtc-sys`, the `v8` crate) get their prebuilt
@@ -57,7 +57,7 @@
   # Git dependencies pinned in codex-rs/Cargo.lock, keyed by the exact Cargo.lock
   # source string (cargoUnit's vendorer keys by source, not name-version like
   # rustPlatform.importCargoLock). The five rust-sdks crates share one source
-  # (one locked rev), so one hash covers them. Refresh after a codex-src bump by
+  # (one locked rev), so one hash covers them. Refresh after a view update by
   # rebuilding and copying the corrected hashes from the fetchgit mismatch errors.
   outputHashes = {
     "git+https://github.com/dzbarsky/rules_rust?rev=b56cbaa8465e74127f1ea216f813cd377295ad81#b56cbaa8465e74127f1ea216f813cd377295ad81" = "sha256-uJpVLcQh8wWZA3GPv9D8Nt43EOirajfDJ7eq/FB+tek=";
@@ -159,6 +159,11 @@
     }
     // lib.optionalAttrs isCross {
       inherit target;
+      # `embedMetadata = true` because this graph pins a stable toolchain
+      # and `-Zembed-metadata=no` is nightly-only: leaving the default sends a
+      # `-Z` flag to a rustc that exits 1 on it (ENG-12992). The cost is a
+      # fatter rlib on a graph nothing links against twice.
+      policy = cargoUnit.policyPresets.pureBuild // {compiler.embedMetadata = true;};
       rustToolchain = ix.languages.rust.toolchain pkgs {
         channel = "stable";
         version = "latest";

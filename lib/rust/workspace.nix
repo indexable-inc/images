@@ -11,6 +11,15 @@
   # second unit graph for a non-host triple without `workspace.nix` having
   # to reach back into the assembled `ix` surface.
   rustToolchainFor,
+  # `pkgs -> the ix rustc fork toolchain` (packages/rustc-ix), for the NATIVE
+  # unit graph on x86_64-linux (see nativeForkToolchain below). Threaded as
+  # its own formal beside `rustToolchainFor`, never made the tooling-wide
+  # default in lib/rust/tooling.nix: that default backs every
+  # `ix.buildRustPackage` and the prebuilt-unit toolchainId assertions
+  # (cargo-unit.nix's `defaultToolchainId`), and resolving the fork through
+  # the assembled package set there would let the overlay that builds
+  # rustc-ix recurse into itself.
+  forkRustToolchainFor,
   appleSdkToolchain,
   macosSdk,
   # The shared pins reader (lib/util/pins.nix), threaded down from
@@ -20,8 +29,8 @@
 }: workspacePkgs: let
   inherit (paths) root;
 
-  # libghostty-vt built for the workspace's package set, from the ghostty-src
-  # jj megamerge fork tree (the fork's C-API additions such as the per-cell
+  # libghostty-vt built for the workspace's package set, from the checked
+  # Ghostty view (the fork's C-API additions such as the per-cell
   # hyperlink URI are part of the surface ix-vt binds, so the unpatched
   # upstream base would fail the link). ix-vt-sys links this dylib, so the
   # unit graph needs both the build-script env (so the build script emits the
@@ -129,6 +138,9 @@
 
     dontConfigure = true;
 
+    # Upstream ships no tests for the static init blob.
+    doCheck = false;
+
     buildPhase = ''
       # shell
       runHook preBuild
@@ -196,6 +208,25 @@
   # render IFD: cargo-unit plans the graph against a manifest-scoped stub of
   # `src`, so the whole-workspace cargo resolve re-runs only when a manifest
   # or the file set changes (lib/rust/cargo-unit.nix `plannerSource`, #3900).
+  # The native graph's toolchain on x86_64-linux: the ix rustc fork
+  # (packages/rustc-ix), for the same two capabilities the ix workspace
+  # already defaults to (ix repo, lib/workspace-cargo-unit.nix): rmeta
+  # byte-stability, which policy.compiler.rmetaStability's auto defaults
+  # turn on for any fork-toolchain graph so a comment edit stops cascading
+  # past the first crate whose output converges, and `-Zdump-test-names`
+  # discovery, which compiles test targets without codegen or linking inside
+  # the eval-blocking manifest IFD. Off x86_64-linux the fork package does
+  # not exist (index builds it for the CI architecture only) and the native
+  # graph keeps the repo-pin default, exactly as before; an explicit system
+  # gate rather than a probe, so a broken registry entry on x86_64-linux
+  # fails loud instead of quietly falling back. The cross graphs below keep
+  # their own rust-overlay toolchain untouched (they need cross targets the
+  # fork does not carry).
+  nativeForkToolchain =
+    if workspacePkgs.stdenv.hostPlatform.system == "x86_64-linux"
+    then forkRustToolchainFor workspacePkgs
+    else null;
+
   mkUnits = {target ? null}: let
     # `cargo` cfg-excludes platform-gated deps per target, so an Apple-Silicon
     # or Intel macOS unit graph never sees `alsa-sys`; gate the ALSA plumbing on
@@ -452,9 +483,6 @@
             workspacePkgs.findutils
             workspacePkgs.coreutils
           ];
-          # upstream-sync's upstream-pr integration test builds a local git
-          # upstream and runs the real fetch/am/branch mechanism against it.
-          upstream-sync = [workspacePkgs.git];
         };
         # `rodio` (packages/minecraft/sound) pulls `cpal`/`alsa-sys`, whose build
         # script needs ALSA's pkg-config metadata to link `libasound` on Linux.
@@ -590,9 +618,13 @@
         # workspace (selected package outputs expose these as explicit tests).
         # A cross graph is a pure build artifact, so it skips policy to avoid
         # re-running clippy/audit/machete that the native graph already covers.
+        # `embedMetadata = true` because this graph pins a stable toolchain
+        # and `-Zembed-metadata=no` is nightly-only: leaving the default
+        # sends a `-Z` flag to a rustc that exits 1 on it (ENG-12992). The cost
+        # is a fatter rlib on a graph nothing links against twice.
         policy =
           if isCross
-          then cargoUnit.policyPresets.pureBuild
+          then cargoUnit.policyPresets.pureBuild // {compiler.embedMetadata = true;}
           else {
             denyUnusedCrateDependencies = true;
             cargoAudit.enable = true;
@@ -603,6 +635,16 @@
             cargoMachete.enable = false;
             clippy.enable = true;
           };
+      }
+      # The fork default for the native graph (see nativeForkToolchain
+      # above). Conditional so the non-x86_64-linux native graph's args stay
+      # byte-identical to the pre-flip ones; discovery flips with the
+      # toolchain because `-Zdump-test-names` only exists there, mirroring
+      # the ix workspace's lane. This re-keys every native unit once
+      # (toolchainId salts every unit hash).
+      // lib.optionalAttrs (!isCross && nativeForkToolchain != null) {
+        rustToolchain = nativeForkToolchain;
+        testDiscovery = "dump-test-names";
       }
       // lib.optionalAttrs isCross {
         inherit target;

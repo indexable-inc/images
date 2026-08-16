@@ -1,0 +1,797 @@
+// Copyright 2024 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::io::Write as _;
+use std::sync::Arc;
+
+use bstr::BStr;
+use futures::TryStreamExt as _;
+use jj_lib::backend::CommitId;
+use jj_lib::commit::Commit;
+use jj_lib::git;
+use jj_lib::git::GitPushOptions;
+use jj_lib::git::GitRefUpdate;
+use jj_lib::git::GitSubprocessOptions;
+use jj_lib::merge::Diff;
+use jj_lib::object_id::ObjectId as _;
+use jj_lib::repo::Repo as _;
+use jj_lib::revset::RevsetExpression;
+use jj_lib::settings::UserSettings;
+use jj_lib::store::Store;
+use jj_lib::trailer::Trailer;
+use jj_lib::trailer::parse_description_trailers;
+use percent_encoding::NON_ALPHANUMERIC;
+use percent_encoding::utf8_percent_encode;
+
+use crate::cli_util::CommandHelper;
+use crate::cli_util::RevisionArg;
+use crate::cli_util::short_change_hash;
+use crate::command_error::CommandError;
+use crate::command_error::internal_error;
+use crate::command_error::user_error;
+use crate::command_error::user_error_with_message;
+use crate::git_util::GitSubprocessUi;
+use crate::git_util::print_push_stats;
+use crate::ui::Ui;
+
+/// Upload changes to Gerrit for code review, or update existing changes.
+///
+/// Uploading in a set of revisions to Gerrit creates a single "change" for
+/// each revision included in the revset. These changes are then available
+/// for review on your Gerrit instance.
+///
+/// Note: The Gerrit commit Id may not match that of your local commit Id,
+/// since we add a `Change-Id` footer to the commit message if one does not
+/// already exist. This ID is based off the jj Change-Id, but is not the same.
+///
+/// If a change already exists for a given revision (i.e. it contains the
+/// same `Change-Id`), this command will update the contents of the existing
+/// change to match.
+///
+/// Note: this command takes 1-or-more revsets arguments, each of which can
+/// resolve to multiple revisions; so you may post trees or ranges of
+/// commits to Gerrit for review all at once.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct UploadArgs {
+    /// The revset, selecting which revisions are sent in to Gerrit
+    ///
+    /// This can be any arbitrary set of commits. Note that when you push a
+    /// commit at the head of a stack, all ancestors are pushed too. This means
+    /// that `jj gerrit upload -r foo` is equivalent to `jj gerrit upload -r
+    /// 'mutable()::foo`.
+    ///
+    /// If this is not provided, it will check whether @ has a description.
+    /// * If it does, it will upload @
+    /// * Otherwise, it will upload @-
+    #[arg(long = "revision", short, value_name = "REVSETS", alias = "revisions")]
+    revisions: Vec<RevisionArg>,
+
+    /// The location where your changes are intended to land
+    ///
+    /// This should be a branch on the remote. Can be configured with the
+    /// `gerrit.default-remote-branch` repository option.
+    #[arg(long, short = 'b')]
+    remote_branch: Option<String>,
+
+    /// The Gerrit remote to push to
+    ///
+    /// Can be configured with the `gerrit.default-remote` repository option as
+    /// well. This is typically a full SSH URL for your Gerrit instance.
+    #[arg(long)]
+    remote: Option<String>,
+
+    /// Do not actually push the changes to Gerrit
+    #[arg(long, short = 'n')]
+    dry_run: bool,
+
+    // The following flags are options Gerrit supports during upload.
+    // They are documented at
+    // https://gerrit-review.googlesource.com/Documentation/user-upload.html
+    /// Add these emails as a reviewer (can be repeated)
+    #[arg(long)]
+    reviewer: Vec<String>,
+
+    /// CC these emails on the change (can be repeated)
+    #[arg(long)]
+    cc: Vec<String>,
+
+    /// Add the following labels configured by Gerrit (can be repeated)
+    ///
+    /// Gerrit silently ignores labels not present on your gerrit host.
+    /// Defaults to +1 if no value is set.
+    /// Eg. --label=Commit-Queue will set the Commit-Queue label to +1.
+    /// Eg. --label=Commit-Queue+2 will set it to +2.
+    #[arg(long, short)]
+    label: Vec<String>,
+
+    /// Applies a topic to the change
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/intro-user.html#topics.
+    /// Changes can be grouped by topic, and Gerrit can be configured to submit
+    /// all changes in a topic together in a single click.
+    #[arg(long)]
+    topic: Option<String>,
+
+    /// Applies a hashtag to the change (can be repeated)
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/intro-user.html#hashtags.
+    /// Hashtags are freeform strings associated with a change, like on social
+    /// media platforms. Similar to topics, hashtags can be used to group
+    /// related changes together, and to search using the hashtag: operator.
+    /// Unlike topics, a change can have multiple hashtags, and they are only
+    /// used for informational grouping. Changes with the same hashtags are
+    /// not necessarily submitted together.
+    #[arg(long)]
+    hashtag: Vec<String>,
+
+    /// A patch set description for the new patch set
+    #[arg(long, short)]
+    message: Option<String>,
+
+    /// Push the change as a change edit
+    ///
+    /// To push a change edit the underlying change need to already exist on the
+    /// gerrit server. Change edits don't immediately create a new patchset,
+    /// but need to be published from the web UI first. There can only be
+    /// one edit for each change. Pushing a new change edit will replace the
+    /// previous one.
+    #[arg(long)]
+    edit: bool,
+
+    /// Marks the change as WIP (work in progress)
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/intro-user.html#wip.
+    #[arg(long)]
+    wip: bool,
+
+    /// Unmarks the change as WIP (work in progress)
+    #[arg(long)]
+    ready: bool,
+
+    /// Marks the change as private
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/intro-user.html#private-changes.
+    #[arg(long)]
+    private: bool,
+
+    /// Unmarks the change as private
+    #[arg(long)]
+    remove_private: bool,
+
+    /// Publishes any draft comments for the given change
+    #[arg(long)]
+    publish_comments: bool,
+
+    /// Disables publishing of any draft comments for the given change
+    ///
+    /// This is only useful if the user has configured Gerrit to publish
+    /// comments by default.
+    #[arg(long)]
+    no_publish_comments: bool,
+
+    /// Who to email notifications to (defaults to all)
+    #[arg(long, value_enum)]
+    notify: Option<EmailNotification>,
+
+    /// Directly submit the changes, bypassing code review
+    #[arg(long)]
+    submit: bool,
+
+    /// When --submit is provided, skip performing validations
+    #[arg(long)]
+    skip_validation: bool,
+
+    /// Create a new change, even if the change has already been merged
+    #[arg(long)]
+    merged: bool,
+
+    /// Do not modify the attention set upon uploading
+    #[arg(long)]
+    ignore_attention_set: bool,
+
+    /// The deadline after which the push should be aborted
+    #[arg(long)]
+    deadline: Option<String>,
+
+    /// Send the following custom keyed values to Gerrit (can be repeated)
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/user-upload.html#custom_keyed_values
+    #[arg(long)]
+    custom: Vec<String>,
+
+    /// Send a `git push -o` option (can be repeated)
+    #[arg(long, short)]
+    option: Vec<String>,
+
+    /// For debugging Gerrit
+    ///
+    /// See https://gerrit-review.googlesource.com/Documentation/user-upload.html#trace
+    #[arg(long)]
+    trace: Option<String>,
+    // Note: An option "message" exists on Gerrit hosts. It is currently not
+    // implemented because it could be easy to confuse a "-m"/"--message" flag
+    // for a patchset with a message for a commit description.
+    // We can consider adding it later, but that will involve a more comprehensive
+    // discussion about the option name.
+    // See https://gerrit-review.googlesource.com/Documentation/user-upload.html#patch_set_description
+}
+
+/// Which emails receive an email notification about an update to the change.
+#[derive(clap::ValueEnum, Clone, Debug)]
+#[value(rename_all = "kebab_case")]
+pub enum EmailNotification {
+    /// No emails
+    None,
+    /// Only the change owner is notified.
+    Owner,
+    /// Only the change owner and reviewers will be notified.
+    OwnerReviewers,
+    /// All relevant users, including owner, reviewers, cc'd, users that have
+    /// starred the change, and users who have configured a watch on files in
+    /// the change.
+    All,
+}
+
+fn calculate_push_remote(
+    store: &Arc<Store>,
+    settings: &UserSettings,
+    remote: Option<&str>,
+) -> Result<String, CommandError> {
+    let git_repo = git::get_git_repo(store)?; // will fail if not a git repo
+    let remotes = git_repo.remote_names();
+
+    // If --remote was provided, use that
+    if let Some(remote) = remote {
+        if remotes.contains(BStr::new(&remote)) {
+            return Ok(remote.to_string());
+        }
+        return Err(user_error(format!(
+            "The remote '{remote}' (specified via `--remote`) does not exist",
+        )));
+    }
+
+    // If the Gerrit-specific config was set, use that
+    if let Ok(remote) = settings.get_string("gerrit.default-remote") {
+        if remotes.contains(BStr::new(&remote)) {
+            return Ok(remote);
+        }
+        return Err(user_error(format!(
+            "The remote '{remote}' (configured via `gerrit.default-remote`) does not exist",
+        )));
+    }
+
+    // If a general push remote was configured, use that
+    if let Some(remote) = git_repo.remote_default_name(gix::remote::Direction::Push) {
+        return Ok(remote.to_string());
+    }
+
+    // If there is a Git remote called "gerrit", use that
+    if remotes.iter().any(|r| **r == "gerrit") {
+        return Ok("gerrit".to_owned());
+    }
+
+    // Otherwise error out
+    Err(user_error(
+        "No remote specified, and no 'gerrit' remote was found",
+    ))
+}
+
+/// Determine what Gerrit ref and remote to use. The logic is:
+///
+/// 1. If the user specifies `--remote-branch branch`, use that
+/// 2. If the user has 'gerrit.default-remote-branch' configured, use that
+/// 3. Otherwise, bail out
+fn calculate_push_ref(
+    settings: &UserSettings,
+    remote_branch: Option<String>,
+) -> Result<String, CommandError> {
+    // case 1
+    if let Some(remote_branch) = remote_branch {
+        return Ok(remote_branch);
+    }
+
+    // case 2
+    if let Ok(branch) = settings.get_string("gerrit.default-remote-branch") {
+        return Ok(branch);
+    }
+
+    // case 3
+    Err(user_error(
+        "No target branch specified via --remote-branch, and no 'gerrit.default-remote-branch' \
+         was found",
+    ))
+}
+
+fn encode_message(message: &str) -> String {
+    utf8_percent_encode(message, NON_ALPHANUMERIC).to_string()
+}
+
+fn push_options(args: &UploadArgs) -> Result<Vec<String>, CommandError> {
+    for c in &args.custom {
+        if !c.contains(':') {
+            return Err(user_error(format!(
+                "Custom values must be of the form 'key:value'. Got {c}"
+            )));
+        }
+    }
+    if args.wip && args.ready {
+        return Err(user_error("--wip and --ready are mutually exclusive"));
+    }
+    if args.private && args.remove_private {
+        return Err(user_error(
+            "--private and --remove-private are mutually exclusive",
+        ));
+    }
+    if args.publish_comments && args.no_publish_comments {
+        return Err(user_error(
+            "--publish-comments and --no-publish-comments are mutually exclusive",
+        ));
+    }
+    if args.skip_validation && !args.submit {
+        return Err(user_error(
+            "--skip-validation is only supported for --submit",
+        ));
+    }
+
+    // Note: invalid push options will be ignored rather than erroring out, so
+    // we need to be careful when adding new options.
+    Ok([
+        args.notify.clone().map(|arg| {
+            (
+                "notify",
+                match arg {
+                    EmailNotification::None => "NONE",
+                    EmailNotification::All => "ALL",
+                    EmailNotification::Owner => "OWNER",
+                    EmailNotification::OwnerReviewers => "OWNER_REVIEWERS",
+                }
+                .to_string(),
+            )
+        }),
+        args.topic.clone().map(|arg| ("topic", arg)),
+        args.trace.clone().map(|arg| ("trace", arg)),
+        args.deadline.clone().map(|arg| ("deadline", arg)),
+        args.message
+            .as_ref()
+            .map(|arg| ("message", encode_message(arg))),
+    ]
+    .into_iter()
+    // TODO: In a future version, we could consider adding a list of supported
+    // labels to the config, so we can list it for the user.
+    .chain(args.label.iter().map(|arg| Some(("label", arg.clone()))))
+    .chain(
+        args.hashtag
+            .iter()
+            .map(|arg| Some(("hashtag", arg.clone()))),
+    )
+    .chain(
+        args.custom
+            .iter()
+            .map(|arg| Some(("custom-keyed-value", arg.clone()))),
+    )
+    .chain(
+        args.reviewer
+            .iter()
+            .map(|arg| Some(("reviewer", arg.clone()))),
+    )
+    .chain(args.cc.iter().map(|arg| Some(("cc", arg.clone()))))
+    .flatten()
+    .map(|(k, v)| format!("{k}={v}"))
+    .chain(
+        [
+            args.edit.then_some("edit"),
+            args.wip.then_some("wip"),
+            args.ready.then_some("ready"),
+            args.private.then_some("private"),
+            args.remove_private.then_some("remove-private"),
+            args.publish_comments.then_some("publish-comments"),
+            args.no_publish_comments.then_some("no-publish-comments"),
+            args.skip_validation.then_some("skip-validation"),
+            args.ignore_attention_set.then_some("ignore-attention-set"),
+            args.submit.then_some("submit"),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(args.option.iter().map(|s| s.as_str()))
+        .map(str::to_string),
+    )
+    .collect())
+}
+
+pub async fn cmd_gerrit_upload(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &UploadArgs,
+) -> Result<(), CommandError> {
+    // Do this first because the validation is cheap.
+    let push_options = GitPushOptions {
+        remote_push_options: push_options(args)?,
+    };
+
+    let mut workspace_command = command.workspace_helper(ui).await?;
+
+    let revisions: Vec<_> = if args.revisions.is_empty() {
+        match workspace_command
+            .get_wc_commit_id()
+            .map(|id| workspace_command.repo().store().get_commit(id))
+            .transpose()?
+        {
+            None => {
+                return Err(user_error("No revision provided")
+                    .hinted("Explicitly specify a revision to upload with `-r`"));
+            }
+            // This distinguishes between the "squash workflow" and "edit workflow".
+            Some(commit) => {
+                let revisions = if commit.description().is_empty() {
+                    let parents = commit.parent_ids();
+                    if parents.len() != 1 {
+                        return Err(user_error(
+                            "No revision provided, and @ is a merge commit with no description. \
+                             Unable to determine a suitable default commit to upload.",
+                        )
+                        .hinted("Explicitly specify a revision to upload with `-r`"));
+                    }
+                    writeln!(
+                        ui.status(),
+                        "No revision provided and @ has no description. Defaulting to @-"
+                    )?;
+                    parents.to_vec()
+                } else {
+                    writeln!(ui.status(), "No revision provided. Defaulting to @")?;
+                    vec![commit.id().clone()]
+                };
+
+                workspace_command.check_rewritable(&revisions).await?;
+                revisions
+            }
+        }
+    } else {
+        let target_expr = workspace_command
+            .parse_union_revsets(ui, &args.revisions)?
+            .resolve()?;
+        workspace_command
+            .check_rewritable_expr(&target_expr)
+            .await?;
+        target_expr
+            .evaluate(workspace_command.repo().as_ref())?
+            .stream()
+            .try_collect()
+            .await?
+    };
+    if revisions.is_empty() {
+        writeln!(ui.status(), "No revisions to upload.")?;
+        return Ok(());
+    }
+
+    // If you have the changes main -> A -> B, and then run `jj gerrit upload -r B`,
+    // then that uploads both A and B. Thus, we need to ensure that A also
+    // has a Change-ID.
+    // We make an assumption here that all immutable commits already have a
+    // Change-ID.
+    let to_upload: Vec<Commit> = workspace_command
+        .attach_revset_evaluator(
+            workspace_command
+                .env()
+                .immutable_expression()
+                .range(&RevsetExpression::commits(revisions.clone())),
+        )
+        .evaluate_to_commits()?
+        .try_collect()
+        .await?;
+
+    // Note: This transaction is intentionally never finished. This way, the
+    // Change-Id is never part of the commit description in jj.
+    // This avoids scenarios where you have many commits with the same
+    // Change-Id, or a single commit with many Change-Ids after running
+    // jj split / jj squash respectively.
+    // If a user doesn't like this behavior, they can add the following to
+    // their Cargo.toml.
+    // commit_trailers = 'if(!trailers.contains_key("Change-Id"),
+    // format_gerrit_change_id_trailer(self))'
+    let mut tx = workspace_command.start_transaction();
+    let base_repo = tx.base_repo();
+    let store = base_repo.store().clone();
+
+    let old_heads = base_repo
+        .index()
+        .heads(&mut revisions.iter())
+        .map_err(internal_error)?;
+
+    let subprocess_options = GitSubprocessOptions::from_settings(command.settings())?;
+    let remote = calculate_push_remote(&store, command.settings(), args.remote.as_deref())?;
+    let remote_branch = calculate_push_ref(command.settings(), args.remote_branch.clone())?;
+
+    // Immediately error and reject any commits that shouldn't be uploaded.
+    for commit in &to_upload {
+        if commit.is_empty(tx.repo_mut()).await? {
+            return Err(user_error(format!(
+                "Refusing to upload revision {} because it is empty",
+                short_change_hash(commit.change_id())
+            ))
+            .hinted(
+                "Perhaps you squashed then ran upload? Maybe you meant to upload the parent \
+                 commit instead (eg. @-)",
+            ));
+        }
+        if commit.description().is_empty() {
+            return Err(user_error(format!(
+                "Refusing to upload revision {} because it is has no description",
+                short_change_hash(commit.change_id())
+            ))
+            .hinted("Maybe you meant to upload the parent commit instead (eg. @-)"));
+        }
+    }
+
+    let mut old_to_new: HashMap<CommitId, Commit> = HashMap::new();
+    for original_commit in to_upload.into_iter().rev() {
+        let trailers = parse_description_trailers(original_commit.description());
+
+        let change_id_trailers: Vec<&Trailer> = trailers
+            .iter()
+            .filter(|trailer| trailer.key == "Change-Id" || trailer.key == "Link")
+            .collect();
+
+        // There shouldn't be multiple change-ID fields. So just error out if
+        // there is.
+        if change_id_trailers.len() > 1 {
+            return Err(user_error(format!(
+                "Multiple Change-Id footers in revision {}",
+                short_change_hash(original_commit.change_id())
+            )));
+        }
+
+        // The user can choose to explicitly set their own change-ID to
+        // override the default change-ID based on the jj change-ID.
+        let new_description = if let Some(trailer) = change_id_trailers.first() {
+            // Check the change-id format is correct, intentionally leave the
+            // invalid change IDs as-is.
+            if trailer.key == "Change-Id"
+                && (trailer.value.len() != 41 || !trailer.value.starts_with('I'))
+            {
+                writeln!(
+                    ui.warning_default(),
+                    "Invalid Change-Id footer in revision {}",
+                    short_change_hash(original_commit.change_id()),
+                )?;
+            }
+            if trailer.key == "Link"
+                && !matches!(trailer.value.split_once("/id/I"), Some((_url, id)) if id.len() == 40)
+            {
+                writeln!(
+                    ui.warning_default(),
+                    "Invalid Link footer in revision {}",
+                    short_change_hash(original_commit.change_id()),
+                )?;
+            }
+
+            original_commit.description().to_owned()
+        } else {
+            // Gerrit change id is 40 chars, jj change id is 32, so we need padding.
+            // To be consistent with `format_gerrit_change_id_trailer``, we pad with
+            // 6a6a6964 (hex of "jjid").
+            let gerrit_change_id = format!("I{}6a6a6964", original_commit.change_id().hex());
+
+            let change_id_trailer =
+                if let Ok(review_url) = command.settings().get_string("gerrit.review-url") {
+                    format!(
+                        "Link: {}/id/{gerrit_change_id}",
+                        review_url.trim_end_matches('/'),
+                    )
+                } else {
+                    format!("Change-Id: {gerrit_change_id}")
+                };
+
+            format!(
+                "{}{}{}\n",
+                original_commit.description().trim(),
+                if trailers.is_empty() { "\n\n" } else { "\n" },
+                change_id_trailer,
+            )
+        };
+
+        let new_parents = original_commit
+            .parent_ids()
+            .iter()
+            .map(|id| old_to_new.get(id).map_or(id, |p| p.id()).clone())
+            .collect();
+
+        if new_description == original_commit.description()
+            && new_parents == original_commit.parent_ids()
+        {
+            // map the old commit to itself
+            old_to_new.insert(original_commit.id().clone(), original_commit);
+            continue;
+        }
+
+        // rewrite the set of parents to point to the commits that were
+        // previously rewritten in toposort order
+        let new_commit = tx
+            .repo_mut()
+            .rewrite_commit(&original_commit)
+            .set_description(new_description)
+            .set_parents(new_parents)
+            // Set the timestamp back to the timestamp of the original commit.
+            // Otherwise, `jj gerrit upload @ && jj gerrit upload @` will upload
+            // two patchsets with the only difference being the timestamp.
+            .set_committer(original_commit.committer().clone())
+            .set_author(original_commit.author().clone())
+            .write()
+            .await?;
+
+        old_to_new.insert(original_commit.id().clone(), new_commit);
+    }
+
+    let remote_ref = format!("refs/for/{remote_branch}");
+    writeln!(
+        ui.status(),
+        "Found {} heads to push to Gerrit (remote '{}'), target branch '{}'.",
+        old_heads.len(),
+        remote,
+        remote_branch,
+    )?;
+
+    // NOTE (aseipp): because we are pushing everything to the same remote ref,
+    // we have to loop and push each commit one at a time, even though
+    // push_updates in theory supports multiple GitRefUpdates at once, because
+    // we obviously can't push multiple heads to the same ref.
+    for head in &old_heads {
+        if let Some(mut formatter) = ui.status_formatter() {
+            if args.dry_run {
+                write!(formatter, "Dry-run: Would push ")?;
+            } else {
+                write!(formatter, "Pushing ")?;
+            }
+            // We have to write the old commit here, because until we finish
+            // the transaction (which we don't), the new commit is labeled as
+            // "hidden".
+            tx.base_workspace_helper().write_commit_summary(
+                formatter.as_mut(),
+                &store.get_commit_async(head).await.unwrap(),
+            )?;
+            writeln!(formatter)?;
+        }
+
+        if args.dry_run {
+            continue;
+        }
+
+        let new_commit = old_to_new.get(head).unwrap();
+
+        // how do we get better errors from the remote? 'git push' tells us
+        // about rejected refs AND ALSO '(nothing changed)' when there are no
+        // changes to push, but we don't get that here.
+        let push_stats = git::push_updates(
+            tx.repo_mut(),
+            subprocess_options.clone(),
+            remote.as_ref(),
+            &[GitRefUpdate {
+                qualified_name: remote_ref.clone().into(),
+                targets: Diff::new(
+                    None,
+                    Some(gix::ObjectId::from_bytes_or_panic(
+                        new_commit.id().as_bytes(),
+                    )),
+                ),
+            }],
+            &mut GitSubprocessUi::new(ui),
+            &push_options,
+        )
+        // Despite the fact that a manual git push will error out with 'no new
+        // changes' if you're up to date, this git backend appears to silently
+        // succeed - no idea why.
+        // It'd be nice if we could distinguish this. We should ideally succeed,
+        // but give the user a warning.
+        .map_err(|err| match err {
+            git::GitPushError::NoSuchRemote(_)
+            | git::GitPushError::RemoteName(_)
+            | git::GitPushError::UnexpectedBackend(_) => user_error(err),
+            git::GitPushError::Subprocess(_) => {
+                user_error_with_message("Internal git error while pushing to gerrit", err)
+            }
+        })?;
+        print_push_stats(ui, &push_stats)?;
+        if !push_stats.all_ok() {
+            return Err(user_error("Failed to push all changes to gerrit"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gerrit_push_options() {
+        assert_eq!(
+            push_options(&Default::default()).unwrap(),
+            Vec::<String>::new(),
+        );
+
+        assert_eq!(
+            push_options(&UploadArgs {
+                message: Some("Uploaded with jj!".to_string()),
+                notify: Some(EmailNotification::None),
+                topic: Some("my-topic".to_string()),
+                reviewer: vec!["foo@example.com".to_string()],
+                cc: vec!["bar@example.com".to_string(), "baz@example.com".to_string()],
+                edit: true,
+                wip: true,
+                private: true,
+                publish_comments: true,
+                ..Default::default()
+            })
+            .unwrap(),
+            [
+                "notify=NONE",
+                "topic=my-topic",
+                "message=Uploaded%20with%20jj%21",
+                "reviewer=foo@example.com",
+                "cc=bar@example.com",
+                "cc=baz@example.com",
+                "edit",
+                "wip",
+                "private",
+                "publish-comments",
+            ]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            push_options(&UploadArgs {
+                notify: Some(EmailNotification::All),
+                trace: Some("my-trace".to_string()),
+                hashtag: vec!["my-hashtag".to_string(), "my-second-hashtag".to_string()],
+                deadline: Some("yesterday".to_string()),
+                label: vec!["Auto-Submit".to_string(), "Commit-Queue+2".to_string()],
+                custom: vec!["foo:bar".to_string(), "baz:quux".to_string()],
+                ready: true,
+                remove_private: true,
+                no_publish_comments: true,
+                skip_validation: true,
+                ignore_attention_set: true,
+                submit: true,
+                option: vec!["hello".to_string(), "world".to_string()],
+                ..Default::default()
+            })
+            .unwrap(),
+            [
+                "notify=ALL",
+                "trace=my-trace",
+                "deadline=yesterday",
+                "label=Auto-Submit",
+                "label=Commit-Queue+2",
+                "hashtag=my-hashtag",
+                "hashtag=my-second-hashtag",
+                "custom-keyed-value=foo:bar",
+                "custom-keyed-value=baz:quux",
+                "ready",
+                "remove-private",
+                "no-publish-comments",
+                "skip-validation",
+                "ignore-attention-set",
+                "submit",
+                "hello",
+                "world",
+            ]
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+        );
+    }
+}

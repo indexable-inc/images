@@ -53,9 +53,10 @@ defmodule IxMcp.Fleet.Watch do
 
   use GenServer
 
+  alias FleetMesh.ClickHouse
+  alias FleetMesh.Condition
+  alias FleetMesh.Policy
   alias IxMcp.ActionLog
-  alias IxMcp.Fleet.Alerts
-  alias IxMcp.Fleet.ClickHouse
   alias IxMcp.Fleet.Digest
   alias IxMcp.MCP.Notifier
 
@@ -374,8 +375,9 @@ defmodule IxMcp.Fleet.Watch do
   # -- polling -----------------------------------------------------------------
 
   @doc """
-  One poll cycle, with its two collaborators passed in rather than reached for:
-  the ClickHouse read and the ledger that decides newness.
+  One poll cycle, with its two collaborators passed in rather than reached
+  for: the condition catalog (built by the configured `FleetMesh.Policy`,
+  its reads embedded) and the ledger that decides newness.
 
   This is public because it is what the tests drive. The alternative -- reading
   the real fleet from a test -- would make the mute and dedup behaviour
@@ -388,14 +390,17 @@ defmodule IxMcp.Fleet.Watch do
           errors: [String.t()]
         }
   def run_poll(threshold, opts \\ []) do
-    query_fun = Keyword.get(opts, :query_fun, &ClickHouse.query/1)
     log = Keyword.get(opts, :action_log, ActionLog)
     notify = Keyword.get(opts, :notify, &announce/1)
 
     deliverable = Keyword.get(opts, :deliverable, deliverable?())
 
     muted = Enum.map(ActionLog.fleet_mutes(log), & &1.id)
-    outcomes = Alerts.evaluate(muted, query_fun)
+
+    conditions =
+      Keyword.get_lazy(opts, :conditions, fn -> Policy.configured!().conditions() end)
+
+    outcomes = evaluate(conditions, muted)
 
     errors = for {_id, {:error, reason}} <- outcomes, do: reason
 
@@ -473,6 +478,69 @@ defmodule IxMcp.Fleet.Watch do
       suppressed: Enum.count(classified, &match?({:consume, _}, &1)),
       errors: errors
     }
+  end
+
+  @blind_id "observability_blind"
+
+  # The bridge from condition states to the outcome shape the dispose
+  # pipeline speaks. A red condition's detail is its hits (the policy shapes
+  # them); anything else red returns is a policy defect and reads as a failed
+  # read rather than as silence.
+  @spec evaluate([Condition.t()], [String.t()]) ::
+          %{String.t() => {:ok, [map()]} | {:error, String.t()}}
+  defp evaluate(conditions, muted) do
+    reads =
+      conditions
+      |> Enum.reject(&(Atom.to_string(&1.id) in muted))
+      |> Map.new(fn condition ->
+        id = Atom.to_string(condition.id)
+        {id, outcome(id, Condition.evaluate(condition))}
+      end)
+
+    if @blind_id in muted, do: reads, else: Map.put(reads, @blind_id, blindness(reads))
+  end
+
+  defp outcome(_id, {:green, _detail}), do: {:ok, []}
+  defp outcome(_id, {:red, hits}) when is_list(hits), do: {:ok, hits}
+
+  defp outcome(id, {:red, other}),
+    do: {:error, "condition #{id} returned non-list hits: #{inspect(other)}"}
+
+  defp outcome(_id, {:unknown, reason}) when is_binary(reason), do: {:error, reason}
+  defp outcome(_id, {:unknown, reason}), do: {:error, inspect(reason)}
+
+  # One hit naming every condition that could not be read, keyed on the
+  # reason so a persistent outage announces once rather than every poll.
+  # Mechanism, not policy: "the read failed" carries no fleet fact, which is
+  # why this synthesis lives here and not in the private catalog.
+  defp blindness(reads) do
+    case for({id, {:error, reason}} <- reads, do: {id, reason}) do
+      [] ->
+        {:ok, []}
+
+      failures ->
+        reason = failures |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.join("; ")
+        which = failures |> Enum.map(&elem(&1, 0)) |> Enum.sort() |> Enum.join(", ")
+
+        {:ok,
+         [
+           %{
+             predicate: @blind_id,
+             # A warning, not critical: not being able to see the fleet is
+             # serious, but it is usually a laptop off the tailnet rather
+             # than an outage, and shouting critical for that is how the
+             # level gets raised past the things that matter.
+             level: "warning",
+             fingerprint: @blind_id <> ":" <> blind_hash(reason),
+             summary:
+               "cannot read fleet telemetry (#{which}) -- this is NOT a report of a healthy fleet: #{reason}"
+           }
+         ]}
+    end
+  end
+
+  defp blind_hash(text) do
+    :crypto.hash(:sha256, text) |> Base.encode16(case: :lower) |> String.slice(0, 12)
   end
 
   # "I cannot see the fleet" ignores the level floor. It is a `warning` so that

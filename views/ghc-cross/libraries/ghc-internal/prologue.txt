@@ -1,0 +1,2 @@
+This package contains the implementation of GHC's standard libraries and is
+not intended for use by end-users.

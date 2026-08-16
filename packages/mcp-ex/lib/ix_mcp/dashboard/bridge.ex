@@ -31,12 +31,14 @@ defmodule IxMcp.Dashboard.Bridge do
   subscribed session, published to that session and replayed by
   `Notifier.register/1` if it was away.
 
-  The outbox is job-shaped (it is the job ledger's notification table), so a
-  row is written through `ActionLog.finish_job/5` with a synthetic job id:
-  that is the only public way to get a durable, session-scoped row, and
-  `unacked_outbox/1` joins `jobs` to find the session. A notification kind
-  that is not a job is the proper fix and is follow-up work; the wart is one
-  history entry per coalesced edit window per viewer.
+  A row is written through `ActionLog.finish_job/5` with a synthetic job id,
+  so each coalesced edit window still costs one job-history entry per viewer.
+  The outbox itself is no longer job-shaped: it carries a `source` and its own
+  `session_id` (#3934), which is exactly the "notification kind that is not a
+  job" this doc used to ask for. Until the bridge takes its own source these
+  rows stay `source: :jobs` and resolve their session through the join, now a
+  LEFT JOIN in `unacked_outbox/1`; dropping the synthetic jobs row is the
+  remaining follow-up and it takes the history wart with it.
   """
 
   use GenServer

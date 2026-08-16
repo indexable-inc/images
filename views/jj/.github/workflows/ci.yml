@@ -1,0 +1,442 @@
+name: ci
+
+on:
+  pull_request:
+  merge_group:
+  # `ix-patched` is the branch every consumer pins, and nothing gated it: with
+  # only pull_request and merge_group, a push to it ran no checks at all. It sat
+  # red on three required checks for an unknown length of time and nobody could
+  # have known, because the failures only surfaced when the first pull request
+  # based on it was opened.
+  push:
+    branches: [ix-patched]
+
+concurrency:
+  # Pull requests and merge-group runs supersede: a newer revision makes the
+  # older one's verdict useless, so those group per pull request or per queue
+  # ref and cancel. Pushes to `ix-patched` are the opposite case, and the
+  # difference is not cosmetic. On 2026-07-31 four consecutive push runs were
+  # canceled by the next push, while three agents landed work on this branch
+  # inside twenty minutes. Every one of those runs still reported around "13
+  # succeeded, 0 failed", because the fast static checks finish in a couple of
+  # minutes and the platform matrix does not: each push looked green while no
+  # tip ever completed a single platform job. The absence of a failure read as
+  # a pass, which is the worst way for a gate to be wrong.
+  #
+  # So a push groups per COMMIT rather than per ref, and never cancels. Every
+  # pushed tip then gets a run that survives the next push and carries its own
+  # completed verdict. indexable-inc/index's `check.yml` does exactly this for
+  # `main`, for the reason stated there: required checks are non-strict, so two
+  # individually-green changes can combine into a red union that no run ever
+  # validated.
+  #
+  # The fallback is load bearing either way. On a push neither
+  # `pull_request.number` nor `merge_group.head_ref` exists, so without it the
+  # group collapses to the bare workflow name for every push at once.
+  group: >-
+    ${{ github.workflow }}-${{
+      github.event.pull_request.number
+      || github.event.merge_group.head_ref
+      || github.sha
+    }}
+  # With per-commit groups, only a re-run of the same commit can share a group
+  # with a live run, and canceling that would discard the very verdict this is
+  # here to keep.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+permissions: {}
+
+jobs:
+  # Linux only, deliberately. This fork builds on our own machines and on
+  # GitHub's Linux runners; it does not rent a macOS or Windows box to compile
+  # on. Upstream's `macos-x86_64`, `macos-aarch64`, `windows-x86_64` and
+  # `windows-aarch64` legs are gone for that reason, not because they were
+  # useless -- see `check-cross` below for what replaces the part of them that
+  # can be replaced, and the note there for the part that cannot.
+  test:
+    strategy:
+      fail-fast: ${{ github.event_name == 'merge_group' }}
+      matrix:
+        build: [linux-x86_64-gnu, linux-aarch64-gnu]
+        include:
+        - build: linux-x86_64-gnu
+          os: ubuntu-24.04
+          cargo_flags: "--all-features"
+          extra_targets: ""
+        - build: linux-aarch64-gnu
+          os: ubuntu-24.04-arm
+          cargo_flags: "--all-features"
+          extra_targets: ""
+    runs-on: ${{ matrix.os }}
+
+    # TODO FIXME (aseipp): keep the timeout limit to ~20 minutes. this is long
+    # enough to give us runway for the future, but also once we hit it, we're at
+    # the "builds are taking too long" stage and we should start looking at ways
+    # to optimize the CI, or the CI is flaking out on some weird spiked machine
+    #
+    # at the same time, this avoids some issues where some flaky, bugged tests
+    # seem to be causing multi-hour runs on Windows (GPG signing issues), which
+    # is a problem we should fix. in the mean time, this will make these flakes
+    # less harmful, as it won't cause builds to spin for multiple hours, requiring
+    # manual cancellation.
+    #
+    # keep a log of updates (along with committed date) below:
+    #
+    # 2025-03-20 (aseipp): peak p99 builds seemed to be long, bump 15m -> 20m
+    # 2025-10-06 (aseipp): x86 macos runners consistently slower, bump 20m -> 25m
+    #
+    # The macOS and Windows legs this bound was mostly sized for are gone in
+    # this fork, so 25m is now generous rather than tight. Left as-is: a
+    # timeout that only fires on a genuinely stuck run is doing its job.
+    #
+    # The "nix flake" jobs below use the same timeout, so update there too if
+    # you update here.
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.89
+        # comma-separated list of extra targets to install
+        targets: ${{ matrix.extra_targets }}
+    - uses: taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd
+      with:
+        tool: nextest
+    - name: Install mold
+      uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444
+      with:
+        make-default: false
+    - name: Build
+      run: >-
+        cargo build
+        --config .cargo/config-ci.toml
+        --workspace
+        --all-targets
+        --verbose
+        ${{ matrix.cargo_flags }}
+    - name: Test
+      run: >-
+        cargo nextest run
+        --config .cargo/config-ci.toml
+        --workspace
+        --all-targets
+        --verbose
+        --profile ci
+        ${{ matrix.cargo_flags }}
+      env:
+        RUST_BACKTRACE: 1
+        CARGO_TERM_COLOR: always
+
+  no-git:
+    name: build (no git)
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+      with:
+        toolchain: 1.89
+    - name: Build
+      run: cargo build -p jj-cli --no-default-features --verbose
+
+  build-nix:
+    name: nix flake
+    strategy:
+      fail-fast: ${{ github.event_name == 'merge_group' }}
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
+      - run: nix flake check -L --show-trace
+
+  check-protos:
+    name: check (protos)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+      - run: sudo apt update && sudo apt-get -y install protobuf-compiler
+      - name: Generate Rust code from .proto files
+        run: cargo run -p gen-protos
+      - name: Check for uncommitted changes
+        run: git diff --exit-code
+
+  check-rustfmt:
+    name: check (rustfmt)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: nightly
+          components: rustfmt
+      - run: cargo +nightly fmt --all -- --check
+
+  check-clippy:
+    name: check (clippy)
+    permissions:
+      checks: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo +stable clippy --all-features --workspace --all-targets -- -D warnings
+
+  # Compile-only cover for the platforms this fork no longer runs a builder for.
+  # It catches `#[cfg(windows)]` and `#[cfg(target_os = ...)]` code going stale,
+  # which is the cheap half of what the deleted legs did. It does not run a
+  # single test, so behavioral differences -- path separators in output, file
+  # locking, symlink handling -- are no longer caught anywhere. That is a real
+  # loss and this job does not paper over it.
+  #
+  # `jj-cli` is excluded because it depends on mimalloc, whose build script
+  # compiles C. Cross-compiling that needs a Windows SDK or an Apple SDK, which
+  # a Linux runner has neither of; verified locally, it fails on a missing
+  # `wchar.h`. Everything else here links nothing and runs no C, so `rustup
+  # target add` is the whole toolchain requirement. `--all-targets` is likewise
+  # omitted: dev-dependencies drag in a C build (`alloca`) and fail the same way.
+  check-cross:
+    name: check (cross-compile, ${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.89
+          targets: ${{ matrix.target }}
+      - name: Check
+        run: >-
+          cargo check
+          --workspace
+          --exclude jj-cli
+          --all-features
+          --verbose
+          --target ${{ matrix.target }}
+
+  check-cargo-deny:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans
+          - licenses
+          - sources
+
+    # Prevent sudden announcement of a new advisory from failing ci:
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+
+    name: check (cargo-deny, ${{ matrix.checks }})
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+      with:
+        command: check ${{ matrix.checks }}
+
+  check-codespell:
+    name: check (codespell)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: 3.11
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          # If you bump the version, also update docs/contributing.md
+          # and all other workflows that install uv
+          version: "0.5.1"
+      - name: Run Codespell
+        run: uv run -- codespell && echo Codespell exited successfully
+
+  check-doctests:
+    name: check (doctests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.89
+      # NOTE: We need to run `cargo test --doc` separately from normal tests:
+      # - `cargo build --all-targets` specifies: "Build all targets"
+      # - `cargo test --all-targets` specifies: "Test all targets (does not include doctests)"
+      - name: Run doctests
+        run: cargo test --workspace --doc
+        env:
+          RUST_BACKTRACE: 1
+      - name: Check `cargo doc` for lint issues
+        env:
+          RUSTDOCFLAGS: "--deny warnings"
+        run: cargo doc --workspace --no-deps
+
+  check-mkdocs:
+    name: check (mkdocs)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: 3.11
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          # If you bump the version, also update docs/contributing.md
+          # and all other workflows that install uv
+          version: "0.5.1"
+      - name: Check that `mkdocs` can build the docs
+        run: uv run -- mkdocs build --strict
+
+  # An optional job to alert us when uv updates break the build
+  check-mkdocs-latest:
+    name: check (latest mkdocs, optional)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      # 'only-managed' means that uv will always download Python, even
+      # if the runner happens to provide a compatible version
+      - name: Check that `mkdocs` can build the docs
+        run: uv run --python-preference=only-managed -- mkdocs build --strict
+
+  check-zizmor:
+    name: check (zizmor)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Run zizmor
+        run: uvx zizmor --format sarif . > results.sarif
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81
+        with:
+          sarif_file: results.sarif
+          category: zizmor
+
+  # Count the (very approximate) number of dependencies in Cargo.lock and bail at a certain limit.
+  check-cargo-lock-bloat:
+    name: check (Cargo.lock dependency count)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check total dependency count in Cargo.lock
+        run: |
+          total_deps=$(./.github/scripts/count-cargo-lock-packages)
+          if [ "$total_deps" -gt "${TOTAL_DEP_LIMIT}" ]; then
+            ./.github/scripts/dragon-bureaucrat \
+              "Cargo.lock has too many dependencies ($total_deps > ${TOTAL_DEP_LIMIT}). The Dragon banishes thee!
+
+                 You can raise the limit in \`.github/workflows/ci.yml\` if necessary, but
+                 consider whether it’s possible to trim things down first."
+          else
+            echo "Counted $total_deps Cargo.lock dependencies." \
+                 "This is within the allowed limit of ${TOTAL_DEP_LIMIT}."
+          fi
+        env:
+          # This limit *can* be raised, we just want to be aware if we exceed it.
+          #
+          # Raised from 550 to 560 for `jj fs mount` (the jj-vfs crate), taking
+          # the lock from 548 to 558. Ten packages: jj-vfs itself, four for the
+          # NFSv3 transport
+          # (nfs3_server, nfs3_types, nfs3_macros, and nfs3_client as a
+          # dev-dependency for the in-process protocol test), and five for the
+          # FUSE transport (fuser, which drags in num_enum, num_enum_derive,
+          # proc-macro-crate and pkg-config).
+          #
+          # Worth knowing which half is expensive: FUSE costs five slots and NFS
+          # costs four, so the budget went slightly more on the transport CI can
+          # test than on the one it cannot. The count spans every platform,
+          # feature and dependency kind, so target-gating and feature-gating do
+          # not reduce it.
+          # Raised from 560 to 564 for deterministic view patch archives. The
+          # zstd encoder adds jobserver, zstd, zstd-safe, and zstd-sys, taking
+          # the lock from 558 to 562 packages. Two slots remain as the warning
+          # margin used by the prior increase.
+          TOTAL_DEP_LIMIT: 564
+
+  # Block the merge if required checks fail, but only in the merge
+  # queue. See also `required-checks-hack.yml`.
+  required-checks:
+    name: required checks (merge queue)
+    if: ${{ always() && github.event_name == 'merge_group' }}
+    needs:
+    - test
+    - no-git
+    - build-nix
+    - check-protos
+    - check-rustfmt
+    - check-clippy
+    - check-cross
+    - check-cargo-deny
+    - check-codespell
+    - check-doctests
+    - check-mkdocs
+    # - check-mkdocs-latest
+    # - check-zizmor
+    - check-cargo-lock-bloat
+    runs-on: ubuntu-latest
+    steps:
+    - name: Block merge if required checks fail
+      if: >-
+        ${{
+          contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled')
+        }}
+      run: exit 1

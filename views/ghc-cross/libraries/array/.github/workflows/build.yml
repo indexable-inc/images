@@ -1,0 +1,25 @@
+name: Building
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ['9.10', '9.8', '9.6', '9.4', '9.2', '9.0', '8.10', '8.8', '8.6', '8.4', '8.2', '8.0']
+        os: ['ubuntu-latest', 'windows-latest']
+
+    name: Build on ${{ matrix.os }} with GHC ${{ matrix.ghc }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+      - run: cabal build

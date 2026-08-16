@@ -20,6 +20,7 @@ ex = ["dep:unibind-backend-ex"]
 jvm = ["dep:unibind-backend-jvm"]
 py = ["dep:unibind-backend-py"]
 ts = ["dep:unibind-backend-ts"]
+wasm = ["dep:unibind-backend-wasm"]
 
 [dependencies]
 proc-macro2.workspace = true
@@ -29,4 +30,5 @@ unibind-backend-ex = { workspace = true, optional = true }
 unibind-backend-jvm = { workspace = true, optional = true }
 unibind-backend-py = { workspace = true, optional = true }
 unibind-backend-ts = { workspace = true, optional = true }
+unibind-backend-wasm = { workspace = true, optional = true }
 unibind-core.workspace = true

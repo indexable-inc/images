@@ -225,9 +225,9 @@ impl Scanner {
             self.config.min_lines,
             self.config.min_nodes,
         )
-            .into_iter()
-            .filter(|node| !pragma_info.is_ignored(&node.byte_range))
-            .collect();
+        .into_iter()
+        .filter(|node| !pragma_info.is_ignored(&node.byte_range))
+        .collect();
 
         Ok(Some(File {
             path: path.to_path_buf(),

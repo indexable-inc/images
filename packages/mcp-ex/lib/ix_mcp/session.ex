@@ -32,7 +32,7 @@ defmodule IxMcp.Session do
   def set_name(name) when is_binary(name) do
     Agent.update(__MODULE__, fn
       %{session_id: nil} = state ->
-        %{state | name: name, session_id: ActionLog.create_session(name)}
+        %{state | name: name, session_id: create_row(name)}
 
       state ->
         :ok = ActionLog.rename_session(state.session_id, name)
@@ -69,8 +69,17 @@ defmodule IxMcp.Session do
   end
 
   defp ensure_session(%{session_id: nil} = state) do
-    %{state | session_id: ActionLog.create_session(state.name)}
+    %{state | session_id: create_row(state.name)}
   end
 
   defp ensure_session(state), do: state
+
+  # The spawn tag rides the environment because the spawner is outside the
+  # BEAM: a wrapper (claude-html) sets IX_MCP_SPAWN_TAG on the `claude` it
+  # launches, the kernel inherits it, and the row it stamps here is how the
+  # wrapper finds this session among every other one sharing the database
+  # (ENG-12004).
+  defp create_row(name) do
+    ActionLog.create_session(name, ActionLog, spawn_tag: System.get_env("IX_MCP_SPAWN_TAG"))
+  end
 end

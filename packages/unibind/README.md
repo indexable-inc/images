@@ -76,6 +76,15 @@ mod _mylib {
   value: a native class per language, one read-only attribute per field, and
   a positional constructor. Fields are `pub` and owned; the struct derives
   `Clone`.
+- `#[unibind::enumeration]` marks a closed set of unit variants. It crosses as
+  one string per variant, and each language renders its own closed type over
+  those strings: a union of string literals (plus a `z.enum` schema) in
+  TypeScript, an `enum.StrEnum` in Python. The wire spelling is `snake_case`
+  of the Rust variant, or whatever `rename_all = "..."` names -- serde's
+  conventions exactly, so a binding agrees with the JSON the same enum already
+  serializes. Spelled in full because `enum` is a keyword and cannot be an
+  attribute path segment. Variants with fields are refused: a sum type is a
+  different intent and lands separately.
 - `#[unibind::error]` marks an error enum. Each variant becomes an exception
   class under one base class named after the enum; `py(base = "...")` picks
   the built-in the base extends. The enum implements `Display`, and the
@@ -133,8 +142,8 @@ Crates:
 
 - `core`: the IR types (`Interface`, functions, records, enums, errors,
   objects, the boundary `Type`), the syn lowering, and the link-section
-  embed. Phase 2 turned on async, streams, and
-  objects; plain (non-error) enums still wait for their phase.
+  embed. Phase 2 turned on async, streams, and objects; unit enums followed.
+  Enums whose variants carry data still wait for their phase.
 - `gen`: the `unibind-gen` binary. Reads the embedded IR out of a compiled
   artifact and emits the host-language files above (`py`, `ts`, and `ex`
   subcommands); run at build time by `unibind.lib.build`, never at macro

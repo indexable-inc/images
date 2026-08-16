@@ -18,7 +18,7 @@ content-addressed derivation, so a one-file change recompiles one derivation
 and relinks its dependents.
 
 `nix run .#nix-ninja-build-nix` (x86_64-linux) materializes the patched source
-(the identical `ix.patchedSrc` tree `packages/nix` ships, with the fork
+(the identical Nix view `packages/nix` ships, with the fork
 version written into `.version`), configures it with meson inside upstream's
 own dev shell with `$NINJA` pointed at nix-ninja, and builds `src/nix/nix`.
 The result runs and identifies itself as the fork

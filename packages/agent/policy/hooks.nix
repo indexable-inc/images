@@ -13,6 +13,13 @@
   # start and its stdout is injected as session context. The generic seam
   # personal memory/notes wiring hangs off (index#3849).
   extraSessionStart ? [],
+  # Mirrors `policy/permissions.nix`'s gate of the same name: when the consumer
+  # puts the agent in strict kernel-only mode, arm the PreToolUse hook that
+  # makes it exhaustive. The deny list in permissions.nix strips the schemas of
+  # the tools this repo can name; this hook is what covers the ones it cannot,
+  # and the only seam that can hand the agent a message saying where to go
+  # instead. Default false: unarmed, the hook never runs and costs nothing.
+  kernelOnly ? false,
 }: let
   hookRunnerSubcommand = sub: {
     package = hookRunner;
@@ -31,6 +38,7 @@
     destructiveGitGuard = hookRunnerSubcommand "git-guard";
     protectedCheckoutBashGuard = hookRunnerSubcommand "write-guard";
     indexedSearchGuard = hookRunnerSubcommand "search-guard";
+    kernelOnlyGuard = hookRunnerSubcommand "kernel-only-guard";
     promptPriors = hookRunnerSubcommand "prompt-priors";
     subagentCacheLookup = hookRunnerSubcommand "subagent-cache-lookup";
     reviewEditLogger = hookRunnerSubcommand "review-log-edit";
@@ -85,6 +93,17 @@
       extraSessionStart;
 
     PreToolUse = [
+      # Strict mode, first in the list and matcher-less so it sees EVERY tool
+      # call: allowlist the index kernel, deny the rest with an instruction to
+      # use it. Armed for both agents -- the codex fork honors the same house
+      # JSON deny (see claude-hooks/src/guards.rs), which matters more there
+      # than here, since codex's `apply_patch` has no config leaf to disable
+      # and this hook is the only thing that reaches it.
+      {
+        command = hookCommands.kernelOnlyGuard;
+        timeout = 10;
+        enable = kernelOnly;
+      }
       # Claude edit tools carry file paths; Codex edits through apply_patch.
       {
         matcher = "Edit|MultiEdit|Write|NotebookEdit";

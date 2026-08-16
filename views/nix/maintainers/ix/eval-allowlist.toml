@@ -1,0 +1,81 @@
+# Accepted divergences between eval-backend=cpp and eval-backend=rust.
+# Consumed by lang-diff.sh, which parses it with validate-eval-allowlist.py.
+#
+# ## This file can only ever waive tier 2
+#
+# Parity here has two tiers (CLAUDE.md, "Parity bar"). Tier 1 is byte-exact
+# and non-negotiable: `.drv` ATerm bytes, outPaths, drvPaths, anything that
+# feeds a hash. A different outPath is a different store path, so there is no
+# such thing as an accepted tier-1 divergence and **this file has no entry
+# that could express one**. The gates that compare hashes -- drv-parity.sh and
+# nixpkgs-drv-diff.sh -- do not read this file at all, and must not be taught
+# to. (An earlier version of this header claimed nixpkgs-drv-diff.sh consumed
+# it. That was never true, and under the two-tier rule it is the one thing
+# that would break the bar.)
+#
+# Tier 2 is functional equivalence: error wording, printer and render format,
+# warning text, trace shape. Chasing byte parity of presentation is not worth
+# the effort, so lang-diff's error-CLASS comparison is the intended bar for
+# fail-as-fail cases. Everything below is a tier-2 waiver.
+#
+# ## Tiers, and who may approve one
+#
+# The split is about what a divergence costs a user, so the approval bar
+# follows it:
+#
+#   presentation-divergence  the two arms do the same thing and say it
+#                            differently: printer format, warning text.
+#   error-text               same error class, different wording.
+#   trace-format             same failure, different trace shape.
+#
+#     -> All three are tier 2. An agent may approve one, because the judgement
+#        is "did both arms do the same thing", which is checkable. `reason`
+#        has to say what was compared and why the difference does not reach
+#        the user's build.
+#
+#   semantic-divergence      the evaluators disagree about what a program
+#                            MEANS: a different value, or a failure on one
+#                            side only.
+#
+#     -> Not tier 2. Requires a human named in eval-allowlist-approvers.txt,
+#        because deciding the two evaluators may disagree about meaning is a
+#        decision about the language, and nobody but a person may make it.
+#
+# Every field is required: id, tier, reason, approved.
+#
+# [[divergence]]
+# id = "eval-fail-example"
+# tier = "error-text"
+# reason = "rust reports the innermost frame first; class and exit agree"
+# approved = "2026-08-02 andrewgazelka"
+
+[[divergence]]
+id = "eval-fail-eol-2"
+tier = "semantic-divergence"
+reason = "lone-CR line endings: cppnix treats \r as EOL (so the file evals to an undefined variable), rnix does not (whole line stays a comment, parse error at EOF). Real fix is an rnix patch, and since ENG-13119 there is a fork to put it in: indexable-inc/rnix-parser at ix-patched-0.12, pinned by rev from rust/nix-eval-rs/Cargo.toml. Divergence is unreachable from files with LF/CRLF endings."
+approved = "2026-08-05 andrewgazelka (decision relayed via Claude Code session; rnix lexer patch is the real fix, ENG ticket filed)"
+
+[[divergence]]
+id = "eval-fail-string-nul-2"
+tier = "error-text"
+reason = "an indented string containing a NUL: both arms refuse it with the same message, but cppnix quotes the raw literal (indentation intact, because it checks before de-indenting) and the rust arm quotes the de-indented value. Same class, same exit, and no value is produced by either; only the copy of the source shown back to the reader differs. The single-line form, eval-fail-string-nul-1, matches byte for byte."
+approved = "2026-08-03 claude ENG-12068; standing human gate: PR review of this file"
+
+[[divergence]]
+id = "eval-fail-fromTOML-overflow"
+tier = "error-text"
+reason = "a TOML integer past 2^63: both arms refuse it during the parse and produce no value, but the wording is the TOML library's, not ours. cppnix quotes toml11 (\"[error] toml::parse_dec_integer: too large integer: current max digits = 2^63\"), the rust arm quotes toml-rs (\"u64 value was too large\"). Reproducing toml11's prose would mean faking a foreign library's error text; the class, the exit and the absence of a value all agree."
+approved = "2026-08-03 claude ENG-12068; standing human gate: PR review of this file"
+
+[[divergence]]
+id = "eval-fail-fromTOML-underflow"
+tier = "error-text"
+reason = "the same divergence as eval-fail-fromTOML-overflow at the negative end; toml-rs reports it as \"invalid type: integer `-9223372036854775809` as i128\"."
+approved = "2026-08-03 claude ENG-12068; standing human gate: PR review of this file"
+
+[[divergence]]
+id = "eval-fail-addErrorContext-example"
+tier = "trace-format"
+reason = "ten nested builtins.addErrorContext frames around a throw. Both arms fail, produce no value, and end with the same line, `error: kaboom`. They differ in the trace above it: cppnix prints one `… while counting down; n = k` frame per level and then truncates with `(stack trace truncated; use '--show-trace' ...)`, which drops the marker the harness reads the class from, so cpp scores `unknown` and the rust arm scores `throw`. The rust arm builds no trace at all -- this IR carries no source positions (ENG-12137) -- so its output is the throw's own note and the same final line. Trace shape is tier 2 under CLAUDE.md's parity bar; when ENG-12137 lands, this entry should be revisited rather than kept."
+approved = "2026-08-05 claude ENG-12564; standing human gate: PR review of this file"
+

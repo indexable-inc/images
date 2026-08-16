@@ -2,8 +2,7 @@
 
 Fork of [nix-community/tree-sitter-nix] 0.3.0 (the crates-io release), carrying
 one grammar change: underscore digit separators in numeric literals, matching
-the `nix-ix` lexer patch
-(`packages/nix/patches/0014-libexpr-accept-underscore-digit-separators-in-numeri.patch`).
+the [`nix-ix` lexer commit].
 One or more underscores may appear between any two digits of the integer part,
 the fractional part, and the exponent (`1_000`, `1_000_000.000_1`, `2.5e1_0`);
 a leading underscore still starts an identifier, so `_1_000` stays a
@@ -34,3 +33,4 @@ is not regenerated. Drop the generated `src/grammar.json` — only `parser.c`
 and `node-types.json` are consumed here.
 
 [nix-community/tree-sitter-nix]: https://github.com/nix-community/tree-sitter-nix
+[`nix-ix` lexer commit]: https://github.com/indexable-inc/nix/commit/e06644d04fdd250566ca964a29f3cc1ba94d2004

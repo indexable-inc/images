@@ -1,0 +1,192 @@
+// Copyright 2020-2023 The Jujutsu Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use clap_complete::ArgValueCandidates;
+use itertools::Itertools as _;
+use jj_lib::repo::Repo as _;
+use jj_lib::str_util::StringExpression;
+
+use super::resolve_trackable_remote_bookmarks;
+use super::trackable_remote_bookmarks_matching;
+use super::warn_unmatched_local_or_remote_bookmarks;
+use super::warn_unmatched_remotes;
+use crate::cli_util::CommandHelper;
+use crate::cli_util::default_ignored_remote_name;
+use crate::command_error::CommandError;
+use crate::command_error::cli_error;
+use crate::commit_templater::CommitRef;
+use crate::complete;
+use crate::revset_util::parse_name_patterns_or_remote_symbols;
+use crate::revset_util::parse_union_name_patterns;
+use crate::templater::TemplateRenderer;
+use crate::ui::Ui;
+
+/// Start tracking given remote bookmarks
+///
+/// A tracked remote bookmark will be imported as a local bookmark of the same
+/// name. Changes to it will propagate to the existing local bookmark on future
+/// pulls.
+#[derive(clap::Args, Clone, Debug)]
+pub struct BookmarkTrackArgs {
+    /// Bookmark name patterns or remote bookmark symbols to track
+    ///
+    /// `BOOKMARK` matches bookmark names using glob syntax by default. You can
+    /// also use other [string pattern syntax].
+    ///
+    /// `BOOKMARK@REMOTE` resolves to a remote bookmark exactly.
+    ///
+    /// [string pattern syntax]:
+    ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
+    #[arg(required = true, value_name = "BOOKMARK[@REMOTE]")]
+    #[arg(add = ArgValueCandidates::new(complete::untracked_bookmarks))]
+    names: Vec<String>,
+
+    /// Remote names to track
+    ///
+    /// By default, the specified pattern matches remote names with glob syntax.
+    /// You can also use other [string pattern syntax].
+    ///
+    /// If no remote names are given, all remote bookmarks matching the bookmark
+    /// names will be tracked.
+    ///
+    /// [string pattern syntax]:
+    ///     https://docs.jj-vcs.dev/latest/revsets/#string-patterns
+    #[arg(long = "remote", value_name = "REMOTE")]
+    // TODO: Make this skip the remotes already tracked
+    #[arg(add = ArgValueCandidates::new(complete::git_remotes))]
+    remotes: Option<Vec<String>>,
+}
+
+pub async fn cmd_bookmark_track(
+    ui: &mut Ui,
+    command: &CommandHelper,
+    args: &BookmarkTrackArgs,
+) -> Result<(), CommandError> {
+    let mut workspace_command = command.workspace_helper(ui).await?;
+    let repo = workspace_command.repo().clone();
+    let view = repo.view();
+
+    let (bookmark_exprs, remote_symbols) = parse_name_patterns_or_remote_symbols(ui, &args.names)?;
+    // Reject mixed syntax. It is confusing if the default @<remote> or
+    // user-specified --remote flag applies only to <bookmark> patterns.
+    if !bookmark_exprs.is_empty() && !remote_symbols.is_empty() {
+        return Err(cli_error(
+            "Cannot specify both <bookmark> patterns and <bookmark>@<remote> symbols",
+        ));
+    } else if args.remotes.is_some() && !remote_symbols.is_empty() {
+        return Err(cli_error(
+            "--remote cannot be used with <bookmark>@<remote> symbols",
+        ));
+    }
+    let matched_refs = if !remote_symbols.is_empty() {
+        resolve_trackable_remote_bookmarks(ui, view, &remote_symbols)?
+    } else {
+        let ignored_remote = default_ignored_remote_name(repo.store())
+            // suppress unmatched remotes warning for default-ignored remote
+            .filter(|name| view.get_remote_view(name).is_some());
+        let bookmark_expr = StringExpression::union_all(bookmark_exprs);
+        let remote_expr = match (&args.remotes, ignored_remote) {
+            (Some(text), _) => parse_union_name_patterns(ui, text)?,
+            (None, Some(ignored)) => StringExpression::exact(ignored).negated(),
+            (None, None) => StringExpression::all(),
+        };
+        let bookmark_matcher = bookmark_expr.to_matcher();
+        let remote_matcher = remote_expr.to_matcher();
+        let matched_refs =
+            trackable_remote_bookmarks_matching(view, &bookmark_matcher, &remote_matcher).collect();
+        warn_unmatched_local_or_remote_bookmarks(ui, view, &bookmark_expr)?;
+        warn_unmatched_remotes(ui, view, &remote_expr)?;
+        matched_refs
+    };
+
+    let mut symbols = Vec::new();
+    for (symbol, remote_ref) in matched_refs {
+        if remote_ref.is_tracked() {
+            writeln!(
+                ui.warning_default(),
+                "Remote bookmark already tracked: {symbol}"
+            )?;
+        } else {
+            symbols.push(symbol);
+        }
+    }
+    let mut tx = workspace_command.start_transaction();
+    for &symbol in &symbols {
+        tx.repo_mut().track_remote_bookmark(symbol).await?;
+    }
+    if !symbols.is_empty() {
+        writeln!(
+            ui.status(),
+            "Started tracking {} remote bookmarks.",
+            symbols.len()
+        )?;
+    }
+    tx.finish(
+        ui,
+        format!("track remote bookmark {}", symbols.iter().join(", ")),
+    )
+    .await?;
+
+    //show conflicted bookmarks if there are some
+
+    if let Some(mut formatter) = ui.status_formatter() {
+        let template: TemplateRenderer<Rc<CommitRef>> = {
+            let language = workspace_command.commit_template_language();
+            let text = workspace_command
+                .settings()
+                .get::<String>("templates.bookmark_list")?;
+            workspace_command
+                .parse_template(ui, &language, &text)?
+                .labeled(["bookmark_list"])
+        };
+
+        let mut remote_per_bookmark: HashMap<_, Vec<_>> = HashMap::new();
+        for symbol in &symbols {
+            remote_per_bookmark
+                .entry(symbol.name)
+                .or_default()
+                .push(symbol.remote);
+        }
+        let bookmarks_to_list =
+            workspace_command
+                .repo()
+                .view()
+                .bookmarks()
+                .filter(|(name, target)| {
+                    remote_per_bookmark.contains_key(name) && target.local_target.has_conflict()
+                });
+
+        for (name, bookmark_target) in bookmarks_to_list {
+            let local_target = bookmark_target.local_target;
+            let commit_ref = CommitRef::local(
+                name,
+                local_target.clone(),
+                bookmark_target.remote_refs.iter().map(|x| x.1),
+            );
+            template.format(&commit_ref, formatter.as_mut())?;
+
+            for (remote_name, remote_ref) in bookmark_target.remote_refs {
+                if remote_per_bookmark[name].contains(&remote_name) {
+                    let commit_ref =
+                        CommitRef::remote(name, remote_name, remote_ref.clone(), local_target);
+                    template.format(&commit_ref, formatter.as_mut())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}

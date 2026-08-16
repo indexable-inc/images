@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::sync::Arc;
 use tui::TuiManager;
 use uuid::Uuid;
 
@@ -49,7 +50,7 @@ pub struct Defaults {
 }
 
 pub struct App {
-    manager: TuiManager,
+    manager: Arc<TuiManager>,
     sessions: Vec<Session>,
     selected: Option<Uuid>,
     pub input: String,
@@ -62,9 +63,15 @@ pub struct App {
 }
 
 impl App {
+    /// The shared manager, for wiring auxiliary consumers such as the
+    /// dashboard publisher; sessions themselves go through App methods.
+    pub fn manager(&self) -> &Arc<TuiManager> {
+        &self.manager
+    }
+
     pub fn new(defaults: Defaults, rows: u16, cols: u16) -> Self {
         Self {
-            manager: TuiManager::new(),
+            manager: Arc::new(TuiManager::new()),
             sessions: Vec::new(),
             selected: None,
             input: String::new(),

@@ -50,6 +50,18 @@ export function isNamespacePane(p: PaneRecord): boolean {
   return kindOf(p) === 'data' && p.renderer === 'namespace';
 }
 
+// An agent's structured transcript (renderer:'transcript', parent = the agent's
+// terminal pane): a companion the AgentCard renders inline, never its own run.
+export function isTranscriptPane(p: PaneRecord): boolean {
+  return kindOf(p) === 'data' && p.renderer === 'transcript';
+}
+
+// A terminal pane somebody declared to be an agent (phase-4 `agent` label on
+// the wire). These render as an AgentCard instead of a raw terminal.
+export function isAgentTerminal(p: PaneRecord): boolean {
+  return kindOf(p) === 'terminal' && typeof p.agent === 'string' && p.agent !== '';
+}
+
 // A resource is a long-lived interactive surface: a terminal, or an html pane
 // keyed `resource/<id>` (a browser/vm the kernel publishes).
 export function isResource(key: string, p: PaneRecord): boolean {
@@ -62,6 +74,7 @@ export function isResource(key: string, p: PaneRecord): boolean {
 // rich-output attachment.
 export function isRun(key: string, p: PaneRecord): boolean {
   if (isSessionPane(p) || isNamespacePane(p)) return false;
+  if (isTranscriptPane(p)) return false;
   if (isResource(key, p)) return false;
   if (isOutputAttachment(key)) return false;
   return true;

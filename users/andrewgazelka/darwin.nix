@@ -44,11 +44,17 @@ in {
       # Cloudflare WARP: tunnels IPv4+IPv6 to Cloudflare, so an IPv6-only or
       # broken-IPv4 network (e.g. hotel wifi with dead DHCPv4) can still reach
       # IPv4-only hosts like github and Apple's APNs. Needs UDP egress to work.
-      "cloudflare-warp"
+      # Commented out 2026-08-02 at the user's request; re-enable by
+      # uncommenting. Removing the line makes `brew bundle --force-cleanup
+      # --zap` uninstall the app and its two launch daemons
+      # (com.cloudflare.1dot1dot1dot1.macos.warp.daemon, com.cloudflare.warp.updater)
+      # on the next activation.
+      # "cloudflare-warp"
       # Ghostty-based terminal with programmable browser panes (cmux.com);
       # the agent rules open response HTML as a cmux browser split.
       "cmux"
-      "codex-app"
+      # codex-app: removed 2026-08-10, deprecated upstream (discontinued
+      # 2026-07-12); its replacement cask "chatgpt" is already declared above.
       "contexts"
       "cursor"
       "emacs-app"

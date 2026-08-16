@@ -1,0 +1,55 @@
+version: 2
+updates:
+- package-ecosystem: "cargo"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  cooldown:
+    default-days: 7
+  open-pull-requests-limit: 10
+  commit-message:
+    prefix: "cargo:"
+  groups:
+    cargo-dependencies:
+      patterns:
+      - "*"
+- package-ecosystem: "github-actions"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  cooldown:
+    default-days: 7
+  open-pull-requests-limit: 10
+  commit-message:
+    prefix: "github:"
+  groups:
+    github-dependencies:
+      patterns:
+      - "*"
+- package-ecosystem: "nix"
+  directory: "/"
+  schedule:
+    interval: "weekly"
+  cooldown:
+    default-days: 7
+  open-pull-requests-limit: 10
+  commit-message:
+    prefix: "nix:"
+  groups:
+    nix-dependencies:
+      patterns:
+      - "*"
+# Docs website
+- package-ecosystem: "npm"
+  directory: "/web/docs"
+  schedule:
+    interval: "weekly"
+  cooldown:
+    default-days: 7
+  open-pull-requests-limit: 10
+  commit-message:
+    prefix: "npm:"
+  groups:
+    npm-dependencies:
+      patterns:
+      - "*"

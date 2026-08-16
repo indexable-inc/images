@@ -1,0 +1,41 @@
+name: Changelogs
+
+on:
+  push:
+    branches:
+    - master
+    paths:
+    - 'changelog.d/*'
+    - '.github/workflows/changelogs.yml'
+  pull_request:
+    paths:
+    - 'changelog.d/*'
+    - '.github/workflows/changelogs.yml'
+  release:
+    types:
+      - created
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Changelogs
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Install changelog-d
+        run: |
+          curl --create-dirs -o "$HOME/.local/bin/changelog-d" "https://codeberg.org/fgaz/changelog-d/releases/download/v1.0/changelog-d-v1.0-x86_64-linux"
+          chmod +x "$HOME/.local/bin/changelog-d"
+          # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#adding-a-system-path
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Checkout cabal sources
+        uses: actions/checkout@v4
+
+      - name: Run changelog-d
+        run: |
+          changelog-d changelog.d

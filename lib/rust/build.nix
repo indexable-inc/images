@@ -107,7 +107,7 @@
     # nixpkgs's `cargoSetupPostPatchHook` diffs `$cargoDeps/Cargo.lock`
     # against the lockfile in the source tree. The vendor dir only emits the
     # per-crate symlinks, so re-attach the lockfile here.
-    defaultCargoDeps = pkgs.runCommand "cargo-deps" {} ''
+    defaultCargoDeps = pkgs.runCommand "cargo-deps" {__structuredAttrs = true;} ''
       mkdir -p "$out"
       cp -RL ${context.vendorDir}/. "$out/"
       cp ${context.cargoLockPath} "$out/Cargo.lock"

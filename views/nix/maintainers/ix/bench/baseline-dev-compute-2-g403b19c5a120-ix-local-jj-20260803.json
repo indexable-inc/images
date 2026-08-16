@@ -1,0 +1,30 @@
+{
+ "ix_note": "b1-toplevel cppnix arm on dev-compute-2 (32 cores), nix (Nix) 2.34.7+ix.g403b19c5a120.h946b0e76 from /run/current-system, PE_IX = tree-synced working copy of ~/.config/nix/ix on 2026-08-03 (jj repo, no rev; ENG-12153 note: sync required manual restore of index/packages/source/debug), host hil-compute-1, mean 22.119s over 3 runs after 1 warmup.",
+ "results": [
+  {
+   "command": "b1-toplevel/none",
+   "exit_codes": [
+    0,
+    0,
+    0
+   ],
+   "max": 22.1939725068,
+   "mean": 22.119169465133336,
+   "median": 22.1772315548,
+   "memory_usage_byte": [
+    3019419648,
+    3019419648,
+    3019419648
+   ],
+   "min": 21.9863043338,
+   "stddev": 0.11536863616960458,
+   "system": 1.66966324,
+   "times": [
+    21.9863043338,
+    22.1939725068,
+    22.1772315548
+   ],
+   "user": 24.90733921333333
+  }
+ ]
+}

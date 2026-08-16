@@ -254,11 +254,7 @@ async fn run_print_access_token(args: PrintAccessTokenArgs) -> anyhow::Result<()
 
 /// A client over the env credentials and the default token store.
 fn client() -> anyhow::Result<Client> {
-    let auth = Authenticator::new(
-        ClientSecrets::load()?,
-        TokenStore::new()?,
-        &[EVENTS_SCOPE],
-    )?;
+    let auth = Authenticator::new(ClientSecrets::load()?, TokenStore::new()?, &[EVENTS_SCOPE])?;
     Ok(Client::new(auth)?)
 }
 

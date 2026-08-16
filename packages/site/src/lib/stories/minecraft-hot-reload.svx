@@ -1,0 +1,29 @@
+---
+id: minecraft-hot-reload
+title: A Minecraft server, hot-reloaded as an agent writes it
+hook: "The server is a machine like any other: each `ix apply` steps it to the new config in place, world data intact, while the agent keeps developing."
+order: 7
+---
+
+A game server is the worst case for redeploys: players are connected, the
+world is live state on disk, and every restart-from-scratch throws both
+away. So most server code ships slowly, and nobody lets an agent near
+production.
+
+Here the Minecraft server is an ix machine declared like any other. The
+agent edits the server, lands the change, and runs `ix apply`; the machine
+steps to the new configuration in place. The world sits on the machine's
+persistent disk and never moves. The agent keeps developing against the
+running server, and the loop repeats.
+
+<img
+  src="/art/minecraft-hot-reload.webp"
+  alt="A Minecraft world beside the terminal session developing it, mid ix apply"
+  loading="lazy"
+  width="2040"
+  height="1414"
+  style="width: 100%; height: auto; border: 1px solid var(--rule); border-radius: var(--radius);"
+/>
+
+The screenshot is the loop mid-flight: the world on one side, the terminal
+session driving it on the other, an `ix apply` in progress between them.

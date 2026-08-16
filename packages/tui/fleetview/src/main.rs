@@ -93,11 +93,22 @@ fn main() -> Result<()> {
     let (cols, rows) = crossterm::terminal::size().wrap_err("terminal has no size")?;
     let mut app = App::new(defaults, rows, cols);
 
+    // Publish this fleet's PTYs to the dashboard discovery dir: the panes
+    // appear in the web UI, and browser sends reach them through the
+    // publisher's input channel. The socket path is per-process, so
+    // concurrent fleetviews never collide.
+    let publisher = tui::publish::publish_blocking(
+        app.manager(),
+        tui::socket_path(),
+        std::time::Duration::from_millis(500),
+    )?;
+
     let mut terminal = enter().wrap_err("could not take over the terminal")?;
     let outcome = run(&mut terminal, &mut app);
     // Restore the terminal whatever happened, then report: a raw-mode terminal
     // left behind is worse than the error that caused it.
     app.shutdown();
+    drop(publisher);
     leave(&mut terminal)?;
     outcome
 }

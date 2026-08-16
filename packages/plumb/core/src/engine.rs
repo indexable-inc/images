@@ -246,13 +246,9 @@ pub fn run_pipeline(
                 spawned_at: Instant::now(),
                 started_at_ms: crate::report::now_ms(),
             },
-            StageSpec::External(spec) => spawn_external(
-                *spec,
-                stdin_reader,
-                &mut edge_writer,
-                is_last,
-                config,
-            )?,
+            StageSpec::External(spec) => {
+                spawn_external(*spec, stdin_reader, &mut edge_writer, is_last, config)?
+            }
         };
         drop(edge_writer);
         running.push(stage);
@@ -408,9 +404,7 @@ fn spawn_external(
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let mut stderr = Capture::new(config.capture_limit);
-            stderr.write(
-                format!("plumb: command not found: {}\n", spec.argv[0]).as_bytes(),
-            );
+            stderr.write(format!("plumb: command not found: {}\n", spec.argv[0]).as_bytes());
             Ok(Running {
                 argv: spec.argv,
                 builtin: false,

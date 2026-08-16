@@ -185,6 +185,15 @@ pub struct TerminalView {
     /// running, or terminated by a signal).
     #[serde(default)]
     pub exit_code: Option<i32>,
+    /// What the session is doing, inferred by the producer from screen
+    /// activity: `"working"`, `"awaiting_input"`, `"gate"`, or `"completed"`.
+    /// Absent from a producer built before status inference existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The agent kind label (`"claude"`, `"codex"`), absent for a terminal
+    /// nobody declared to be an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// A producer-rendered HTML body.
@@ -283,6 +292,48 @@ fn exec_title(source: &str) -> String {
     }
 }
 
+/// One viewer answer, tagged with the merge semantics it was stored under.
+///
+/// The distinction is the whole point of the type. Putting free text on a map
+/// key would resolve two people typing at once by keeping one sentence and
+/// discarding the other, silently.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "shape", rename_all = "lowercase")]
+pub enum Input {
+    /// A single-answer field (a verdict, an approval) on a map key, so the last
+    /// write wins -- which is what "one answer" means.
+    Choice {
+        /// The answer as written, whatever scalar the viewer sent.
+        value: String,
+    },
+    /// Free text in its own text container, so two viewers' edits both survive.
+    Note {
+        /// The merged text.
+        text: String,
+    },
+}
+
+/// One viewer input routed from the aggregator back to the producer that owns
+/// its scope: the return direction of the producer socket, one NDJSON row per
+/// change (see [`crate::publish`]).
+///
+/// The scope is deliberately absent. An input key's scope *is* the producer
+/// id, so the aggregator routes on it and a producer only ever receives its
+/// own; carrying it would invite producers to check for a mismatch that the
+/// routing makes impossible. Idempotence is the value's own job: a replayed
+/// line carries the same full value again, so a field whose value triggers an
+/// action embeds an id to dedup on (the `send` convention is `{id, text}`
+/// JSON in a [`Input::Choice`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputLine {
+    /// The pane id within the receiving producer, as the producer spelled it.
+    pub pane: String,
+    /// The field name within that pane.
+    pub field: String,
+    /// The field's current merged value.
+    pub value: Input,
+}
+
 /// A structured-data body plus the name of the frontend renderer for it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DataView {
@@ -356,6 +407,8 @@ mod tests {
             cursor_visible: true,
             cursor_shape: "block".to_owned(),
             exit_code: None,
+            status: None,
+            agent: None,
         }
     }
 

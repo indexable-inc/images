@@ -26,19 +26,37 @@ defmodule IxMcp.Checkpoint do
     {:ok, %{}}
   end
 
+  # The default workspace keeps its historical bare keys (:workspace,
+  # :provenance) so a checkpoint written before named workspaces existed
+  # restores unchanged; every other workspace rides {:workspace, name} /
+  # {:provenance, name} rows in the same table.
+  @main "main"
+
   @spec store(Code.binding(), Macro.Env.t()) :: :ok
-  def store(binding, env) do
-    :ets.insert(@table, {:workspace, binding, env})
+  def store(binding, env), do: store(@main, binding, env)
+
+  @spec store(String.t(), Code.binding(), Macro.Env.t()) :: :ok
+  def store(workspace, binding, env) do
+    :ets.insert(@table, {workspace_key(workspace), binding, env})
     :ok
   end
 
   @spec fetch() :: {:ok, Code.binding(), Macro.Env.t()} | :empty
-  def fetch do
-    case :ets.lookup(@table, :workspace) do
-      [{:workspace, binding, env}] -> {:ok, binding, env}
+  def fetch, do: fetch(@main)
+
+  @spec fetch(String.t()) :: {:ok, Code.binding(), Macro.Env.t()} | :empty
+  def fetch(workspace) do
+    case :ets.lookup(@table, workspace_key(workspace)) do
+      [{_key, binding, env}] -> {:ok, binding, env}
       [] -> :empty
     end
   end
+
+  defp workspace_key(@main), do: :workspace
+  defp workspace_key(name), do: {:workspace, name}
+
+  defp provenance_key(@main), do: :provenance
+  defp provenance_key(name), do: {:provenance, name}
 
   @doc """
   Provenance rides its own row (#3967): who bound each variable and each
@@ -47,25 +65,34 @@ defmodule IxMcp.Checkpoint do
   checkpoint reads and writes stays exactly what it always was.
   """
   @spec store_provenance(map()) :: :ok
-  def store_provenance(provenance) do
-    :ets.insert(@table, {:provenance, provenance})
+  def store_provenance(provenance), do: store_provenance(@main, provenance)
+
+  @spec store_provenance(String.t(), map()) :: :ok
+  def store_provenance(workspace, provenance) do
+    :ets.insert(@table, {provenance_key(workspace), provenance})
     :ok
   end
 
   @spec fetch_provenance() :: %{owners: map(), contested: map(), modules: map()}
-  def fetch_provenance do
+  def fetch_provenance, do: fetch_provenance(@main)
+
+  @spec fetch_provenance(String.t()) :: %{owners: map(), contested: map(), modules: map()}
+  def fetch_provenance(workspace) do
     empty = %{owners: %{}, contested: %{}, modules: %{}}
 
-    case :ets.lookup(@table, :provenance) do
-      [{:provenance, provenance}] -> Map.merge(empty, provenance)
+    case :ets.lookup(@table, provenance_key(workspace)) do
+      [{_key, provenance}] -> Map.merge(empty, provenance)
       [] -> empty
     end
   end
 
   @spec clear() :: :ok
-  def clear do
-    :ets.delete(@table, :workspace)
-    :ets.delete(@table, :provenance)
+  def clear, do: clear(@main)
+
+  @spec clear(String.t()) :: :ok
+  def clear(workspace) do
+    :ets.delete(@table, workspace_key(workspace))
+    :ets.delete(@table, provenance_key(workspace))
     :ok
   end
 

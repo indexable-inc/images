@@ -3,22 +3,17 @@
   lib,
   pkgs,
 }: let
-  # The indexable-inc/nix-fast-build jj megamerge (nix-fast-build-src, on the
-  # tag nixpkgs packages): --skip-cached skipping locally-realized outputs,
-  # and the typed per-derivation no-progress deadline. The patch DAG and its
-  # upstream intent are driven by lib/fork-packages.nix; each patch commit's
-  # message carries its full WHY.
+  # The nix-fast-build view carries --skip-cached handling for locally realized
+  # outputs and the typed per-derivation no-progress deadline.
   patchedSrc = ix.nix-fast-buildSrc;
 
   # The nixpkgs recipe expects nix-fast-build's version to match the source
-  # it wraps; a nixpkgs bump with a stale nix-fast-build-src pin would
-  # silently build the old tree under the new label, so fail eval until the
-  # pin is advanced.
+  # it wraps; a nixpkgs bump with a stale view would build the old tree under
+  # the new label, so fail eval until the view advances.
   package = assert lib.assertMsg (pkgs.nix-fast-build.version == "1.6.0") ''
     packages/nix-fast-build: nixpkgs nix-fast-build is
-    ${pkgs.nix-fast-build.version} but nix-fast-build-src pins tag 1.6.0.
-    Repin nix-fast-build-src by jj-rebasing indexable-inc/nix-fast-build
-    onto the matching upstream tag.'';
+    ${pkgs.nix-fast-build.version} but the view is tag 1.6.0.
+    Update the nix-fast-build view to the matching upstream tag.'';
     pkgs.nix-fast-build.overrideAttrs (old: {
       src = patchedSrc;
       doCheck = true;
@@ -39,10 +34,8 @@
       '';
     });
 
-  # The patches only touch Python control flow, so the real risk is that the
-  # surrounding source drifted out from under the series on a base bump --
-  # `checks.<system>.patched-src-nix-fast-build` (and a build of `package`)
-  # already catches that. The smoke test additionally runs the binary so an
+  # The fork commits only touch Python control flow. Building `package` catches
+  # source drift. The smoke test additionally runs the binary so an
   # import-time break surfaces here rather than mid-CI-run; `--help` exits 0
   # without touching a store or daemon (absent in the sandbox).
   smoke =

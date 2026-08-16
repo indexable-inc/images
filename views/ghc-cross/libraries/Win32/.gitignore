@@ -1,0 +1,14 @@
+# Specific generated files
+.cabal-sandbox/
+GNUmakefile
+ghc.mk
+dist/
+dist-newstyle/
+*.hi
+*.o
+*.a
+
+# The Haskell Tool Stack-related
+.stack-work/
+stack.yaml
+stack.yaml.lock

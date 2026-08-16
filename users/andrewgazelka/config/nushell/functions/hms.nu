@@ -8,7 +8,7 @@
 #   hms gc      - Garbage collect old generations
 #   hms diff    - Show pending changes
 
-const FLAKE_DIR = "~/.config/nix"
+const FLAKE_DIR = "/Volumes/Projects/nix"
 
 # Detect current platform
 def get-platform [] {
@@ -47,7 +47,7 @@ def get-hm-config [] {
 
     if ($check.exit_code == 0) {
         let outputs = ($check.stdout | from json)
-        let hm_configs = ($outputs | get -i homeConfigurations | default {} | columns)
+        let hm_configs = ($outputs | get -o homeConfigurations | default {} | columns)
 
         if ($specific in $hm_configs) {
             $specific
@@ -64,6 +64,25 @@ def get-hm-config [] {
     }
 }
 
+# Darwin system switch: build as the user, activate as root — never let root
+# evaluate the flake. Root evaluation of the jj+file flake snapshots the
+# working copy as root, leaving root-owned files under .jj that break the
+# user's own jj (`Cannot access .jj/repo/config-id: Permission denied`,
+# 2026-08-07), and requires jj on root's scrubbed darwin-rebuild PATH besides.
+# `sudo darwin-rebuild switch` is what nix-darwin documents, but it pays both
+# costs; profile-set plus activate is the same two steps `switch` performs
+# after its build. The `dr`/`drs` abbreviations expand to this.
+export def drs [] {
+    let flake = ($FLAKE_DIR | path expand)
+    print $"(ansi cyan)Building darwin system as ($env.USER)...(ansi reset)"
+    let out = (mktemp -d | path join "result")
+    nix build $"($flake)#darwinConfigurations.(get-hostname).system" -o $out
+    let system = ($out | path expand)
+    print $"(ansi cyan)Activating ($system) as root...(ansi reset)"
+    sudo nix-env -p /nix/var/nix/profiles/system --set $system
+    sudo ($system | path join "activate")
+}
+
 # Apply home-manager and system configuration
 export def "hms switch" [] {
     let platform = get-platform
@@ -74,8 +93,7 @@ export def "hms switch" [] {
     # System-level rebuild (darwin/nixos)
     match $platform {
         "darwin" => {
-            print $"(ansi cyan)Running darwin-rebuild switch...(ansi reset)"
-            darwin-rebuild switch --flake $flake
+            drs
         }
         "nixos" => {
             print $"(ansi cyan)Running nixos-rebuild switch...(ansi reset)"
@@ -187,7 +205,9 @@ export def "hms info" [] {
     nix flake show $flake 2>/dev/null | lines | where { $in =~ "(darwin|nixos|home)" }
 }
 
-# Quick alias for switch (most common operation)
-export def hms [] {
+# Quick alias for switch (most common operation). `main` in a module named
+# `hms` is what `use hms.nu *` exposes as the bare `hms` command; nushell
+# rejects an exported command spelled the same as its module.
+export def main [] {
     hms switch
 }

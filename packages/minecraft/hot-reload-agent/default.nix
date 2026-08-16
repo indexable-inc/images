@@ -21,6 +21,10 @@ in
     strictDeps = true;
     nativeBuildInputs = [jdk25];
 
+    # The tree ships no tests for the agent; the jar is plain javac + jar
+    # packaging of a single class.
+    doCheck = false;
+
     buildPhase = ''
       # shell
       runHook preBuild

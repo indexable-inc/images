@@ -32,6 +32,9 @@ in
     src = fetchurl {inherit (pin) url hash;};
     dontUnpack = true;
 
+    # Upstream release binary; nothing to test at build time.
+    doCheck = false;
+
     passthru = lib.optionalAttrs (updateScript != null) {inherit updateScript;};
 
     installPhase = ''

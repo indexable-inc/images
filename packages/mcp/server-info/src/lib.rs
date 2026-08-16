@@ -93,6 +93,12 @@ mod tests {
         // implementations not to adopt it. This asserts we did not, so
         // reintroducing it is a test failure rather than a quiet regression.
         assert!(server.info("1.0.0").capabilities.logging.is_none());
-        assert!(server.live_info("1.0.0", "text").capabilities.logging.is_none());
+        assert!(
+            server
+                .live_info("1.0.0", "text")
+                .capabilities
+                .logging
+                .is_none()
+        );
     }
 }

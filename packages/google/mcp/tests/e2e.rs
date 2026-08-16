@@ -159,8 +159,10 @@ fn an_unconfigured_server_completes_the_handshake_and_says_what_is_missing() {
 #[test]
 fn every_tool_including_google_status_is_listed_while_unconfigured() {
     let home = TempDir::new().expect("temp home");
-    let requests =
-        format!("{HANDSHAKE}{}\n", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#);
+    let requests = format!(
+        "{HANDSHAKE}{}\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#
+    );
 
     let Session { responses, .. } = session(home.path(), &[], &requests);
 
@@ -286,6 +288,12 @@ fn the_smtp_password_never_appears_in_anything_the_server_emits() {
     );
 
     let stdout = serde_json::to_string(&responses).expect("serializes");
-    assert!(!stdout.contains(password), "the credential reached the wire");
-    assert!(!stderr.contains(password), "the credential reached the logs");
+    assert!(
+        !stdout.contains(password),
+        "the credential reached the wire"
+    );
+    assert!(
+        !stderr.contains(password),
+        "the credential reached the logs"
+    );
 }

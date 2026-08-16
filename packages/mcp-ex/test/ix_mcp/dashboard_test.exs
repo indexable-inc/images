@@ -72,6 +72,9 @@ defmodule IxMcp.DashboardTest do
   end
 
   defp dashboard_row?(row, doc) do
-    is_binary(row.job_id) and String.starts_with?(row.job_id, "dashboard-#{doc}-")
+    # The bridge's rows ride the jobs source (synthetic job id), so `ref` is
+    # where the id lives now that the outbox is no longer job-only (#3934).
+    row.source == :jobs and is_binary(row.ref) and
+      String.starts_with?(row.ref, "dashboard-#{doc}-")
   end
 end

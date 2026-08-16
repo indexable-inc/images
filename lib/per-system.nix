@@ -13,6 +13,7 @@
   paths,
   rust-overlay,
   home-manager,
+  disko,
 }: let
   inherit (nixpkgs) lib;
   pkgs = import nixpkgs {
@@ -29,6 +30,43 @@
     root = paths.packagesRoot;
     inherit (ix.lists) findDuplicates;
   };
+
+  # The vendored trees are not ours to style. Each subtree under `views/` is
+  # an imported copy of another project's tree -- `lib/default.nix`'s
+  # `viewSource` hands the directory straight to `builtins.path` as the source
+  # the fork builds from -- so reformatting, renaming or annotating a file
+  # there changes what we build and the copy stops being that project's tree.
+  # House style stops at the repository's own files.
+  #
+  # This is the single place naming what is vendored. Stages that discover
+  # their own files go through `owned-files`, and the four tools that walk the
+  # tree themselves (statix, deadnix, clone, complexity) exclude the same roots
+  # through their own flag.
+  #
+  # `vendor/` was the name until ix#9905 moved the forks under `views/`. The
+  # constant was not renamed with them, so it went on excluding a directory
+  # neither repo has while 4350 upstream `.nix` files, 7378 `.rs` and 588 `.py`
+  # sat inside the gate -- red main, and `lint --fix` one run away from
+  # reformatting all of them (ENG-12609). The throw below is why a name that
+  # protects nothing cannot come back quietly: it fails eval instead.
+  vendoredDirs = let
+    named = ["views"];
+    missing = builtins.filter (dir: !builtins.pathExists (paths.root + "/${dir}")) named;
+  in
+    if missing == []
+    then named
+    else
+      throw ''
+        lint: vendored root(s) named here but absent from ${toString paths.root}: ${lib.concatStringsSep ", " missing}.
+        A name that matches nothing excludes nothing, which is exactly how ix#9905 went unnoticed.
+        Prune the entry or fix the spelling.
+      '';
+
+  # A nushell list literal pairing `flag` with each vendored root, rendered by
+  # `spell`. The flags disagree on syntax, so each gets its own spelling rather
+  # than one string bent to fit all four.
+  nuExcludeFlags = flag: spell:
+    "[" + lib.concatMapStringsSep " " (dir: ''"${flag}" "${spell dir}"'') vendoredDirs + "]";
 
   # Each lint stage is one subcommand on a single binary so the spec keys
   # off `lib.getExe lintStage` without registering four sibling packages.
@@ -49,42 +87,36 @@
     ];
     text = ''
       # nu
-      # The top-level `vendor/` tree is not ours to style. Each subtree under
-      # it is a byte-for-byte copy of another project's, and the derived-view
-      # import filters those paths back out so a copy hashes to upstream's own
-      # commit; reformat, rename or annotate one file there and that identity
-      # is gone, so house style stops at the repository's own files. This is
-      # the single place naming what is vendored: the stages that discover
-      # their own files go through `owned-files`, and the four tools that walk
-      # the tree themselves (statix, deadnix, clone, complexity) exclude the
-      # same directory through their own flag.
-      const vendored_dir = "vendor"
-      # One directory, three spellings, because those flags disagree on syntax.
+      # The vendored roots, one spelling per tool, generated from `vendoredDirs`
+      # above so the set is named once in Nix and never drifts between flags.
+      #
       # `fd` and `statix` take gitignore patterns, where the leading slash
       # anchors the match to the scan root: a bare name matches at any depth and
       # would also drop users/*/config/nushell/vendor/autoload, which is ours
       # and is shell-fenced.
-      const vendored_gitignore = $"/($vendored_dir)"
+      const vendored_fd_flags = ${nuExcludeFlags "--exclude" (dir: "/" + dir)}
+      const vendored_statix_flags = ${nuExcludeFlags "--ignore" (dir: "/" + dir)}
       # `clone` and `complexity` match a `glob::Pattern` against a scan path
       # carrying a `./` prefix, so a bare directory name matches nothing there;
       # `*` crosses separators, so one trailing `*` covers the whole subtree.
-      const vendored_scan_glob = $"./($vendored_dir)/*"
+      const vendored_scan_flags = ${nuExcludeFlags "--ignore" (dir: "./" + dir + "/*")}
       # `deadnix` takes a path prefix instead of a glob, so the bare directory
       # is the exclusion there; a vendored tree nested deeper would need its own
       # entry.
+      const vendored_deadnix_flags = ${nuExcludeFlags "--exclude" (dir: dir)}
       #
       # `fd` restricted to repository-owned files: every file-discovering stage
       # calls this instead of bare `fd`. The arguments are fd's own, passed as a
       # list because a custom nushell command rejects flags its own signature
       # does not declare.
-      def owned-files [fd_args: list<string>] { fd --exclude $vendored_gitignore ...$fd_args }
+      def owned-files [fd_args: list<string>] { fd ...$vendored_fd_flags ...$fd_args }
       def "main alejandra" [] {
         let nix_files = (owned-files [--extension nix] | lines)
         alejandra --check ...$nix_files
       }
       # `--ignore` extends statix.toml's `ignore` rather than replacing it, so
       # the two module roots listed there stay excluded.
-      def "main statix" [] { statix check . --ignore $vendored_gitignore }
+      def "main statix" [] { statix check . ...$vendored_statix_flags }
       # Strict: no `-L`/`--no-lambda-pattern-names`. That flag exists because
       # dropping a pattern name is unsafe without `...` in the pattern (it
       # narrows the callable signature); an unused name here must be deleted
@@ -94,7 +126,7 @@
       # `deadnix --fail --exclude vendor .` the `.` is read as a second exclude,
       # the default scan path then has everything excluded, and the stage passes
       # having checked nothing.
-      def "main deadnix" [] { deadnix --fail --exclude $vendored_dir -- . }
+      def "main deadnix" [] { deadnix --fail ...$vendored_deadnix_flags -- . }
       # The Nix style rules as astlog lint declarations
       # (astlog-rules/nix.astlog, #1060/#1062). `astlog scan` emits one
       # finding per lint-declared relation row and exits nonzero on any
@@ -242,6 +274,9 @@
           '^packages/minecraft/minestom/gradle/libs\.versions\.toml$'
           '^packages/minecraft/minestom/gradle/verification-metadata\.xml$'
           '^packages/minecraft/minestom/gradle/snapshot-metadata\.xml$'
+          # Zellij owns this external layout syntax; Loom passes the immutable
+          # file straight to Zellij rather than interpreting it as ix config.
+          '^packages/loom/layout\.kdl$'
 
           # Generated manifests, locks, editor settings, and typed data.
           '(^|/)(package|tsconfig)\.json$'
@@ -265,12 +300,6 @@
           # Generated by `tree-sitter generate` and embedded by the grammar
           # crate's lib.rs (see packages/tree-sitter-nix/README.md).
           '^packages/tree-sitter-nix/src/node-types\.json$'
-          # Live upstreaming state written by upstream-sync (PR urls, states,
-          # retirement); generated, never hand-written. See that package.
-          '^packages/upstream-sync/status/.*\.json$'
-          # Generated GitHub-org roster read by `upstream-sync members`;
-          # live membership cannot be evaluated, so it is committed.
-          '^packages/upstream-sync/org-members\.json$'
           '^tests/.*\.json$'
         ]
         let candidates = (
@@ -326,7 +355,7 @@
       # self-adapting SVG embedded bare renders its light palette for Safari
       # readers on GitHub's dark theme. Any markdown embed of such an SVG must
       # go through a `<picture>` whose dark source points at a committed
-      # `-dark.svg` twin (the creating-a-readme skill documents the pattern).
+      # `-dark.svg` twin. The gate below enforces that pair.
       def "main svg-dark" [] {
         let offenders = (
           owned-files [--hidden --extension md --exclude .git --exclude .claude]
@@ -761,7 +790,7 @@
       # DetectionResult JSON to stdout; redirect it to null so a failing stage's
       # log shows the tracing gate summary (stderr), not the full JSON blob.
       def "main clone" [] {
-        clone . --ignore $vendored_scan_glob out> /dev/null
+        clone . ...$vendored_scan_flags out> /dev/null
       }
       # Per-unit complexity over the whole tree (packages/complexity).
       # `complexity .` walks up for the repo `complexity.toml`, whose
@@ -772,7 +801,7 @@
       # the JSON goes to null so a failing stage's log shows the tracing
       # summary naming the worst units, not the whole report.
       def "main complexity" [] {
-        complexity . --ignore $vendored_scan_glob out> /dev/null
+        complexity . ...$vendored_scan_flags out> /dev/null
       }
       def main [] {
         error make { msg: "specify a stage: alejandra | statix | deadnix | astlog | astlog-rust | astlog-elixir | shell-fence | filenames | dirnames | svg-dark | site-ids | site-frontmatter | ruff | clone | complexity" }
@@ -1002,10 +1031,18 @@
     # superset, since hidden-and-tracked is still shipped code.
     sources = let
       tracked = fs.gitTracked paths.root;
+      # The vendored roots come out of every lane, for a sharper reason than
+      # they come out of the check stages: a lane REWRITES the tree it is
+      # given. `lint --fix` running alejandra over an imported upstream copy is
+      # the same violation the check stage reports, one commit further along
+      # and already written to disk. `deadnix --edit` is worse than cosmetic
+      # there -- views/nix/tests/functional/lang holds fixtures that exist to
+      # fail parsing, and editing one destroys the case it asserts.
+      vendored = fs.unions (map (dir: paths.root + "/${dir}") vendoredDirs);
       laneSource = fileset:
         fs.toSource {
           inherit (paths) root;
-          fileset = fs.intersection tracked fileset;
+          fileset = fs.difference (fs.intersection tracked fileset) vendored;
         };
     in {
       nix = laneSource (
@@ -1488,31 +1525,6 @@
   repoPackages = ix.packageSetFor pkgs;
   inherit (repoPackages) site;
 
-  # Since the jj megamerge migration the fork inputs already ARE the patched
-  # trees, so the old `patched-src-<name>` / `patch-dag-<name>` check family
-  # is gone (ix still builds it for its own patch-dir forks via
-  # `ix.mkForkChecks`). The one survivor is clippy: its `derivedPatches`
-  # generators still run at build time, so this check proves they apply to
-  # the fetched megamerge tree without building all of llm-clippy.
-  forkChecks = {
-    patched-src-clippy = (ix.patchedSrcFor pkgs) {
-      name = "clippy";
-      src = ix.clippySrc;
-    };
-
-    # The registry's upstreaming intent is prose in nix, and nothing else in
-    # the build would notice it going wrong. Every gate in upstream-sync asks
-    # `== "attempt"`, so a stance typed `atempt` reads as "do not send" and
-    # silently retires a patch from contribution while its entry still says
-    # otherwise; an `autoContribute` with no reason leaves a gate nobody can
-    # tell from a fossil. `upstream-sync validate` owns both rules, and this
-    # check is only the CI seam that runs it, so there is one implementation
-    # rather than a nix copy that drifts from the tool's.
-    upstream-intent = pkgs.runCommand "upstream-intent" {} ''
-      ${lib.getExe repoPackages.upstream-sync} validate > $out
-    '';
-  };
-
   # One general updater for every content source in the repo, run in parallel
   # via dag-runner (the same engine `lint` uses). The Minecraft catalog and
   # sound updaters are fixed apps; the pinned prebuilt-binary updaters
@@ -1869,6 +1881,7 @@
       ix
       paths
       home-manager
+      disko
       ;
   });
 
@@ -1971,6 +1984,15 @@
             # Links a dylib crate and runs it across a `dlopen` boundary
             # (ENG-12078); see tests/cargo-unit-dylib.nix.
             inherit (tests) cargo-unit-dylib;
+            # `-Zdump-test-names` discovery parity on the fork toolchain
+            # (tests/default.nix `cargoUnitForkDiscoveryTest`). First cold run
+            # builds packages/rustc-ix once; every later run substitutes it.
+            cargo-unit-fork-discovery = tests.cargoUnitForkDiscovery;
+            # End-to-end rmeta byte-stability cutoff on the fork toolchain:
+            # a comment edit in a leaf crate converges every store path in a
+            # 4-crate chain; a signature edit still cascades
+            # (tests/default.nix cargoUnitRmetaCutoffTest).
+            cargo-unit-rmeta-cutoff = tests.cargoUnitRmetaCutoff;
             sdk-rust-prebuilt = tests.sdkRustPrebuilt;
           }
           // rustPackageSet;
@@ -1998,6 +2020,35 @@
             # it -- the gap ENG-11080 went through. See
             # tests/switch-stops-a-mount-vm.nix.
             switch-stops-a-mount-vm = tests.switchStopsAMountVm;
+            # Boots a NixOS VM and stats the `StateDirectory=` of five
+            # hardened units -- static `User=` and `DynamicUser=`, flat and
+            # nested, plus a state tree pre-owned by a stale uid -- and
+            # asserts every one is writable by its own service. Pins the
+            # measurement that refuted ENG-12400's premise: under
+            # `PrivateUsers=true` a static user owns its StateDirectory leaf
+            # exactly as a dynamic one does, and only the intermediate parent
+            # of a nested path is root-owned, identically in both. See
+            # tests/hardened-state-directory-vm.nix.
+            hardened-state-directory-vm = tests.hardenedStateDirectoryVm;
+            # Boots a NixOS VM whose root is wiped on every boot, reboots it,
+            # and asserts the machine came back as itself while unwhitelisted
+            # state did not. Every other check on `modules/system/ephemeral-root`
+            # is eval-time, and eval-time cannot tell a correct-looking
+            # `fileSystems` set from one that boots to an emergency shell or
+            # quietly keeps nothing. Its own check because it reboots. See
+            # tests/ephemeral-root-vm.nix.
+            ephemeral-root-vm = tests.ephemeralRootVm;
+            # The same module's other wipe mechanism, `rollback.method =
+            # "lvmthin"`, which the check above cannot cover: its root has to
+            # be a thin LV that already exists when the initrd starts, and
+            # `qemu-vm.nix` replaces `fileSystems` wholesale rather than
+            # merging into it, so a runNixOSTest machine cannot boot off a
+            # layout it did not invent. This one installs a real GPT + LVM thin
+            # pool with disko and boots the installed system off it, twice, so
+            # the initrd's `lvrename` + `lvcreate --snapshot` runs against a
+            # device node `sysroot.mount` already holds a `Requires=` on. See
+            # tests/ephemeral-root-lvmthin-vm.nix.
+            ephemeral-root-lvmthin-vm = tests.ephemeralRootLvmThinVm;
             # Builds the base OCI archive and asserts its baked nix store DB
             # registers the pinned nixpkgs source as valid, so a fresh VM's first
             # `nix` command does not re-copy the tree through VCFS (ix
@@ -2029,6 +2080,14 @@
               inherit lib pkgs;
               claudeCode = repoPackages.claude-code;
               hmModule = paths.packagesRoot + "/agent/home-manager/claude-code.nix";
+            };
+            # Two wrappers from one package (the ordinary `claude` plus an
+            # overridden strict `claude-kernel`) must merge into a single user
+            # profile. buildEnv rejects any relative path both provide, so this
+            # is what holds every installed path derived from `binName`.
+            claude-code-profile-coexist = import (paths.packagesRoot + "/claude-code/profile-coexist-check.nix") {
+              inherit pkgs;
+              claudeCode = repoPackages.claude-code;
             };
             run-records-session = repoPackages.run.passthru.tests.recordsSession;
             # hive's quality lane through the same shared ix.buildElixirCheck:
@@ -2197,6 +2256,23 @@
     securityRoots = lib.mapAttrs (_: entry: entry.root) entries;
     securityRootPaths = lib.mapAttrs (_: entry: entry.path) entries;
   };
+
+  # The example fan-out keys need the `.ix` converter, and cargo-unit builds
+  # that converter from this workspace, so merely enumerating those keys plans
+  # every workspace member manifest. The jj-views validate lane checks out a
+  # sparse tree that deliberately leaves index/packages/tree-sitter-nix (and
+  # every view but jj/nix) unhydrated, so the legacyPackages spine -- which
+  # nix-ix's installable resolution probes on every CLI invocation -- died on
+  # the absent manifest and blocked every view PR (runs 31014582142 and
+  # 31015350748; still the head-of-main failure in run 31144625873; surfaced
+  # by #9932's nix-ix advance). Same rationale as the
+  # `builtins ? wasm` guard beside it: a tree whose Cargo workspace is
+  # incomplete could never build the converter those keys require, so hiding
+  # them here loses nothing that tree could evaluate.
+  cargoWorkspaceComplete =
+    builtins.all
+    (member: builtins.pathExists (paths.root + "/${member}/Cargo.toml"))
+    (lib.importTOML (paths.root + "/Cargo.toml")).workspace.members;
 in {
   packages = packageSet;
 
@@ -2284,11 +2360,7 @@ in {
   # Flat keying: one derivation per `checks.<system>.<name>`, as the flake schema
   # and `nix flake check` require. The `.#check` gate and blast-radius consume
   # the sharded `ciChecks` instead, so this output is not what CI enumerates.
-  # `forkChecks` is merged on EVERY system (not just x86_64-linux like the
-  # rest of `catalogFor`): the patched sources are cheap, platform-relevant
-  # derivations, so `nix build .#checks.aarch64-darwin.patched-src-clippy`
-  # validates the series against a local Darwin build right after a flake update.
-  checks = catalogFor rustPackageTestSets.flat // forkChecks;
+  checks = catalogFor rustPackageTestSets.flat;
   # Closure build gates, keyed `<fork>.<patch>` (see the binding above). A
   # non-schema output like `ciChecks`, exposed per system so a darwin host can
   # gate-build natively before an upstream PR.
@@ -2297,9 +2369,8 @@ in {
   # `recurseForDerivations` group, so the evaluator lists cheap per-package names
   # at the root and forces each crate's manifest IFD in its own worker job
   # (ENG-2201). Not a `checks.<system>.<name>` output, because a non-derivation
-  # there fails the flake schema. The patched-src checks are plain derivations,
-  # so they key identically in both views.
-  ciChecks = catalogFor rustPackageTestSets.sharded // forkChecks;
+  # there fails the flake schema.
+  ciChecks = catalogFor rustPackageTestSets.sharded;
 
   # `nix fmt` runs alejandra on the paths it is given. A single `-q`
   # (`--quiet`) drops alejandra's informational chatter -- the
@@ -2365,7 +2436,7 @@ in {
     # flake (regression from 9228563b, which turned the fan-out keys
     # wasm-derived). A stock evaluator only loses attrs whose values it
     # could never evaluate anyway; nix-ix sees the full set.
-    lib.optionalAttrs (builtins ? wasm) (
+    lib.optionalAttrs (builtins ? wasm && cargoWorkspaceComplete) (
       examplePackages
       // healthChecks.lifecyclePackages
     )

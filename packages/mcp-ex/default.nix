@@ -46,6 +46,13 @@
     cp --no-preserve=mode -R ${repoPackages.agent-harness-ex.src} "$NIX_BUILD_TOP/agent-harness-ex"
   '';
 
+  # Same contract for the :fleet_mesh path dependency (../fleet-mesh): the
+  # mesh client and warning engine extracted from this package. Same
+  # tripwire: a hex dep added there changes the FOD content, not the pin.
+  stageFleetMesh = ''
+    cp --no-preserve=mode -R ${repoPackages.fleet-mesh.src} "$NIX_BUILD_TOP/fleet-mesh"
+  '';
+
   # Mix deps (exqlite + its build deps, plus test-only credo) as a
   # fixed-output derivation so the sandboxed builds run offline; mixEnv=test
   # is a superset of prod, so the release build stages the same FOD. The SRI
@@ -58,7 +65,7 @@
     inherit version src elixir;
     mixEnv = "test";
     # deps.get loads mix.exs of every dep, path deps included.
-    postUnpack = stageAgentHarness;
+    postUnpack = stageAgentHarness + stageFleetMesh;
     inherit ((ix.pins.loadPins ./pins.json).mix-deps) hash;
   };
 
@@ -84,7 +91,7 @@
     pname = "ix-mcp-ex-check";
     inherit version src elixir erlang;
     mixDeps = mixFodDeps;
-    setupHook = stageAgentHarness;
+    setupHook = stageAgentHarness + stageFleetMesh;
     # IX_MCP_TUI_EX / IX_MCP_GMAIL_EX / IX_MCP_DASHBOARD_EX make the suite's
     # NIF-binding tests run in the sandbox (test_helper.exs skips them when
     # unset).
@@ -107,6 +114,9 @@
     pname = "ix-mcp-ex";
     inherit version src meta;
     strictDeps = true;
+    # MIX_ENV=prod compile; the ExUnit suite needs the test-env deps this
+    # offline build deliberately omits.
+    doCheck = false;
     # Mix >= 1.18 starts Mix.PubSub, which opens a loopback TCP socket at
     # compile time; the darwin sandbox denies plain sockets without this.
     __darwinAllowLocalNetworking = true;
@@ -138,6 +148,7 @@
       export MIX_DEPS_PATH="$TEMPDIR/deps"
       cp --no-preserve=mode -R "${mixFodDeps}" "$MIX_DEPS_PATH"
       ${stageAgentHarness}
+      ${stageFleetMesh}
     '';
 
     buildPhase = ''
@@ -191,7 +202,7 @@
     }
     ''
       set +e
-      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+      printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
         '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"utf8 wire roundtrip","budget":60,"code":"\"snow ☃\""}}}' \
@@ -202,6 +213,8 @@
         '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"otp batteries present","budget":60,"code":"{:ok, _} = Application.ensure_all_started([:inets, :ssl, :xmerl, :runtime_tools, :tools]); \"otp-batteries-ok\""}}}' \
         '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"gmail nif runtime load probe","budget":60,"code":"false = Gmail.status().signed_in; \"gmail-nif-ok\""}}}' \
         '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"jason agent-compat probe","budget":60,"code":"%{\"k\" => 1} = Jason.decode!(~s({\"k\":1})); \"jason-compat-ok\""}}}' \
+        '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"named workspace probe","budget":60,"workspace":"smoke-iso","code":"iso_marker = :iso_bound"}}}' \
+        '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"exec","arguments":{"intent":"image content probe","budget":60,"code":"File.write!(\"smoke.png\", <<137, 80, 78, 71, 13, 10, 26, 10, 73>>); Image.read(\"smoke.png\")"}}}' \
         | IX_MCP_ACTIONS_DB="$PWD/actions.db" ix-mcp-ex > response.jsonl 2> server-stderr.log
       rc=$?
       set -e
@@ -309,6 +322,29 @@
         *'jason-compat-ok'*) ;;
         *)
           echo "exec could not call Jason.decode! in the release" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+
+      # Named workspaces: the reply header names the isolated REPL the cell
+      # ran in, proving the workspace parameter reaches the job layer in the
+      # shipped release. The header lives inside the reply's text block, so
+      # its quotes arrive JSON-escaped on the wire.
+      case "$out_lines" in
+        *'\"workspace\":\"smoke-iso\"'*) ;;
+        *)
+          echo "exec did not run in the named workspace" >&2
+          printf '%s\n' "$out_lines" >&2
+          exit 1
+          ;;
+      esac
+      # Mixed MCP content: a cell whose result is an image must answer with
+      # a real image block (base64 + mime type) alongside the text verdict.
+      case "$out_lines" in
+        *'"mimeType":"image/png"'*) ;;
+        *)
+          echo "exec did not return an MCP image content block" >&2
           printf '%s\n' "$out_lines" >&2
           exit 1
           ;;

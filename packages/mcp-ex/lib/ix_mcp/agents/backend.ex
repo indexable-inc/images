@@ -76,12 +76,26 @@ defmodule IxMcp.Agents.Backend do
   end
 
   defp claude(opts, extra_env) do
+    # :stdin (default): the brief rides stdin as a stream-json user line,
+    # which doubles as the mid-run message-injection channel.
+    # :argv: the brief is `-p`'s value - for children launched through
+    # `ix shell`, which does not forward stdin at all (measured live in
+    # the loom template e2e: the child starts, waits for a user message
+    # that can never arrive, and exits 0 with no turn). The prompt sits
+    # directly after `-p`, ahead of every variadic flag, so nothing can
+    # swallow it; stdin closes, and queued lead messages reach the child
+    # only at the next wake via `--resume`, codex-style.
+    {prompt_args, input_args, stdin} =
+      case Keyword.get(opts, :prompt_transport, :stdin) do
+        :stdin -> {[], ["--input-format", "stream-json"], :stream}
+        :argv -> {[Keyword.fetch!(opts, :prompt)], [], :closed}
+      end
+
     args =
       Keyword.get(opts, :launcher_args, []) ++
+        ["-p" | prompt_args] ++
+        input_args ++
         [
-          "-p",
-          "--input-format",
-          "stream-json",
           "--output-format",
           "stream-json",
           "--verbose",
@@ -97,7 +111,7 @@ defmodule IxMcp.Agents.Backend do
         resume_args(Keyword.get(opts, :resume)) ++
         allowed_args(Keyword.get(opts, :allowed_tools))
 
-    %{exe: exe(opts, "claude"), args: args, env: child_env(extra_env), stdin: :stream}
+    %{exe: exe(opts, "claude"), args: args, env: child_env(extra_env), stdin: stdin}
   end
 
   # :default means "the CLI's own configured default model" (codex).

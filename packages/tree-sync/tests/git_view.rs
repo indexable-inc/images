@@ -222,13 +222,13 @@ fn an_unchanged_tree_resends_nothing() {
     let dest = TempDir::new().expect("tempdir");
 
     let listing = tree::list(repo.path()).expect("lists");
-    let first =
-        transfer::push_local(repo.path(), &listing.entries, dest.path(), false, false).expect("copies");
+    let first = transfer::push_local(repo.path(), &listing.entries, dest.path(), false, false)
+        .expect("copies");
     assert_eq!(first.files, listing.entries.len());
     assert_eq!(first.unchanged, 0);
 
-    let second =
-        transfer::push_local(repo.path(), &listing.entries, dest.path(), false, false).expect("copies");
+    let second = transfer::push_local(repo.path(), &listing.entries, dest.path(), false, false)
+        .expect("copies");
     assert_eq!(second.files, 0, "nothing changed, so nothing should move");
     assert_eq!(second.unchanged, listing.entries.len());
 }

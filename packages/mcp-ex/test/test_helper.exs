@@ -17,6 +17,12 @@ exclude =
 exclude =
   if System.get_env("IX_MCP_DASHBOARD_EX"), do: exclude, else: [:dashboard_ex | exclude]
 
+# The rg arm of the broken-instrument suite shells out to ripgrep, which the Nix
+# sandbox does not provide. Tagged rather than compile-time guarded, so an absent
+# rg shows up as one EXCLUDED test instead of silently shrinking the suite.
+exclude =
+  if System.find_executable("rg"), do: exclude, else: [:needs_rg | exclude]
+
 # Shared helpers the suites import; required before ExUnit.start/1 so every
 # test module can `import` them at compile time.
 Code.require_file("support/eventually.exs", __DIR__)

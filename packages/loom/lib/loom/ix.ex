@@ -9,8 +9,15 @@ defmodule Loom.Ix do
   assertable without a VM.
 
   Snapshot ids ride the CLI's scripting contract: a piped
-  `ix snapshot <vm>` blocks until the snapshot is replication-confirmed
-  and prints the bare snapshot id on stdout.
+  `ix snapshot <vm>` prints the bare snapshot id on stdout. It returns as
+  soon as the snapshot is captured, so loom passes `--wait-durable` to
+  block until the replication confirm lands - the very next verb is a
+  restore of that id.
+
+  A recent `ix new` also waits out the confirm on its own, so this is
+  belt and braces: loom runs whatever `ix` is on PATH, which may predate
+  that, and being explicit keeps the wait independent of the CLI's
+  version.
   """
 
   @typedoc "One CLI invocation's failure: non-zero exit or missing binary."
@@ -57,7 +64,7 @@ defmodule Loom.Ix do
   """
   @spec snapshot(String.t()) :: {:ok, String.t()} | {:error, run_error() | :no_snapshot_id}
   def snapshot(vm) do
-    with {:ok, out} <- run(["snapshot", vm]) do
+    with {:ok, out} <- run(["snapshot", vm, "--wait-durable"]) do
       case Regex.scan(@uuid_re, out) do
         [] -> {:error, :no_snapshot_id}
         matches -> {:ok, matches |> List.last() |> hd()}

@@ -31,7 +31,7 @@
     fromJSON packageJson;
 
   bunNodeCompatFor = bun:
-    pkgs.runCommand "${bun.pname or "bun"}-node-compat-${bun.version or "unknown"}" {} ''
+    pkgs.runCommand "${bun.pname or "bun"}-node-compat-${bun.version or "unknown"}" {__structuredAttrs = true;} ''
       mkdir -p "$out/bin"
       ln -s ${lib.getExe bun} "$out/bin/node"
     '';

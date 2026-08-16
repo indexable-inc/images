@@ -1,0 +1,9 @@
+error:
+       … while calling the 'readFileType' builtin
+         at /pwd/lang/eval-fail-readFileType-missing.nix:24:1:
+           23| # string, and the corpus cannot reach either of those.
+           24| builtins.readFileType ./eng13123-no-such-file
+             | ^
+           25|
+
+       error: path '/pwd/lang/eng13123-no-such-file' does not exist

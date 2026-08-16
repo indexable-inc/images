@@ -1,0 +1,430 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  inherit (lib)
+    literalExpression
+    mapAttrsToList
+    mkEnableOption
+    mkIf
+    mkOption
+    optionalString
+    types
+    ;
+
+  cfg = config.programs.yazi;
+  tomlFormat = pkgs.formats.toml { };
+
+  pluginSubmodule = types.submodule {
+    options = {
+      package = mkOption {
+        type =
+          with types;
+          oneOf [
+            path
+            package
+          ];
+        description = ''
+          Package or path for the plugin.
+          Will be linked to
+          {file}`$XDG_CONFIG_HOME/yazi/plugins/<name>.yazi`.
+        '';
+      };
+      setup = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When {var}`true`, generates a
+          {command}`require("{name}"):setup({...})` call in
+          {file}`$XDG_CONFIG_HOME/yazi/init.lua`.
+        '';
+      };
+      settings = mkOption {
+        type = types.attrs;
+        default = { };
+        description = ''
+          Attribute set passed to the plugin's
+          {command}`setup()` as a Lua table (via
+          {command}`lib.generators.toLua`). Values created with
+          {command}`lib.generators.mkLuaInline` are rendered as raw Lua expressions.
+          Only used when {option}`setup` is {var}`true`.
+          When empty, {command}`setup()` is called with no
+          arguments.
+        '';
+      };
+    };
+  };
+in
+{
+  meta.maintainers = with lib.maintainers; [
+    eljamm
+    khaneliman
+    xyenon
+  ];
+
+  options.programs.yazi = {
+    enable = mkEnableOption "yazi";
+
+    package = lib.mkPackageOption pkgs "yazi" { nullable = true; };
+
+    extraPackages = mkOption {
+      type = with types; listOf package;
+      default = [ ];
+      example = literalExpression ''
+        with pkgs; [
+          glow
+          ouch
+        ]
+      '';
+      description = ''
+        Extra packages to make available to yazi.
+
+        These packages will be added to the yazi wrapper's PATH.
+      '';
+    };
+
+    shellWrapperName = lib.mkOption {
+      type = types.str;
+      example = "yy";
+      inherit
+        (lib.hm.deprecations.mkStateVersionOptionDefault {
+          inherit (config.home) stateVersion;
+          since = "26.05";
+          optionPath = [
+            "programs"
+            "yazi"
+            "shellWrapperName"
+          ];
+          legacy.value = "yy";
+          current.value = "y";
+        })
+        default
+        defaultText
+        ;
+      description = ''
+        Name of the shell wrapper to be called.
+      '';
+    };
+
+    enableBashIntegration = lib.hm.shell.mkBashIntegrationOption { inherit config; };
+
+    enableFishIntegration = lib.hm.shell.mkFishIntegrationOption { inherit config; };
+
+    enableNushellIntegration = lib.hm.shell.mkNushellIntegrationOption { inherit config; };
+
+    enableZshIntegration = lib.hm.shell.mkZshIntegrationOption { inherit config; };
+
+    keymap = mkOption {
+      inherit (tomlFormat) type;
+      default = { };
+      example = literalExpression ''
+        {
+          input.prepend_keymap = [
+            { run = "close"; on = [ "<C-q>" ]; }
+            { run = "close --submit"; on = [ "<Enter>" ]; }
+            { run = "escape"; on = [ "<Esc>" ]; }
+            { run = "backspace"; on = [ "<Backspace>" ]; }
+          ];
+          mgr.prepend_keymap = [
+            { run = "escape"; on = [ "<Esc>" ]; }
+            { run = "quit"; on = [ "q" ]; }
+            { run = "close"; on = [ "<C-q>" ]; }
+          ];
+        }
+      '';
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/yazi/keymap.toml`.
+
+        See <https://yazi-rs.github.io/docs/configuration/keymap>
+        for the full list of options.
+      '';
+    };
+
+    settings = mkOption {
+      inherit (tomlFormat) type;
+      default = { };
+      example = {
+        log = {
+          enabled = false;
+        };
+        mgr = {
+          show_hidden = false;
+          sort_by = "mtime";
+          sort_dir_first = true;
+          sort_reverse = true;
+        };
+      };
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/yazi/yazi.toml`.
+
+        See <https://yazi-rs.github.io/docs/configuration/yazi>
+        for the full list of options.
+      '';
+    };
+
+    theme = mkOption {
+      inherit (tomlFormat) type;
+      default = { };
+      example = literalExpression ''
+        {
+          filetype = {
+            rules = [
+              { fg = "#7AD9E5"; mime = "image/*"; }
+              { fg = "#F3D398"; mime = "video/*"; }
+              { fg = "#F3D398"; mime = "audio/*"; }
+              { fg = "#CD9EFC"; mime = "application/bzip"; }
+            ];
+          };
+        }
+      '';
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/yazi/theme.toml`.
+
+        See <https://yazi-rs.github.io/docs/configuration/theme>
+        for the full list of options
+      '';
+    };
+
+    vfs = mkOption {
+      inherit (tomlFormat) type;
+      default = { };
+      example = {
+        services = {
+          my-server = {
+            host = "1.2.3.4";
+            port = 22;
+            type = "sftp";
+            user = "root";
+          };
+        };
+      };
+      description = ''
+        Configuration written to
+        {file}`$XDG_CONFIG_HOME/yazi/vfs.toml`.
+
+        See <https://yazi-rs.github.io/docs/configuration/vfs>
+        for the full list of options
+      '';
+    };
+
+    initLua = mkOption {
+      type = with types; nullOr (either path lines);
+      default = null;
+      description = ''
+        The init.lua for Yazi itself.
+      '';
+      example = literalExpression "./init.lua";
+    };
+
+    plugins = mkOption {
+      type =
+        with types;
+        attrsOf (
+          coercedTo
+            (oneOf [
+              path
+              package
+            ])
+            (pkg: {
+              package = pkg;
+              setup = false;
+              settings = { };
+            })
+            pluginSubmodule
+        );
+      default = { };
+      description = ''
+        Lua plugins.
+        Values can be a package or path (linked as-is), or an attribute set
+        with {option}`package`, {option}`setup`, and {option}`settings`.
+
+        Plugins with {option}`setup` set to {var}`true` generate a
+        {command}`require("{name}"):setup({...})` call in
+        {file}`$XDG_CONFIG_HOME/yazi/init.lua`, written before any
+        {option}`initLua` content.
+
+        See <https://yazi-rs.github.io/docs/plugins/overview>
+        for documentation.
+      '';
+      example = literalExpression ''
+        {
+          # package only, no setup call
+          foo = pkgs.foo;
+
+          # empty setup call: require("bar"):setup()
+          bar = {
+            package = pkgs.bar;
+            setup = true;
+          };
+
+          # setup call with settings
+          baz = {
+            package = pkgs.baz;
+            setup = true;
+            settings = {
+              part_separator = { open = ""; close = ""; };
+              tab_width = 20;
+            };
+          };
+        }
+      '';
+    };
+
+    flavors = mkOption {
+      type =
+        with types;
+        attrsOf (oneOf [
+          path
+          package
+        ]);
+      default = { };
+      description = ''
+        Pre-made themes.
+        Values should be a package or path containing the required files.
+        Will be linked to {file}`$XDG_CONFIG_HOME/yazi/flavors/<name>.yazi`.
+
+        See <https://yazi-rs.github.io/docs/flavors/overview/> for documentation.
+      '';
+      example = literalExpression ''
+        {
+          foo = ./foo;
+          bar = pkgs.bar;
+        }
+      '';
+    };
+
+    finalPackage = mkOption {
+      type = types.package;
+      readOnly = true;
+      visible = false;
+      default =
+        let
+          yaziWithExtraPackages = cfg.package.override (old: {
+            extraPackages = (old.extraPackages or [ ]) ++ cfg.extraPackages;
+          });
+        in
+        if cfg.package ? override && cfg.extraPackages != [ ] then yaziWithExtraPackages else cfg.package;
+      description = ''
+        The yazi package with extraPackages applied.
+      '';
+    };
+  };
+
+  config = mkIf cfg.enable {
+    home.packages = mkIf (cfg.package != null) [ cfg.finalPackage ];
+
+    programs =
+      let
+        bashIntegration = ''
+          function ${cfg.shellWrapperName}() {
+            local tmp="$(mktemp -t "yazi-cwd.XXXXX")"
+            command yazi "$@" --cwd-file="$tmp"
+            if cwd="$(<"$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+              builtin cd -- "$cwd"
+            fi
+            rm -f -- "$tmp"
+          }
+        '';
+
+        fishIntegration = ''
+          set -l tmp (mktemp -t "yazi-cwd.XXXXX")
+          command yazi $argv --cwd-file="$tmp"
+          if read cwd < "$tmp"; and [ -n "$cwd" ]; and [ "$cwd" != "$PWD" ]
+            builtin cd -- "$cwd"
+          end
+          rm -f -- "$tmp"
+        '';
+
+        nushellIntegration = ''
+          def --env ${cfg.shellWrapperName} [...args] {
+            let tmp = (mktemp -t "yazi-cwd.XXXXX")
+            ^yazi ...$args --cwd-file $tmp
+            let cwd = (open $tmp)
+            if $cwd != "" and $cwd != $env.PWD {
+              cd $cwd
+            }
+            rm -fp $tmp
+          }
+        '';
+      in
+      {
+        bash.initExtra = mkIf cfg.enableBashIntegration bashIntegration;
+
+        zsh.initContent = mkIf cfg.enableZshIntegration bashIntegration;
+
+        fish.functions.${cfg.shellWrapperName} = mkIf cfg.enableFishIntegration fishIntegration;
+
+        nushell.extraConfig = mkIf cfg.enableNushellIntegration nushellIntegration;
+      };
+
+    xdg.configFile = {
+      "yazi/keymap.toml" = mkIf (cfg.keymap != { }) {
+        source = tomlFormat.generate "yazi-keymap" cfg.keymap;
+      };
+      "yazi/yazi.toml" = mkIf (cfg.settings != { }) {
+        source = tomlFormat.generate "yazi-settings" cfg.settings;
+      };
+      "yazi/theme.toml" = mkIf (cfg.theme != { }) {
+        source = tomlFormat.generate "yazi-theme" cfg.theme;
+      };
+      "yazi/vfs.toml" = mkIf (cfg.vfs != { }) {
+        source = tomlFormat.generate "yazi-vfs" cfg.vfs;
+      };
+      "yazi/init.lua" =
+        mkIf (lib.any (v: v.setup) (builtins.attrValues cfg.plugins) || cfg.initLua != null)
+          (
+            if lib.any (v: v.setup) (builtins.attrValues cfg.plugins) then
+              {
+                text =
+                  (lib.concatMapStringsSep "\n" (
+                    { name, value }:
+                    if value.settings == { } then
+                      "require(${lib.generators.toLua { } name}):setup()"
+                    else
+                      "require(${lib.generators.toLua { } name}):setup(${lib.generators.toLua { } value.settings})"
+                  ) (lib.attrsToList (lib.filterAttrs (_n: v: v.setup) cfg.plugins)))
+                  + optionalString (cfg.initLua != null) (
+                    "\n" + (if builtins.isPath cfg.initLua then builtins.readFile cfg.initLua else cfg.initLua)
+                  );
+              }
+            else if builtins.isPath cfg.initLua then
+              { source = cfg.initLua; }
+            else
+              { text = cfg.initLua; }
+          );
+    }
+    // (lib.mapAttrs' (
+      name: value: lib.nameValuePair "yazi/flavors/${name}.yazi" { source = value; }
+    ) cfg.flavors)
+    // (lib.mapAttrs' (
+      name: value: lib.nameValuePair "yazi/plugins/${name}.yazi" { source = value.package; }
+    ) cfg.plugins);
+
+    warnings = lib.filter (s: s != "") (
+      lib.concatLists [
+        (mapAttrsToList (
+          name: _value:
+          optionalString (lib.hasSuffix ".yazi" name) ''
+            Flavors like `programs.yazi.flavors."${name}"` should no longer have the suffix ".yazi" in their attribute name.
+            The flavor will be linked to `$XDG_CONFIG_HOME/yazi/flavors/${name}.yazi`.
+            You probably want to rename it to `programs.yazi.flavors."${lib.removeSuffix ".yazi" name}"`.
+          ''
+        ) cfg.flavors)
+        (mapAttrsToList (
+          name: _value:
+          optionalString (lib.hasSuffix ".yazi" name) ''
+            Plugins like `programs.yazi.plugins."${name}"` should no longer have the suffix ".yazi" in their attribute name.
+            The plugin will be linked to `$XDG_CONFIG_HOME/yazi/plugins/${name}.yazi`.
+            You probably want to rename it to `programs.yazi.plugins."${lib.removeSuffix ".yazi" name}"`.
+          ''
+        ) cfg.plugins)
+      ]
+    );
+  };
+}

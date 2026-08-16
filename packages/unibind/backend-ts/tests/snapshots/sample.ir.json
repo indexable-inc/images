@@ -486,6 +486,7 @@
         "ret": null,
         "throws": "SampleError"
       },
+      "associated": [],
       "methods": [
         {
           "name": "value",

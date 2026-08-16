@@ -12,10 +12,15 @@ pub enum MarkerKind {
     Record,
     Error,
     Object,
+    /// `#[unibind::enumeration]`: a closed set of unit variants. Spelled in
+    /// full because `enum` is a Rust keyword and cannot be an attribute path
+    /// segment.
+    Enumeration,
 }
 
-/// A `#[unibind::record]` / `#[unibind::error]` / `#[unibind::object]`
-/// marker found on an item, with its parsed arguments.
+/// A `#[unibind::record]` / `#[unibind::error]` / `#[unibind::object]` /
+/// `#[unibind::enumeration]` marker found on an item, with its parsed
+/// arguments.
 #[derive(Debug)]
 pub struct Marker {
     pub(crate) kind: MarkerKind,
@@ -71,6 +76,7 @@ fn marker_kind(path: &syn::Path) -> Option<MarkerKind> {
         Some(segment) if segment.ident == "record" => Some(MarkerKind::Record),
         Some(segment) if segment.ident == "error" => Some(MarkerKind::Error),
         Some(segment) if segment.ident == "object" => Some(MarkerKind::Object),
+        Some(segment) if segment.ident == "enumeration" => Some(MarkerKind::Enumeration),
         _ => None,
     }
 }

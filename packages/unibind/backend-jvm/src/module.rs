@@ -11,14 +11,17 @@ use crate::{error, function, record};
 ///
 /// # Errors
 ///
-/// Fails for surface the jvm backend does not implement (data enums,
+/// Fails for surface the jvm backend does not implement (enumerations,
 /// objects, async fns, streams), for `jvm(base = ...)` values outside the
 /// supported Java exceptions, and for names Java cannot declare.
 pub fn render(interface: &ir::Interface) -> Result<RenderedInterface, RenderError> {
-    if let Some(data_enum) = interface.enums.first() {
+    if let Some(declared) = interface.enums.first() {
         return Err(RenderError::new(format!(
-            "`{}` is a data enum, which the jvm backend does not render",
-            data_enum.name
+            "`{}` is an enumeration, which the jvm backend does not render \
+             yet; the idiom it owes is a Kotlin `enum class` over the wire \
+             strings, and the C-ABI codec has no case for one. Expose the \
+             value as a String until it lands.",
+            declared.name
         )));
     }
     if let Some(object) = interface.objects.first() {

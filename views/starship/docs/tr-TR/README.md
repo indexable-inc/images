@@ -1,0 +1,193 @@
+---
+layout: home
+hero:
+  image: /logo.svg
+  text:
+  tagline: Sade, hızlı, dilediğiniz gibi özelleştirilebilen ve istenilen shell'de kullanılabilen prompt!
+  actions:
+    - 
+      theme: brand
+      text: Kullanmaya Başlayın →
+      link: ./guide/
+features:
+  - 
+    title: Önce Uyumluluk
+    details: En yaygın işletim sistemlerindeki en yaygın shell'ler üzerinde çalışır. Use it everywhere!
+  - 
+    title: Rust-Powered
+    details: Prompt'u mümkün olduğunca hızlı ve güvenilir hale getirmek için sınıfının en iyisi Rust hızını ve güvenliğini sağlar.
+  - 
+    title: Özelleştirilebilir
+    details: Her küçük ayrıntı beğeninize göre özelleştirilebilir, böylece bu prompt'u istediğiniz kadar minimal veya zengin özelliklere sahip hale getirirsiniz.
+footer: ISC Lisanslı | Telif Hakkı © 2019-günümüz Starship Contributors
+#Used for the description meta tag, for SEO
+metaTitle: "Starship: Cross-Shell Prompt"
+description: Starship, her prompt için minimal, son derece hızlı ve son derece özelleştirilebilir bir shelldir! Şık ve minimal kalırken ihtiyacınız olan bilgileri gösterir. Bash, Fish, ZSH, Ion, Tcsh, Elvish, Nu, Xonsh, Cmd ve PowerShell için hızlı kurulum mevcuttur.
+---
+
+<script setup>
+import { onMounted } from 'vue'
+
+onMounted(() => {
+  const urlParams = new URLSearchParams(window.location.search)
+  if (urlParams.has('uwu') || urlParams.has('kawaii')) {
+    const img = document.querySelector('.VPHero .VPImage.image-src')
+    img.classList.add('uwu')
+    img.src = '/logo-uwu.png'
+    img.alt = 'Kawaii Starship Logo by @sawaratsuki1004'
+  }
+})
+</script>
+
+<video class="demo-video" muted autoplay loop playsinline>
+  <source src="/demo.webm" type="video/webm">
+  <source src="/demo.mp4" type="video/mp4">
+</video>
+
+### Ön koşullar
+
+- Terminalinizde bir [Nerd Font](https://www.nerdfonts.com/) yüklü ve etkin olmalı.
+
+### Hızlı Kurulum
+
+1. Install the **starship** binary:
+
+
+   #### En Son Sürümü Yükle
+
+   Shell ile:
+
+   ```sh
+   curl -sS https://starship.rs/install.sh | sh
+   ```
+
+   Starship'in kendisini güncellemek için yukarıdaki komudu yeniden çalıştırın. Starship'in yapılandırmasına dokunmadan mevcut sürümün yerini alacak.
+
+
+   #### Paket Yöneticisi ile yükleme
+
+   Homebrew [ile](https://brew.sh/):
+
+   ```sh
+   brew install starship
+   ```
+
+   With [Winget](https://github.com/microsoft/winget-cli):
+
+   ```powershell
+   winget install starship
+   ```
+
+1. Add the init script to your shell's config file:
+
+
+   #### Bash
+
+   `~/.bashrc` dosyasının sonuna ekleyin:
+
+   ```sh
+   # ~/.bashrc
+
+   eval "$(starship init bash)"
+   ```
+
+
+   #### Fish
+
+   `~/.config/fish/config.fish` dosyasının sonuna ekleyin:
+
+   ```sh
+   # ~/.config/fish/config.fish
+
+   starship init fish | source
+   ```
+
+
+   #### Zsh
+
+   `~/.zshrc` dosyasının sonuna ekleyin:
+
+   ```sh
+   # ~/.zshrc
+
+   eval "$(starship init zsh)"
+   ```
+
+
+   #### PowerShell
+
+   Add the following to the end of `Microsoft.PowerShell_profile.ps1`. You can check the location of this file by querying the `$PROFILE` variable in PowerShell. Typically the path is `~\Documents\PowerShell\Microsoft.PowerShell_profile.ps1` or `~/.config/powershell/Microsoft.PowerShell_profile.ps1` on -Nix.
+
+   ```sh
+   Invoke-Expression (&starship init powershell)
+   ```
+
+
+   #### Ion
+
+   `~/.config/ion/initrc` dosyasının sonuna ekleyin:
+
+   ```sh
+   # ~/.config/ion/initrc
+
+   eval $(starship init ion)
+   ```
+
+
+   #### Elvish
+
+   > [!WARNING] Only elvish v0.18 or higher is supported.
+
+   Add the following to the end of `~/.config/elvish/rc.elv` (`%AppData%\elvish\rc.elv` on Windows):
+
+   ```sh
+   # ~/.elvish/rc.elv
+
+   eval (starship init elvish)
+   ```
+   For elvish versions prior to v0.21.0 the config file might instead be `~/.elvish/rc.elv`
+
+
+   #### Tcsh
+
+   `~/.tcshrc` dosyasının sonuna ekleyın:
+
+   ```sh
+   # ~/.tcshrc
+
+   eval `starship init tcsh`
+   ```
+
+
+   #### Nushell
+
+   > [!WARNING] This will change in the future. Only Nushell v0.96+ is supported.
+
+   Add the following to the end of your Nushell configuration (find it by running `$nu.config-path` in Nushell):
+
+   ```sh
+   mkdir ($nu.data-dir | path join "vendor/autoload")
+   starship init nu | save -f ($nu.data-dir | path join "vendor/autoload/starship.nu")
+   ```
+
+
+   #### Xonsh
+
+   `~/.xonshrc` dosyasının sonuna ekleyin:
+
+   ```sh
+   # ~/.xonshrc
+
+   execx($(starship init xonsh))
+   ```
+
+
+   #### Cmd
+
+   Cmd ile beraber [Clink](https://chrisant996.github.io/clink/clink.html) (v1.2.30+) kullanmalısınız. Add the following to a file `starship.lua` and place this file in Clink scripts directory:
+
+   ```lua
+   -- starship.lua
+
+   load(io.popen('starship init cmd'):read("*a"))()
+   ```

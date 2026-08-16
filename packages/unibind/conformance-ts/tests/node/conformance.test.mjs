@@ -16,6 +16,7 @@
 
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
@@ -24,6 +25,15 @@ const pkgRoot = process.env.UNIBIND_CONFORMANCE_PKG;
 assert.ok(pkgRoot, "set UNIBIND_CONFORMANCE_PKG to the built package root");
 const require = createRequire(import.meta.url);
 const api = require(path.join(pkgRoot, "index.js"));
+
+// The generated files as text. Doc comments are part of what this package
+// publishes, so how one renders is a conformance case like any other.
+const generated = Object.fromEntries(
+  ["index.d.ts", "index.js", "schemas.ts"].map((name) => [
+    name,
+    fs.readFileSync(path.join(pkgRoot, name), "utf8"),
+  ]),
+);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -39,8 +49,11 @@ async function pollUntil(check, { timeoutMs = 2000, stepMs = 10 } = {}) {
 const occurrence = (symbol, role = "definition") => ({
   symbol,
   path: `src/${symbol}.rs`,
-  start: 1n,
-  end: 4n,
+  // Numbers, not 1n/4n: `start`/`end` are i64, which this binding maps to
+  // JS number by contract (the "a bigint where a number is declared is
+  // refused" test below proves the refusal side of the same contract).
+  start: 1,
+  end: 4,
   occurrenceRole: role,
 });
 
@@ -260,6 +273,48 @@ test("a record field of bytes refuses a plain number array", () => {
   assert.throws(() => api.echoBlobs({ payload: [1, 2, 3], trailer: null }));
 });
 
+test("unit enums cross as plain strings, both ways", () => {
+  // The value is a string, not a wrapper object: `JSON.stringify` round-trips
+  // it and the declared union type is assignable from `JSON.parse` output.
+  const echoed = api.echoSeverity("warning");
+  assert.equal(echoed, "warning");
+  assert.equal(typeof echoed, "string");
+
+  // Rust matched on the variant rather than passing the string through.
+  assert.equal(api.escalate("info"), "warning");
+  assert.equal(api.escalate("warning"), "hard_failure");
+
+  // `rename_all` decides the literal; this enum is PascalCase on the wire.
+  assert.equal(api.echoOptionalKind("Finished"), "Finished");
+  assert.equal(api.echoOptionalKind(null), null);
+});
+
+test("unit enums cross as record fields", () => {
+  const finding = { severity: "hard_failure", kind: "Started", detail: "boom" };
+  const echoed = api.echoFinding(finding);
+  assert.deepEqual(echoed, finding);
+  assert.equal(JSON.parse(JSON.stringify(echoed)).severity, "hard_failure");
+});
+
+test("a string outside the closed set is refused by name", () => {
+  // Not silently mapped to a neighbouring variant, and not passed through:
+  // the message names the offending word and the set it should have come
+  // from, in every position an enum can occupy.
+  assert.throws(
+    () => api.echoSeverity("catastrophe"),
+    (error) => {
+      assert.match(error.message, /catastrophe/);
+      assert.match(error.message, /hard_failure/);
+      return true;
+    },
+  );
+  assert.throws(() => api.echoOptionalKind("started"), /started/);
+  assert.throws(
+    () => api.echoFinding({ severity: "nope", kind: "Started", detail: "x" }),
+    /nope/,
+  );
+});
+
 test("errors decode to the generated classes with the variant code", () => {
   assert.throws(
     () => api.failWith("store"),
@@ -274,8 +329,8 @@ test("errors decode to the generated classes with the variant code", () => {
   );
   assert.throws(() => api.failWith("query"), api.BadQuery);
   assert.throws(() => api.failWith("anything"), api.OutOfRange);
-  assert.equal(api.checkedAdd(2n, 3n), 5n);
-  assert.throws(() => api.checkedAdd(900n, 200n), api.OutOfRange);
+  assert.equal(api.checkedAdd(2, 3), 5);
+  assert.throws(() => api.checkedAdd(900, 200), api.OutOfRange);
 });
 
 test("sync functions substitute omitted defaults", () => {
@@ -287,10 +342,10 @@ test("sync functions substitute omitted defaults", () => {
 });
 
 test("async functions resolve as real promises and decode rejections", async () => {
-  const pending = api.sleepEcho("hi", 10n);
+  const pending = api.sleepEcho("hi", 10);
   assert.ok(pending instanceof Promise, "async exports return a Promise");
   assert.equal(await pending, "hi");
-  await assert.rejects(api.sleepFail(1n), (error) => {
+  await assert.rejects(api.sleepFail(1), (error) => {
     assert.ok(error instanceof api.BadQuery);
     assert.equal(error.code, "BadQuery");
     return true;
@@ -320,14 +375,14 @@ async function assertAbortsMidFlight(start) {
 }
 
 test("abort mid-flight rejects promptly and drops the Rust future", async () => {
-  await assertAbortsMidFlight((signal) => api.sleepEcho("never", 500n, signal));
+  await assertAbortsMidFlight((signal) => api.sleepEcho("never", 500, signal));
 });
 
 test("an already-aborted signal rejects before the future starts", async () => {
   const baseline = api.droppedMidFlightCount();
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(api.sleepEcho("never", 500n, controller.signal), (error) => {
+  await assert.rejects(api.sleepEcho("never", 500, controller.signal), (error) => {
     assert.equal(error.name, "AbortError");
     return true;
   });
@@ -339,19 +394,19 @@ test("an already-aborted signal rejects before the future starts", async () => {
 
 test("streams collect through for-await", async () => {
   const items = [];
-  for await (const item of api.countStream(5n)) {
+  for await (const item of api.countStream(5)) {
     items.push(item);
   }
-  assert.deepEqual(items, [0n, 1n, 2n, 3n, 4n]);
+  assert.deepEqual(items, [0, 1, 2, 3, 4]);
 });
 
 test("an async stream function resolves to an iterable stream", async () => {
-  const stream = await api.countStreamLater(3n);
+  const stream = await api.countStreamLater(3);
   const items = [];
   for await (const item of stream) {
     items.push(item);
   }
-  assert.deepEqual(items, [0n, 1n, 2n]);
+  assert.deepEqual(items, [0, 1, 2]);
 });
 
 // The bounded(2) pull, whatever opened the stream: the producer runs at
@@ -361,14 +416,14 @@ test("an async stream function resolves to an iterable stream", async () => {
 async function assertBoundedPull({ open, produced, item, total }) {
   const baseline = produced();
   const stream = open();
-  let consumed = 0n;
+  let consumed = 0;
   for (let pull = 0; pull < 3; pull += 1) {
     assert.equal(await stream.next(), item(consumed));
-    consumed += 1n;
+    consumed += 1;
     await sleep(50); // an unthrottled producer would run far ahead here
     const ahead = produced() - baseline;
     assert.ok(
-      ahead <= consumed + 3n,
+      ahead <= consumed + 3,
       `producer pushed ${ahead} with only ${consumed} consumed; bounded(2) should cap it`,
     );
   }
@@ -383,26 +438,26 @@ async function assertBoundedPull({ open, produced, item, total }) {
 
 test("streams exert backpressure through the bounded(2) channel", async () => {
   await assertBoundedPull({
-    open: () => api.countStream(20n),
+    open: () => api.countStream(20),
     produced: () => api.streamItemsProduced(),
     item: (index) => index,
-    total: 20n,
+    total: 20,
   });
 });
 
 test("early break from for-await closes the stream", async () => {
   const baseline = api.streamItemsProduced();
   const collected = [];
-  for await (const item of api.countStream(50n)) {
+  for await (const item of api.countStream(50)) {
     collected.push(item);
     if (collected.length === 2) break;
   }
-  assert.deepEqual(collected, [0n, 1n]);
+  assert.deepEqual(collected, [0, 1]);
   await sleep(100);
   const settled = api.streamItemsProduced() - baseline;
   await sleep(100);
   assert.equal(api.streamItemsProduced() - baseline, settled, "producer survived the break");
-  assert.ok(settled < 50n, `producer pushed all ${settled} items despite the break`);
+  assert.ok(settled < 50, `producer pushed all ${settled} items despite the break`);
 });
 
 test("objects construct, expose methods, and close idempotently", async () => {
@@ -410,21 +465,64 @@ test("objects construct, expose methods, and close idempotently", async () => {
   const liveBaseline = api.liveSessions();
   const closedBaseline = api.closedSessions();
   const session = new api.Session("alpha");
-  assert.equal(api.liveSessions(), liveBaseline + 1n);
+  assert.equal(api.liveSessions(), liveBaseline + 1);
   assert.equal(session.name(), "alpha");
   assert.equal(session.isOpen(), true);
   assert.equal(await session.query("ping"), "alpha: ping");
   await session.close();
-  assert.equal(api.closedSessions(), closedBaseline + 1n, "close ran the Rust close");
+  assert.equal(api.closedSessions(), closedBaseline + 1, "close ran the Rust close");
   assert.equal(session.isOpen(), false, "methods still answer after close");
   await session.close();
-  assert.equal(api.closedSessions(), closedBaseline + 1n, "second close is a no-op");
+  assert.equal(api.closedSessions(), closedBaseline + 1, "second close is a no-op");
+});
+
+test("associated functions: construct the object, and answer about it", async () => {
+  const liveBaseline = api.liveSessions();
+
+  // The shape a constructor cannot take: a static that awaits before it
+  // has an instance to hand back.
+  const opened = await api.Session.opened("gamma");
+  assert.ok(opened instanceof api.Session, "async factory returns the wrapper class");
+  assert.equal(opened.name(), "gamma");
+  assert.equal(api.liveSessions(), liveBaseline + 1);
+
+  // A second factory on the same object, sync this time.
+  const copy = api.Session.namedAfter("gamma");
+  assert.ok(copy instanceof api.Session, "sync factory returns the wrapper class");
+  assert.equal(copy.name(), "gamma-copy");
+
+  // A factory's errors decode like any other call's.
+  await assert.rejects(() => api.Session.opened(""), api.BadQuery, "async factory errors decode");
+  assert.throws(() => api.Session.namedAfter(""), api.BadQuery, "sync factory errors decode");
+
+  // The instance a factory returns is a real resource: `await using`
+  // closes it, which is the whole point of returning the wrapper rather
+  // than a bare handle.
+  const closedBaseline = api.closedSessions();
+  {
+    await using scoped = await api.Session.opened("delta");
+    assert.equal(scoped.name(), "delta");
+  }
+  assert.equal(api.closedSessions(), closedBaseline + 1, "await using closed the factory's instance");
+
+  // An associated function that does not return the object renders as a
+  // plain static, not a napi factory.
+  const badge = api.Session.describe("epsilon");
+  assert.equal(badge.label, "session:epsilon");
+  assert.ok(!(badge instanceof api.Session), "a record return is not wrapped as the class");
+
+  await opened.close();
+  await copy.close();
 });
 
 test("objects also arrive from plain function returns", async () => {
   const baseline = api.liveSessions();
   const session = api.openSession("beta");
-  assert.equal(api.liveSessions(), baseline + 1n);
+  // A plain number, not 1n: the counters are declared i64, which this
+  // binding maps to JS number by contract (see "a bigint where a number is
+  // declared is refused rather than coerced"). `+ 1n` on a number baseline
+  // throws before the assertion can run.
+  assert.equal(api.liveSessions(), baseline + 1);
   assert.equal(await session.query("hi"), "beta: hi");
   await session.close();
 });
@@ -432,7 +530,7 @@ test("objects also arrive from plain function returns", async () => {
 test("a stream method iterates, and its items carry the receiver's state", async () => {
   const session = api.openSession("streamy");
   const items = [];
-  for await (const item of session.events(4n)) {
+  for await (const item of session.events(4)) {
     items.push(item);
   }
   assert.deepEqual(items, ["streamy:0", "streamy:1", "streamy:2", "streamy:3"]);
@@ -442,10 +540,10 @@ test("a stream method iterates, and its items carry the receiver's state", async
 test("a stream method exerts backpressure and stops at close()", async () => {
   const session = api.openSession("bounded");
   await assertBoundedPull({
-    open: () => session.events(20n),
+    open: () => session.events(20),
     produced: () => api.sessionEventsProduced(),
     item: (index) => `bounded:${index}`,
-    total: 20n,
+    total: 20,
   });
   await session.close();
 });
@@ -470,34 +568,39 @@ test("a throwing stream method fails before any stream exists", async () => {
 
 test("aborting an async stream method rejects and drops the Rust future", async () => {
   const session = api.openSession("abortable");
-  await assertAbortsMidFlight((signal) => session.eventsLater(3n, 500n, signal));
+  await assertAbortsMidFlight((signal) => session.eventsLater(3, 500, signal));
   const items = [];
-  for await (const item of await session.eventsLater(3n, 1n)) {
+  for await (const item of await session.eventsLater(3, 1)) {
     items.push(item);
   }
-  assert.deepEqual(items, [0n, 1n, 2n], "the same method still streams when it is not aborted");
+  assert.deepEqual(items, [0, 1, 2], "the same method still streams when it is not aborted");
   await session.close();
 });
 
-test("a stream method yields records whose 64-bit fields cross as bigint", async () => {
+test("a stream method yields records whose 64-bit fields cross as checked numbers", async () => {
   const session = api.openSession("ledger");
-  const start = 2n ** 62n;
+  // Inside the double-exact range: an inbound value past 2^53 - 1 is
+  // refused by the integer policy ("not a safe integer"), so the wide
+  // inbound of the old bigint contract is not a scenario anymore.
+  const start = 2 ** 52;
   const rows = [];
-  for await (const row of session.ledgers(start, 2n)) {
+  for await (const row of session.ledgers(start, 2)) {
     rows.push(row);
   }
   assert.equal(rows.length, 2);
-  // The owner-scoped stream class and the record's generated mirror have to
-  // compose: every wide field arrives as an exact bigint, past 2^53.
+  // The owner-scoped stream class and the record's generated mirror have
+  // to compose: every field arrives as a plain number.
   assert.deepEqual(
     rows.map((row) => row.balance),
-    [start, start + 1n],
+    [start, start + 1],
   );
-  assert.equal(rows[0].sequence, 2n ** 64n - 1n, "u64::MAX survived the stream element");
-  assert.deepEqual(rows[1].entries, 1n, "usize crosses as bigint inside a streamed record");
-  assert.deepEqual(rows[1].deltas, [1n], "a Vec<i64> field inside a streamed record");
+  // Outbound values past 2^53 round exactly as they would in any JSON
+  // API; u64::MAX rounds to the nearest double, same as `u64Max()` above.
+  assert.equal(rows[0].sequence, Number(2n ** 64n - 1n), "u64::MAX rounds across the stream element");
+  assert.deepEqual(rows[1].entries, 1, "usize crosses as a number inside a streamed record");
+  assert.deepEqual(rows[1].deltas, [1], "a Vec<i64> field inside a streamed record");
   assert.equal(rows[0].ceiling, start, "an Option<i64> field inside a streamed record");
-  assert.deepEqual(rows[0].totals, { ledger: 2n ** 64n - 1n }, "a u64-valued map field");
+  assert.deepEqual(rows[0].totals, { ledger: Number(2n ** 64n - 1n) }, "a u64-valued map field");
   await session.close();
 });
 
@@ -545,7 +648,7 @@ test("an async fallible method hands back the wrapper class, not a native handle
   assert.equal(shell.isOpen(), true);
   await shell.close();
   assert.equal(shell.isOpen(), false);
-  assert.equal(api.closedShells(), closedBaseline + 1n, "the minted object's close never ran");
+  assert.equal(api.closedShells(), closedBaseline + 1, "the minted object's close never ran");
 
   // Instances only come from the method, exactly like Keys.
   assert.throws(() => new api.Shell(), TypeError);
@@ -564,7 +667,7 @@ test("a bytes stream method yields Buffers with every byte intact", async () => 
   const session = api.openSession("blobs");
   const shell = await session.openShell("cat");
   const chunks = [];
-  for await (const chunk of shell.output(3n)) {
+  for await (const chunk of shell.output(3)) {
     chunks.push(chunk);
   }
   assert.equal(chunks.length, 3);
@@ -594,7 +697,7 @@ test("await using disposes the session through its Rust close", async () => {
   }
   assert.equal(
     api.closedSessions(),
-    closedBaseline + 1n,
+    closedBaseline + 1,
     "asyncDispose did not run the Rust close",
   );
 });
@@ -610,7 +713,11 @@ test("drop without close: GC finalization drops the Rust value", async () => {
     const session = api.openSession("leaked");
     registry.register(session, "session");
   })();
-  assert.equal(api.liveSessions(), baseline + 1n);
+  // A plain number, not 1n: the counters are declared i64, which this
+  // binding maps to JS number by contract (see "a bigint where a number is
+  // declared is refused rather than coerced"). `+ 1n` on a number baseline
+  // throws before the assertion can run.
+  assert.equal(api.liveSessions(), baseline + 1);
   // The unclosed-resource drop also prints the generated leak warning to
   // stderr, which is exactly the surface being proven here.
   // `<=`: forcing GC here also sweeps earlier tests' closed-but-alive
@@ -628,4 +735,97 @@ test("drop without close: GC finalization drops the Rust value", async () => {
     `napi finalizer never dropped the Rust value ` +
       `(wrapper collected: ${wrapperCollected}, live delta: ${api.liveSessions() - baseline})`,
   );
+});
+
+// A rustdoc intra-doc link in a Rust doc comment is resolved against the
+// interface and re-spelled the way TypeScript spells the item it names, so
+// `[`Session::events`]` publishes as {@link Session.events} and an editor can
+// follow it. Each case pins one target kind at one doc site; the string is
+// what the generated file has to contain verbatim.
+const renderedLinks = [
+  ["{@link Finding} carries one.", "a record type, from an enumeration's own docs"],
+  [
+    '- `warning`: Worth a look; {@link escalate} promotes `"info"` to this.',
+    "an exported function, and a sibling variant as its wire literal, from a variant's docs",
+  ],
+  [
+    '- `hard_failure`: Stop now: {@link escalate} leaves `"warning"` here.',
+    "a second variant's docs, resolved through `Self::`",
+  ],
+  [
+    "{@link Occurrence.occurrenceRole} renders as.",
+    "a record field carrying a ts rename, from that field's own docs",
+  ],
+  [
+    "The whole of {@link Facts.sourceBlob}, chunked.",
+    "a camelCased record field, from a sibling field's docs",
+  ],
+  ["one of {@link Severity}'s literals", "an enumeration type, from a record field's docs"],
+  ['`"hard_failure"`.', "an enumeration variant as its wire literal, from a record field's docs"],
+  [
+    "{@link FrameKind} is `PascalCase` on the",
+    "an enumeration whose variants are renamed wholesale",
+  ],
+  ['wire, so `"Started"` keeps its capital.', "that enumeration's variant, in its wire spelling"],
+  ["{@link failWith} mints one", "a camelCased exported function, from an error enum's own docs"],
+  ["{@link Session.tail} raises it for an", "an object method, from an error variant's docs"],
+  ["{@link checkedAdd} refuses.", "a camelCased function, from a second error variant's docs"],
+  [
+    "{@link Session.namedAfter}). An empty name raises",
+    "a sibling associated function through `Self::`, camelCased",
+  ],
+  ["{@link BadQuery}.", "an error variant, from an associated function's docs"],
+  ["Returns a {@link Badge}, not the object, so", "a record type, from an associated function"],
+  [
+    "instance method {@link Session.badge} answers the same question.",
+    "an object method through `Self::`, from an associated function",
+  ],
+  ["The {@link Shell} it hands back is the generated", "an object type, from an object method"],
+  ["{@link Facts} survives.", "the inline `[text](Target)` form, whose link text is dropped"],
+  ['{@link StoreMissingError}, `"query"` for', "an error variant carrying a ts rename"],
+  ["{@link OutOfRange}.", "a third error variant, from the same function's docs"],
+  [
+    "{@link Session.opened} is the associated-function path",
+    "an associated function as a target, from an exported function's docs",
+  ],
+];
+
+test("intra-doc links reach index.d.ts in TypeScript's own spelling", () => {
+  for (const [rendered, what] of renderedLinks) {
+    assert.ok(
+      generated["index.d.ts"].includes(rendered),
+      `index.d.ts is missing ${what}: ${rendered}`,
+    );
+  }
+});
+
+test("the same rendering reaches index.js, where the doc block has a runtime home", () => {
+  // Records and enumerations are types only, so their docs stop at the
+  // declarations; everything with a class or a function behind it carries the
+  // same rendered block into the runtime file too.
+  for (const rendered of [
+    "{@link failWith} mints one",
+    "{@link Session.tail} raises it for an",
+    "{@link Session.namedAfter}). An empty name raises",
+    "instance method {@link Session.badge} answers the same question.",
+    "The {@link Shell} it hands back is the generated",
+    "{@link Facts} survives.",
+    '{@link StoreMissingError}, `"query"` for',
+    "{@link Session.opened} is the associated-function path",
+  ]) {
+    assert.ok(generated["index.js"].includes(rendered), `index.js is missing: ${rendered}`);
+  }
+});
+
+test("no rustdoc link syntax survives into the generated files", () => {
+  // The load-bearing one. Every assertion above names a link that exists
+  // today, so together they cannot notice a link nobody thought to list --
+  // and a link that ships unresolved is exactly the failure this mechanism
+  // exists to make impossible (ENG-12396: fourteen of them outlived a rename
+  // as dead text in the published .d.ts). Any `[`...`]` left anywhere in a
+  // published file fails here, whoever wrote it and whenever it appeared.
+  for (const [name, text] of Object.entries(generated)) {
+    const leftover = text.split("\n").filter((line) => line.includes("[`"));
+    assert.deepEqual(leftover, [], `${name} publishes unresolved rustdoc link syntax`);
+  }
 });

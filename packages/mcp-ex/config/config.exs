@@ -9,6 +9,13 @@ config :logger, :default_handler, config: [type: :standard_error]
 # build from the hex tarball is reproducible everywhere else too.
 config :elixir_make, :force_build, exqlite: true
 
+# The fleet warning policy: which module supplies FleetMesh.Engine's
+# conditions. Empty is the honest public default (this tree carries no
+# catalog); the deployed kernel overrides it at boot from
+# IX_MCP_FLEET_POLICY (see IxMcp.Application), pointing at the private
+# fleet-policy app.
+config :fleet_mesh, policy: FleetMesh.Policy.Empty
+
 # Tests keep the action log in memory: the sandboxed check has no writable
 # HOME, and no test should touch the operator's real log file.
 if config_env() == :test do

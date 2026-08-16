@@ -1,0 +1,67 @@
+cabal-version: 3.0
+name:          mtl
+version:       2.3.1
+license:       BSD-3-Clause
+license-file:  LICENSE
+author:        Andy Gill
+maintainer:    chessai <chessai1996@gmail.com>,
+               Emily Pillmore <emilypi@cohomolo.gy>,
+               Koz Ross <koz.ross@retro-freedom.nz>
+category:      Control
+synopsis:      Monad classes for transformers, using functional dependencies
+homepage:      http://github.com/haskell/mtl
+bug-reports:   http://github.com/haskell/mtl/issues
+description:
+  MTL is a collection of monad classes, extending the 'transformers'
+  package, using functional dependencies for generic lifting of
+  monadic actions.
+
+build-type: Simple
+
+extra-source-files:
+  CHANGELOG.markdown
+  README.markdown
+
+tested-with: GHC ==8.6.5 || ==8.8.4 || ==8.10.7 || ==9.0.2 || ==9.2.4 || ==9.4.1
+
+source-repository head
+  type: git
+  location: https://github.com/haskell/mtl.git
+
+Library
+  exposed-modules:
+    Control.Monad.Cont
+    Control.Monad.Cont.Class
+    Control.Monad.Error.Class
+    Control.Monad.Except
+    Control.Monad.Identity
+    Control.Monad.RWS
+    Control.Monad.RWS.Class
+    Control.Monad.RWS.CPS
+    Control.Monad.RWS.Lazy
+    Control.Monad.RWS.Strict
+    Control.Monad.Reader
+    Control.Monad.Reader.Class
+    Control.Monad.State
+    Control.Monad.State.Class
+    Control.Monad.State.Lazy
+    Control.Monad.State.Strict
+    Control.Monad.Trans
+    Control.Monad.Writer
+    Control.Monad.Writer.Class
+    Control.Monad.Writer.CPS
+    Control.Monad.Writer.Lazy
+    Control.Monad.Writer.Strict
+    Control.Monad.Accum
+    Control.Monad.Select
+
+  build-depends:
+    , base >=4.12 && < 5
+    , transformers >= 0.5.6 && <0.7
+
+  ghc-options:
+    -Wall -Wcompat -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wredundant-constraints
+    -Wmissing-export-lists
+
+  default-language: Haskell2010

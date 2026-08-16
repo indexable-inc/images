@@ -15,6 +15,7 @@ import InputChoice from '$components/InputChoice.svelte';
 import NamespaceBody from '$components/NamespaceBody.svelte';
 import NixBuildBody from '$components/NixBuildBody.svelte';
 import TermBody from '$components/TermBody.svelte';
+import Transcript from '$components/Transcript.svelte';
 import type { Pane } from './types';
 
 export const renderers: Record<string, Component<{ pane: Pane }>> = {
@@ -39,6 +40,10 @@ const dataRenderers: Record<string, Component<{ pane: Pane }>> = {
   // A choice or approval whose answer is written back INTO the document, not sent
   // as a message. See InputChoice.svelte for the body shape.
   input: InputChoice,
+  // An agent's chat-shaped transcript (the tui producer tails the agent CLI's
+  // own session log). Usually mounted inside AgentCard beside its terminal
+  // pane; registered here so the pane also renders as chat on its own.
+  transcript: Transcript,
 };
 
 export const fallback: Component<{ pane: Pane }> = DataBody;

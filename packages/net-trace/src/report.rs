@@ -129,9 +129,21 @@ fn summarize_phase(phase: &Phase) -> PhaseSummary {
         wall_ms: phase.wall_ms,
         network_wall_ms: interval_union_ms(&phase.connections),
         connections: phase.connections.len() as u64,
-        failed: phase.connections.iter().filter(|connection| connection.failed).count() as u64,
-        bytes_up: phase.connections.iter().map(|connection| connection.bytes_up).sum(),
-        bytes_down: phase.connections.iter().map(|connection| connection.bytes_down).sum(),
+        failed: phase
+            .connections
+            .iter()
+            .filter(|connection| connection.failed)
+            .count() as u64,
+        bytes_up: phase
+            .connections
+            .iter()
+            .map(|connection| connection.bytes_up)
+            .sum(),
+        bytes_down: phase
+            .connections
+            .iter()
+            .map(|connection| connection.bytes_down)
+            .sum(),
         top_hosts,
         longest,
     }
@@ -189,33 +201,42 @@ pub fn markdown(summary: &Summary) -> String {
     out.push_str("| phase | wall | network wall | conns | failed | down | up |\n");
     out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
     for phase in &summary.phases {
-        write_fmt(&mut out, format_args!(
-            "| {} | {} | {} | {} | {} | {} | {} |\n",
-            phase.label,
-            fmt_ms(phase.wall_ms),
-            fmt_ms(phase.network_wall_ms),
-            phase.connections,
-            phase.failed,
-            fmt_bytes(phase.bytes_down),
-            fmt_bytes(phase.bytes_up),
-        ));
+        write_fmt(
+            &mut out,
+            format_args!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                phase.label,
+                fmt_ms(phase.wall_ms),
+                fmt_ms(phase.network_wall_ms),
+                phase.connections,
+                phase.failed,
+                fmt_bytes(phase.bytes_down),
+                fmt_bytes(phase.bytes_up),
+            ),
+        );
     }
     for phase in &summary.phases {
         if phase.top_hosts.is_empty() {
             continue;
         }
-        write_fmt(&mut out, format_args!("\n**{}: top hosts**\n\n", phase.label));
+        write_fmt(
+            &mut out,
+            format_args!("\n**{}: top hosts**\n\n", phase.label),
+        );
         out.push_str("| host | conns | time | down | up |\n| --- | --- | --- | --- | --- |\n");
         for stat in &phase.top_hosts {
-            write_fmt(&mut out, format_args!(
-                "| {}:{} | {} | {} | {} | {} |\n",
-                stat.host,
-                stat.port,
-                stat.connections,
-                fmt_ms(stat.connected_ms),
-                fmt_bytes(stat.bytes_down),
-                fmt_bytes(stat.bytes_up),
-            ));
+            write_fmt(
+                &mut out,
+                format_args!(
+                    "| {}:{} | {} | {} | {} | {} |\n",
+                    stat.host,
+                    stat.port,
+                    stat.connections,
+                    fmt_ms(stat.connected_ms),
+                    fmt_bytes(stat.bytes_down),
+                    fmt_bytes(stat.bytes_up),
+                ),
+            );
         }
     }
     if let Some(waterfall) = waterfall(summary) {
@@ -251,15 +272,18 @@ fn waterfall(summary: &Summary) -> Option<String> {
         // so the conversion can never actually be out of range.
         let width = usize::try_from((row.connection.dur_ms * 24 / max).min(24))
             .expect("clamped bar width fits usize");
-        write_fmt(&mut out, format_args!(
-            "{:<24} {:>9} {} {} [{}]{}\n",
-            format!("{}:{}", row.connection.host, row.connection.port),
-            format!("+{}", fmt_ms(row.connection.start_ms)),
-            "#".repeat(width.max(1)),
-            fmt_ms(row.connection.dur_ms),
-            row.phase,
-            if row.connection.failed { " FAILED" } else { "" },
-        ));
+        write_fmt(
+            &mut out,
+            format_args!(
+                "{:<24} {:>9} {} {} [{}]{}\n",
+                format!("{}:{}", row.connection.host, row.connection.port),
+                format!("+{}", fmt_ms(row.connection.start_ms)),
+                "#".repeat(width.max(1)),
+                fmt_ms(row.connection.dur_ms),
+                row.phase,
+                if row.connection.failed { " FAILED" } else { "" },
+            ),
+        );
     }
     Some(out)
 }

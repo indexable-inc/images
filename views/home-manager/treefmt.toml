@@ -1,0 +1,38 @@
+on-unmatched = "info"
+tree-root-file = "release.json"
+
+[formatter.nixfmt]
+command = "nixfmt"
+includes = [ "*.nix" ]
+
+[formatter.statix]
+command = "treefmt-statix"
+includes = [ "*.nix" ]
+excludes = [ "tests/integration/standalone/*-init.nix" ]
+
+[formatter.deadnix]
+command = "deadnix"
+options = [ "--edit" ]
+includes = [ "*.nix" ]
+excludes = [ "tests/integration/standalone/*-init.nix" ]
+
+[formatter.nixf-diagnose]
+command = "nixf-diagnose"
+options = [
+  "--auto-fix",
+  "--ignore=sema-unused-def-lambda-witharg-formal",
+  "--ignore=sema-unused-def-lambda-noarg-formal",
+  "--ignore=sema-primop-overridden"
+]
+includes = [ "*.nix" ]
+
+[formatter.ruff]
+command = "ruff"
+options = [ "format" ]
+includes = [ "*.py" ]
+# Test fixtures are sample inputs (some intentionally invalid Python).
+excludes = [ "tests/modules/**/*.py" ]
+
+[formatter.keep-sorted]
+command = "keep-sorted"
+includes = [ "*" ]

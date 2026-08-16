@@ -45,6 +45,8 @@ mod manager;
 #[cfg(feature = "publish")]
 pub mod publish;
 mod slice;
+#[cfg(any(feature = "dashboard", feature = "publish"))]
+pub mod transcript;
 mod types;
 
 #[cfg(feature = "dashboard")]
@@ -58,7 +60,10 @@ pub use manager::{TuiInstance, TuiManager};
 #[cfg(feature = "publish")]
 pub use publish::{Publisher, publish};
 pub use slice::{ColRange, RowRange, slice_2d};
-pub use types::{Color, CursorPos, CursorShape, ExitState, FullOutput, SpawnConfig, StyledCell};
+pub use types::{
+    AgentConfig, Color, CursorPos, CursorShape, ExitState, FullOutput, SessionLogKind,
+    SpawnConfig, StyledCell,
+};
 
 #[cfg(test)]
 mod tests;

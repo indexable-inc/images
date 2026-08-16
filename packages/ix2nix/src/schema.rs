@@ -160,9 +160,13 @@ fn schema(ty: &Ty) -> Map<String, Value> {
         // A derivation exists only inside an evaluation, so no JSON value can
         // produce one, and saying so is better than widening to `object` and
         // letting an editor suggest a shape that cannot work.
-        Ty::Drv => unrepresentable("a derivation exists only during evaluation; supply it from Nix, not from JSON"),
+        Ty::Drv => unrepresentable(
+            "a derivation exists only during evaluation; supply it from Nix, not from JSON",
+        ),
         // Same verdict, same reason: a function is code, not data.
-        Ty::Func => unrepresentable("a function has no JSON form; supply it from Nix, not from JSON"),
+        Ty::Func => {
+            unrepresentable("a function has no JSON form; supply it from Nix, not from JSON")
+        }
         Ty::List(item) => keywords([
             ("type", "array".into()),
             ("items", Value::Object(schema(item))),

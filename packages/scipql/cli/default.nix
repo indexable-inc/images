@@ -41,6 +41,9 @@ in
     strictDeps = true;
     nativeBuildInputs = [makeWrapper];
 
+    # PATH-wrapping of the unwrapped CLI; nothing to test at build time.
+    doCheck = false;
+
     installPhase = ''
       # shell
       runHook preInstall

@@ -1,0 +1,314 @@
+#include "nix/fetchers/git-utils.hh"
+#include "nix/util/file-system.hh"
+#include <gmock/gmock.h>
+#include <git2/global.h>
+#include <git2/repository.h>
+#include <git2/signature.h>
+#include <git2/types.h>
+#include <git2/object.h>
+#include <git2/tag.h>
+#include <gtest/gtest.h>
+#include "nix/util/fs-sink.hh"
+#include "nix/util/serialise.hh"
+#include "nix/fetchers/git-lfs-fetch.hh"
+
+#include <git2/blob.h>
+#include <git2/tree.h>
+
+namespace nix {
+
+class GitUtilsTest : public ::testing::Test
+{
+    // We use a single repository for all tests.
+    std::unique_ptr<AutoDelete> delTmpDir;
+
+protected:
+    std::filesystem::path tmpDir;
+
+public:
+    void SetUp() override
+    {
+        tmpDir = createTempDir();
+        delTmpDir = std::make_unique<AutoDelete>(tmpDir, true);
+
+        // Create the repo with libgit2
+        git_libgit2_init();
+        git_repository * repo = nullptr;
+        auto r = git_repository_init(&repo, tmpDir.string().c_str(), 0);
+        ASSERT_EQ(r, 0);
+        git_repository_free(repo);
+    }
+
+    void TearDown() override
+    {
+        // Destroy the AutoDelete, triggering removal
+        // not AutoDelete::reset(), which would cancel the deletion.
+        delTmpDir.reset();
+    }
+
+    ref<GitRepo> openRepo()
+    {
+        return GitRepo::openRepo(tmpDir, {.create = true});
+    }
+
+    std::string getRepoName() const
+    {
+        return tmpDir.filename().string();
+    }
+};
+
+void writeString(CreateRegularFileSink & fileSink, std::string contents, bool executable)
+{
+    if (executable)
+        fileSink.isExecutable();
+    fileSink.preallocateContents(contents.size());
+    fileSink(contents);
+}
+
+TEST_F(GitUtilsTest, sink_basic)
+{
+    auto repo = openRepo();
+    auto sink = repo->getFileSystemObjectSink();
+
+    // TODO/Question: It seems a little odd that we use the tarball-like convention of requiring a top-level directory
+    // here
+    //                The sync method does not document this behavior, should probably renamed because it's not very
+    //                general, and I can't imagine that "non-conventional" archives or any other source to be handled by
+    //                this sink.
+
+    sink->createDirectory(CanonPath("foo-1.1"));
+
+    sink->createRegularFile(CanonPath("foo-1.1/hello"), [](CreateRegularFileSink & fileSink) {
+        writeString(fileSink, "hello world", false);
+    });
+    sink->createRegularFile(CanonPath("foo-1.1/bye"), [](CreateRegularFileSink & fileSink) {
+        writeString(fileSink, "thanks for all the fish", false);
+    });
+    sink->createSymlink(CanonPath("foo-1.1/bye-link"), "bye");
+    sink->createDirectory(CanonPath("foo-1.1/empty"));
+    sink->createDirectory(CanonPath("foo-1.1/links"));
+    sink->createHardlink(CanonPath("foo-1.1/links/foo"), CanonPath("foo-1.1/hello"));
+
+    // sink->createHardlink("foo-1.1/links/foo-2", CanonPath("foo-1.1/hello"));
+
+    auto result = repo->dereferenceSingletonDirectory(sink->flush());
+    auto accessor = repo->getAccessor(result, {}, getRepoName());
+    auto entries = accessor->readDirectory(CanonPath::root);
+    ASSERT_EQ(entries.size(), 5u);
+    ASSERT_EQ(accessor->readFile(CanonPath("hello")), "hello world");
+    ASSERT_EQ(accessor->readFile(CanonPath("bye")), "thanks for all the fish");
+    ASSERT_EQ(accessor->readLink(CanonPath("bye-link")), "bye");
+    ASSERT_EQ(accessor->readDirectory(CanonPath("empty")).size(), 0u);
+    ASSERT_EQ(accessor->readFile(CanonPath("links/foo")), "hello world");
+};
+
+TEST_F(GitUtilsTest, sink_hardlink)
+{
+    auto repo = openRepo();
+    auto sink = repo->getFileSystemObjectSink();
+
+    sink->createDirectory(CanonPath("foo-1.1"));
+
+    sink->createRegularFile(CanonPath("foo-1.1/hello"), [](CreateRegularFileSink & fileSink) {
+        writeString(fileSink, "hello world", false);
+    });
+
+    try {
+        sink->createHardlink(CanonPath("foo-1.1/link"), CanonPath("hello"));
+        sink->flush();
+        FAIL() << "Expected an exception";
+    } catch (const nix::Error & e) {
+        ASSERT_THAT(e.msg(), testing::HasSubstr("does not exist"));
+        ASSERT_THAT(e.msg(), testing::HasSubstr("/hello"));
+        ASSERT_THAT(e.msg(), testing::HasSubstr("foo-1.1/link"));
+    }
+};
+
+TEST_F(GitUtilsTest, peel_reference)
+{
+    // Create a commit in the repo
+    git_repository * rawRepo = nullptr;
+    ASSERT_EQ(git_repository_open(&rawRepo, tmpDir.string().c_str()), 0);
+
+    // Create a blob
+    git_oid blob_oid;
+    const char * blob_content = "hello world";
+    ASSERT_EQ(git_blob_create_from_buffer(&blob_oid, rawRepo, blob_content, strlen(blob_content)), 0);
+
+    // Create a tree with that blob
+    git_treebuilder * builder = nullptr;
+    ASSERT_EQ(git_treebuilder_new(&builder, rawRepo, nullptr), 0);
+    ASSERT_EQ(git_treebuilder_insert(nullptr, builder, "file.txt", &blob_oid, GIT_FILEMODE_BLOB), 0);
+
+    git_oid tree_oid;
+    ASSERT_EQ(git_treebuilder_write(&tree_oid, builder), 0);
+    git_treebuilder_free(builder);
+
+    git_tree * tree = nullptr;
+    ASSERT_EQ(git_tree_lookup(&tree, rawRepo, &tree_oid), 0);
+
+    // Create a commit
+    git_signature * sig = nullptr;
+    ASSERT_EQ(git_signature_now(&sig, "nix", "nix@example.com"), 0);
+
+    git_oid commit_oid;
+    ASSERT_EQ(git_commit_create_v(&commit_oid, rawRepo, "HEAD", sig, sig, nullptr, "initial commit", tree, 0), 0);
+
+    // Lookup our commit
+    git_object * commit_object = nullptr;
+    ASSERT_EQ(git_object_lookup(&commit_object, rawRepo, &commit_oid, GIT_OBJECT_COMMIT), 0);
+
+    // Create annotated tag
+    git_oid tag_oid;
+    ASSERT_EQ(git_tag_create(&tag_oid, rawRepo, "v1", commit_object, sig, "annotated tag", 0), 0);
+
+    auto repo = openRepo();
+
+    // Use resolveRef to get peeled object
+    auto resolved = repo->resolveRef("refs/tags/v1");
+
+    // Now assert that we have unpeeled it!
+    ASSERT_STREQ(resolved.gitRev().c_str(), git_oid_tostr_s(&commit_oid));
+
+    git_signature_free(sig);
+    git_repository_free(rawRepo);
+}
+
+TEST_F(GitUtilsTest, archive_compatible_tree)
+{
+    git_repository * rawRepo = nullptr;
+    ASSERT_EQ(git_repository_open(&rawRepo, tmpDir.string().c_str()), 0);
+
+    git_signature * sig = nullptr;
+    ASSERT_EQ(git_signature_now(&sig, "nix", "nix@example.com"), 0);
+
+    auto makeBlob = [&](std::string_view content) {
+        git_oid oid;
+        EXPECT_EQ(git_blob_create_from_buffer(&oid, rawRepo, content.data(), content.size()), 0);
+        return oid;
+    };
+
+    auto makeTree = [&](const std::vector<std::tuple<const char *, git_oid, git_filemode_t>> & entries) {
+        git_treebuilder * builder = nullptr;
+        EXPECT_EQ(git_treebuilder_new(&builder, rawRepo, nullptr), 0);
+        for (auto & [name, oid, mode] : entries)
+            EXPECT_EQ(git_treebuilder_insert(nullptr, builder, name, &oid, mode), 0);
+        git_oid oid;
+        EXPECT_EQ(git_treebuilder_write(&oid, builder), 0);
+        git_treebuilder_free(builder);
+        return oid;
+    };
+
+    auto makeCommit = [&](const git_oid & treeOid) {
+        git_tree * tree = nullptr;
+        EXPECT_EQ(git_tree_lookup(&tree, rawRepo, &treeOid), 0);
+        git_oid oid;
+        EXPECT_EQ(git_commit_create_v(&oid, rawRepo, nullptr, sig, sig, nullptr, "test commit", tree, 0), 0);
+        git_tree_free(tree);
+        return Hash::parseAny(git_oid_tostr_s(&oid), HashAlgorithm::SHA1);
+    };
+
+    auto hello = makeBlob("hello world");
+
+    /* A tree without gitlinks whose .gitattributes (if any) don't mention
+       export-ignore/export-subst exports identically to its archive. */
+    auto benignAttrs = makeBlob("* text=auto\n*.png binary\n");
+    auto cleanTree =
+        makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {".gitattributes", benignAttrs, GIT_FILEMODE_BLOB}});
+    auto cleanRev = makeCommit(cleanTree);
+
+    auto repo = openRepo();
+    auto result = repo->getArchiveCompatibleTree(cleanRev);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(result->gitRev(), std::string(git_oid_tostr_s(&cleanTree)));
+
+    /* export-ignore in a top-level .gitattributes disqualifies the tree. */
+    auto ignoreAttrs = makeBlob("docs/ export-ignore\n");
+    ASSERT_EQ(
+        repo->getArchiveCompatibleTree(makeCommit(
+            makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {".gitattributes", ignoreAttrs, GIT_FILEMODE_BLOB}}))),
+        std::nullopt);
+
+    /* ... as does export-subst in a .gitattributes inside a subdirectory. */
+    auto substAttrs = makeBlob("version.txt export-subst\n");
+    auto subTree =
+        makeTree({{".gitattributes", substAttrs, GIT_FILEMODE_BLOB}, {"version.txt", hello, GIT_FILEMODE_BLOB}});
+    ASSERT_EQ(
+        repo->getArchiveCompatibleTree(
+            makeCommit(makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {"sub", subTree, GIT_FILEMODE_TREE}}))),
+        std::nullopt);
+
+    /* A gitlink (submodule) entry disqualifies the tree; the referenced
+       commit needn't exist in this repository, as for real submodules. */
+    git_oid fakeSubmodule;
+    ASSERT_EQ(git_oid_fromstr(&fakeSubmodule, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0);
+    ASSERT_EQ(
+        repo->getArchiveCompatibleTree(makeCommit(
+            makeTree({{"file.txt", hello, GIT_FILEMODE_BLOB}, {"dep", fakeSubmodule, GIT_FILEMODE_COMMIT}}))),
+        std::nullopt);
+
+    git_signature_free(sig);
+    git_repository_free(rawRepo);
+}
+
+TEST(GitUtils, isLegalRefName)
+{
+    ASSERT_TRUE(isLegalRefName("A/b"));
+    ASSERT_TRUE(isLegalRefName("AaA/b"));
+    ASSERT_TRUE(isLegalRefName("FOO/BAR/BAZ"));
+    ASSERT_TRUE(isLegalRefName("HEAD"));
+    ASSERT_TRUE(isLegalRefName("refs/tags/1.2.3"));
+    ASSERT_TRUE(isLegalRefName("refs/heads/master"));
+    ASSERT_TRUE(isLegalRefName("foox"));
+    ASSERT_TRUE(isLegalRefName("1337"));
+    ASSERT_TRUE(isLegalRefName("foo.baz"));
+    ASSERT_TRUE(isLegalRefName("foo/bar/baz"));
+    ASSERT_TRUE(isLegalRefName("foo./bar"));
+    ASSERT_TRUE(isLegalRefName("heads/foo@bar"));
+    ASSERT_TRUE(isLegalRefName("heads/fu\303\237"));
+    ASSERT_TRUE(isLegalRefName("foo-bar-baz"));
+    ASSERT_TRUE(isLegalRefName("branch#"));
+    ASSERT_TRUE(isLegalRefName("$1"));
+    ASSERT_TRUE(isLegalRefName("foo.locke"));
+
+    ASSERT_FALSE(isLegalRefName("refs///heads/foo"));
+    ASSERT_FALSE(isLegalRefName("heads/foo/"));
+    ASSERT_FALSE(isLegalRefName("///heads/foo"));
+    ASSERT_FALSE(isLegalRefName(".foo"));
+    ASSERT_FALSE(isLegalRefName("./foo"));
+    ASSERT_FALSE(isLegalRefName("./foo/bar"));
+    ASSERT_FALSE(isLegalRefName("foo/./bar"));
+    ASSERT_FALSE(isLegalRefName("foo/bar/."));
+    ASSERT_FALSE(isLegalRefName("foo bar"));
+    ASSERT_FALSE(isLegalRefName("foo?bar"));
+    ASSERT_FALSE(isLegalRefName("foo^bar"));
+    ASSERT_FALSE(isLegalRefName("foo~bar"));
+    ASSERT_FALSE(isLegalRefName("foo:bar"));
+    ASSERT_FALSE(isLegalRefName("foo[bar"));
+    ASSERT_FALSE(isLegalRefName("foo/bar/."));
+    ASSERT_FALSE(isLegalRefName(".refs/foo"));
+    ASSERT_FALSE(isLegalRefName("refs/heads/foo."));
+    ASSERT_FALSE(isLegalRefName("heads/foo..bar"));
+    ASSERT_FALSE(isLegalRefName("heads/foo?bar"));
+    ASSERT_FALSE(isLegalRefName("heads/foo.lock"));
+    ASSERT_FALSE(isLegalRefName("heads///foo.lock"));
+    ASSERT_FALSE(isLegalRefName("foo.lock/bar"));
+    ASSERT_FALSE(isLegalRefName("foo.lock///bar"));
+    ASSERT_FALSE(isLegalRefName("heads/v@{ation"));
+    ASSERT_FALSE(isLegalRefName("heads/foo\bar"));
+
+    ASSERT_FALSE(isLegalRefName("@"));
+    ASSERT_FALSE(isLegalRefName("\37"));
+    ASSERT_FALSE(isLegalRefName("\177"));
+
+    ASSERT_FALSE(isLegalRefName("foo/*"));
+    ASSERT_FALSE(isLegalRefName("*/foo"));
+    ASSERT_FALSE(isLegalRefName("foo/*/bar"));
+    ASSERT_FALSE(isLegalRefName("*"));
+    ASSERT_FALSE(isLegalRefName("foo/*/*"));
+    ASSERT_FALSE(isLegalRefName("*/foo/*"));
+    ASSERT_FALSE(isLegalRefName("/foo"));
+    ASSERT_FALSE(isLegalRefName(""));
+}
+
+} // namespace nix

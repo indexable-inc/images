@@ -32,6 +32,27 @@
   # consumers whose operator deliberately permits merge-protection bypasses
   # (pairs with omitting the `forceMerge` prompt rule).
   protectedMergeGuard ? true,
+  # Strict opt-in mode: the index Elixir kernel is the ONLY tool surface the
+  # agent gets. Every native tool and every non-index MCP server is denied, so
+  # the agent works in the kernel's persistent Elixir workspace -- one shared
+  # session whose bindings, modules and jobs survive across calls -- instead of
+  # ad-hoc shell. That persistence is the whole point: a `Cmd.run` and a
+  # `Read.file` in the kernel leave state a later cell can build on, where the
+  # same work through Bash and Read leaves nothing behind but transcript.
+  #
+  # The strictest end of the same axis `indexKernelBaked` opens: that gate
+  # supersedes the file tools and keeps the native shell as the direct command
+  # path, this one closes the shell too. Default false, and false renders
+  # byte-identically to a build that never passed the argument.
+  #
+  # Enforcement is two-layer, deliberately. The deny list below strips schemas
+  # for the tools this repo knows by name (the token win, and the model is
+  # never tempted by a tool it cannot see). The exhaustive guarantee is the
+  # `kernel-only-guard` PreToolUse hook (policy/hooks.nix), which allowlists
+  # `mcp__index__*` and denies everything else by construction -- no
+  # enumeration to keep in sync as the CLI grows tools, and unlike a bare-name
+  # deny it can carry a message telling the agent where to go instead.
+  kernelOnly ? false,
 }: let
   # One list of protected-merge command globs; the Claude render wraps them in
   # Bash(...) deny patterns, the codex render ships them verbatim for hook use.
@@ -107,30 +128,99 @@
   claudeBundledSkillDenies = [
     "Skill(artifact-design)"
   ];
-in {
-  claude = {
-    deniedToolPatterns =
-      map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
-      ++ claudeBundledSkillDenies
-      ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
-      ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools);
-  };
+  # The native shell, denied only under `kernelOnly`. It is deliberately absent
+  # from `kernelSuperseded` above: with the kernel merely baked, Bash stays as
+  # the direct command path and the kernel-outage path (index#4080). Strict
+  # mode is exactly the choice to give that up, so it is named here separately
+  # rather than folded into a row whose normal reading is "keep the shell".
+  claudeNativeShellTools = ["Bash"];
 
-  codex = {
-    forcedSettings.features =
-      codexHouseFeatures
-      // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
-      // lib.optionalAttrs indexKernelBaked kernelCodexFeatures;
-    inherit protectedMergeCommandPatterns;
-  };
+  # Every non-index MCP server the strict mode shuts off, named at server
+  # granularity: a bare `mcp__<server>` deny covers all of that server's tools
+  # without this file having to track the tool names each one happens to
+  # export. exa is the only one the shared policy knows by name; the claude-code
+  # wrapper additionally derives a deny for every other server it bakes and
+  # drops them from the baked MCP config outright, so a server that is not
+  # named here is still not reachable.
+  #
+  # The exa CAPABILITY is not what goes away. Web search and fetch stay
+  # available in strict mode through the kernel's in-language `Web.search/1`
+  # and `Web.fetch/1`, which run against the same exa API. One capability, one
+  # door, and in strict mode the door is the kernel's.
+  claudeKernelOnlyMcpDenies = ["mcp__exa"];
 
-  # cursor-agent's `cli-config.json` permission vocabulary only verifiably
-  # covers shell commands (`Shell(<glob>)` deny entries), so only the
-  # protected-merge row renders here; the kernel/exa gates have no cursor
-  # handle yet. Delivery is the consumer's config management (see the
-  # cursor-cli wrapper's passthru), since the CLI reads permissions from
-  # config, not flags.
-  cursor = {
-    deniedShellPatterns = map (pattern: "Shell(${pattern})") protectedMergeCommandPatterns;
-  };
-}
+  # Strict mode's full Claude deny list. Unconditional in the tools it names:
+  # the `indexKernelBaked` / `exaSearchBaked` gates describe which MCP server
+  # supersedes which native tool, and under `kernelOnly` the answer is "the
+  # kernel supersedes all of them" regardless of what else is baked.
+  claudeKernelOnlyDenies =
+    claudeNativeShellTools
+    ++ kernelClaudeTools
+    ++ exaSuperseded.claudeTools
+    ++ claudeHouseDeniedTools
+    ++ claudeKernelOnlyMcpDenies;
+
+  # `kernelOnly` without the kernel is an agent with no tools at all -- a
+  # config that builds, deploys, and then produces a session that cannot do
+  # anything, with nothing in the failure to say why. Refuse at eval instead.
+  checkKernelOnly = lib.throwIf (kernelOnly && !indexKernelBaked) (
+    "agent/policy/permissions.nix: kernelOnly requires indexKernelBaked. "
+    + "Strict mode denies every native tool and every non-index MCP server, "
+    + "so without the index kernel baked the agent would have no tools at all."
+  );
+in
+  checkKernelOnly {
+    claude = {
+      # `lib.unique`, because `kernelOnly` deliberately re-states rows the
+      # narrower gates may already have contributed: strict mode asserts the
+      # whole set independent of what else is baked, and a deny list is a set.
+      # A no-op on every non-strict render.
+      deniedToolPatterns = lib.unique (
+        map (pattern: "Bash(${pattern})") protectedMergeCommandPatterns
+        ++ claudeBundledSkillDenies
+        ++ lib.optionals exaSearchBaked exaSuperseded.claudeTools
+        ++ lib.optionals indexKernelBaked (kernelClaudeTools ++ claudeHouseDeniedTools)
+        ++ lib.optionals kernelOnly claudeKernelOnlyDenies
+      );
+      # Read by policy/hooks.nix to arm the `kernel-only-guard` PreToolUse hook,
+      # which is what makes the mode exhaustive rather than a list of names.
+      inherit kernelOnly;
+    };
+
+    codex = {
+      forcedSettings.features =
+        codexHouseFeatures
+        // lib.optionalAttrs exaSearchBaked exaSuperseded.codexFeatures
+        // lib.optionalAttrs indexKernelBaked kernelCodexFeatures
+        # codex reaches its shell through two feature leaves and its
+        # `apply_patch` through none: upstream enables that one per-model with
+        # no config toggle (see the `kernelSuperseded` note above), so strict
+        # mode is enforced for codex by the shared PreToolUse hook, and the
+        # feature leaves here only save the tokens they can.
+        // lib.optionalAttrs kernelOnly {
+          shell_tool = false;
+          unified_exec = false;
+        };
+      inherit protectedMergeCommandPatterns kernelOnly;
+    };
+
+    # cursor-agent's `cli-config.json` permission vocabulary only verifiably
+    # covers shell commands (`Shell(<glob>)` deny entries), so only the
+    # protected-merge row renders here; the kernel/exa gates have no cursor
+    # handle yet. Delivery is the consumer's config management (see the
+    # cursor-cli wrapper's passthru), since the CLI reads permissions from
+    # config, not flags.
+    #
+    # Strict mode reaches exactly as far as that vocabulary does: denying every
+    # shell command is the whole of what `cli-config.json` can express, and the
+    # file tools it leaves standing have no handle to deny. cursor-agent is
+    # therefore NOT a supported `kernelOnly` target -- the shared hook is the
+    # enforcement everywhere else, and cursor-agent does not run it. Stated
+    # rather than silently half-applied.
+    cursor = {
+      deniedShellPatterns =
+        map (pattern: "Shell(${pattern})") protectedMergeCommandPatterns
+        ++ lib.optional kernelOnly "Shell(*)";
+      kernelOnlySupported = false;
+    };
+  }

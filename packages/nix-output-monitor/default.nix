@@ -10,10 +10,8 @@
   # an empty string, but a floating content-addressed (or deferred) output is
   # exactly `("out","","r:sha256","")` with an empty path. So nom spams
   # `DerivationParseError "string"` and renders no dependency graph for CA
-  # derivations, which the index repo builds heavily. The fix is a registry
-  # fork of Gabriella439/Haskell-Nix-Derivation-Library (nix-derivation-src +
-  # ./patches, driven by lib/fork-packages.nix); the patch's commit message
-  # carries the full WHY, including why it stays smaller than upstream PR #26.
+  # derivations, which the index repo builds heavily. The nix-derivation view
+  # carries the fix and its reason of record.
   #
   # nixpkgs builds nom as `haskellPackages.callPackage ./generated-package.nix`
   # (top-level, not in the haskellPackages set), so feed the override through the
@@ -22,22 +20,20 @@
   #
   # Upstream: https://github.com/maralorn/nix-output-monitor/issues/122
   #           https://github.com/Gabriella439/Haskell-Nix-Derivation-Library/issues/28
-  # The indexable-inc/Haskell-Nix-Derivation-Library jj megamerge
-  # (nix-derivation-src input).
+  # The view is based on indexable-inc/Haskell-Nix-Derivation-Library.
   patchedNixDerivationSrc = ix.nix-derivationSrc;
 
   # The hackage recipe expects its source's cabal version; a haskellPackages
-  # bump past 1.1.3 with a stale nix-derivation-src pin would silently build
-  # the old tree under the new label, so fail eval until the pin is advanced.
+  # bump past 1.1.3 with a stale view would build the old tree under the new
+  # label, so fail eval until the view advances.
   # `overrideSrc` also drops the hackage cabal-revision overlay
   # (editedCabalFile), which is safe because the pinned tree already carries
   # the revisions' dependency-bound relaxations (see flake.nix).
   overrideNixDerivation = hprev:
     assert lib.assertMsg (hprev.nix-derivation.version == "1.1.3") ''
       packages/nix-output-monitor: haskellPackages.nix-derivation is
-      ${hprev.nix-derivation.version} but nix-derivation-src pins 1.1.3.
-      Repin the nix-derivation-src input to the matching upstream rev and
-      jj-rebase indexable-inc/Haskell-Nix-Derivation-Library and repin.'';
+      ${hprev.nix-derivation.version} but the nix-derivation view is 1.1.3.
+      Update the view to the matching upstream revision.'';
       compose.overrideSrc {
         src = patchedNixDerivationSrc;
         version = hprev.nix-derivation.version;
@@ -109,7 +105,7 @@
     };
     crossGhc = ix.crossGhc {
       inherit lib target toolchain;
-      inherit (ix.pkgs) autoconf automake haskellPackages libffi lld llvmPackages perl python3 stdenv;
+      inherit (ix.pkgs) autoconf automake haskellPackages lld llvmPackages perl python3 ripgrep runCommand stdenv;
       nixpkgsPath = ix.pkgs.path;
     };
     crossHaskell = ix.crossHaskell {

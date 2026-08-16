@@ -44,7 +44,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
-use crate::pane::{Pane, View};
+use crate::pane::{Input, Pane, View};
 use crate::{Error, Result};
 
 /// How many CRDT updates a slow SSE client may fall behind before it is fed a
@@ -154,6 +154,11 @@ fn view_scalars(view: &View) -> Vec<ScalarField> {
                 t.exit_code
                     .map_or(Scalar::Absent, |code| Scalar::Int(i64::from(code))),
             ),
+            field(
+                "status",
+                t.status.clone().map_or(Scalar::Absent, Scalar::Str),
+            ),
+            field("agent", t.agent.clone().map_or(Scalar::Absent, Scalar::Str)),
         ],
         View::Html(_) => Vec::new(),
         View::Exec(e) => vec![
@@ -524,6 +529,19 @@ impl DocState {
             let fresh = !self.panes.contains_key(&key);
             if fresh {
                 self.create_slot(&key, pane)?;
+                // Every terminal pane gets its shared compose draft declared
+                // the moment the pane first appears, inside the same commit
+                // that creates it, so the mergeable text container is already
+                // in the snapshot a viewer imports before anyone types (see
+                // `declare_note` for why a viewer-created container would
+                // lose a concurrent typist's sentence). Terminals only: it is
+                // the affordance for typing at the process behind the pane,
+                // which the other views have no analogue of.
+                if matches!(pane.view, View::Terminal(_)) {
+                    self.inputs
+                        .ensure_mergeable_text(&input_key(scope, &pane.id, "compose"))
+                        .map_err(loro_err)?;
+                }
                 added.push(&pane.id);
             }
             // A created pane's first values are part of creating it, so listing
@@ -935,11 +953,18 @@ struct Imported {
 }
 
 pub struct Update {
-
     /// The raw Loro update, as the websocket transport frames it.
     pub(crate) bytes: Vec<u8>,
     /// The same bytes base64'd, as an SSE `data:` field requires.
     pub(crate) encoded: String,
+}
+
+impl Update {
+    /// The raw Loro update bytes, importable into any peer document.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 /// A new subscriber's starting point: the current full snapshot taken under the
@@ -947,9 +972,77 @@ pub struct Update {
 pub struct Subscription {
     /// The full document snapshot at subscribe time, for the client to import
     /// before applying any update.
-    pub(crate) snapshot: Vec<u8>,
+    pub snapshot: Vec<u8>,
     /// The CRDT update stream, consistent with `snapshot`.
-    pub(crate) updates: broadcast::Receiver<Arc<Update>>,
+    pub updates: broadcast::Receiver<Arc<Update>>,
+}
+
+/// A typed subscription to the `inputs` surface, from [`Hub::watch_inputs`].
+///
+/// The watcher wakes on the hub's update broadcast and diffs the full inputs
+/// state against what it last reported, rather than reading the update's
+/// commit metadata: a browser's answer arrives as a merged remote change
+/// carrying the writer's own commit message, so the hub's [`CommitTag`] names
+/// only the hub's own inputs commits (a [`Hub::declare_note`]), never the
+/// viewer writes this watcher exists for. Diffing whole state also makes
+/// falling behind harmless by construction: a lagged receiver skips wake-ups,
+/// not input changes.
+pub struct InputWatcher {
+    /// Kept so the watcher can read the merged inputs back; also keeps the
+    /// broadcast sender alive, so `changed` cannot see a closed channel.
+    hub: Arc<Hub>,
+    updates: broadcast::Receiver<Arc<Update>>,
+    /// Every input's value as of the last yielded batch, keyed by the
+    /// document key (`"<scope>\x1f<pane>\x1f<field>"`).
+    seen: HashMap<String, Input>,
+}
+
+impl InputWatcher {
+    /// Wait until at least one input changed and return the changed entries.
+    ///
+    /// `None` means the hub's broadcast channel closed, which cannot happen
+    /// while this watcher holds the hub alive; it stays in the signature so
+    /// the caller's loop shape (`while let Some(batch)`) survives if hub
+    /// ownership ever changes.
+    pub async fn changed(&mut self) -> Option<Vec<InputEntry>> {
+        loop {
+            match self.updates.recv().await {
+                // Any delta may carry input ops -- the diff below decides --
+                // and a lagged receiver skipped only wake-ups, never input
+                // changes: the diff runs against full current state, so the
+                // next wake-up reports everything the lag swallowed.
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+            let changed = self.diff();
+            if !changed.is_empty() {
+                return Some(changed);
+            }
+        }
+    }
+
+    /// The entries whose value differs from the last report, and the new
+    /// baseline.
+    ///
+    /// A removed input leaves the baseline but is not reported: an
+    /// [`InputEntry`] carries a value, and the inputs surface has no removal
+    /// operation today, so a tombstone shape here would have no writer to
+    /// test it against. A re-created key reports again.
+    fn diff(&mut self) -> Vec<InputEntry> {
+        let current = self.hub.inputs();
+        let mut next = HashMap::with_capacity(current.len());
+        let mut changed = Vec::new();
+        for entry in current {
+            let key = input_key(&entry.scope, &entry.pane, &entry.field);
+            let moved = self.seen.get(&key) != Some(&entry.value);
+            next.insert(key, entry.value.clone());
+            if moved {
+                changed.push(entry);
+            }
+        }
+        self.seen = next;
+        changed
+    }
 }
 
 /// Who is behind a peer id.
@@ -1023,27 +1116,6 @@ impl ActorKind {
             _ => None,
         }
     }
-}
-
-/// One viewer answer, tagged with the merge semantics it was stored under.
-///
-/// The distinction is the whole point of the type. Putting free text on a map
-/// key would resolve two people typing at once by keeping one sentence and
-/// discarding the other, silently.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "shape", rename_all = "lowercase")]
-pub enum Input {
-    /// A single-answer field (a verdict, an approval) on a map key, so the last
-    /// write wins -- which is what "one answer" means.
-    Choice {
-        /// The answer as written, whatever scalar the viewer sent.
-        value: String,
-    },
-    /// Free text in its own text container, so two viewers' edits both survive.
-    Note {
-        /// The merged text.
-        text: String,
-    },
 }
 
 /// One input the document holds, with the pane it belongs to.
@@ -1262,6 +1334,43 @@ impl Hub {
         self.state.lock().inputs()
     }
 
+    /// The Loro peer id this hub writes as, in the decimal-string form the
+    /// `__peers` map and [`HistoryChange::peer`] spell it (as a `u64` here;
+    /// callers stringify). It is what lets a consumer of
+    /// [`updates`](Self::updates) classify a change as the hub's own commit
+    /// versus a merged remote edit.
+    #[must_use]
+    pub fn peer_id(&self) -> u64 {
+        self.state.lock().doc.peer_id()
+    }
+
+    /// Watch the `inputs` surface: a typed subscription whose every batch is
+    /// the set of [`InputEntry`]s whose value changed, however the change
+    /// arrived -- a browser answer merged through [`import`](Self::import) or
+    /// a local [`declare_note`](Self::declare_note).
+    ///
+    /// The baseline is captured under the same lock as the update
+    /// subscription, so no write can fall between them: it lands either in
+    /// the baseline or in a later batch.
+    #[must_use]
+    pub fn watch_inputs(self: &Arc<Self>) -> InputWatcher {
+        let state = self.state.lock();
+        let updates = self.updates.subscribe();
+        let seen = state
+            .inputs()
+            .into_iter()
+            .map(|entry| {
+                let key = input_key(&entry.scope, &entry.pane, &entry.field);
+                (key, entry.value)
+            })
+            .collect();
+        InputWatcher {
+            hub: Arc::clone(self),
+            updates,
+            seen,
+        }
+    }
+
     /// The document's changes, oldest first, each with its commit tag and the
     /// actor its peer declared -- everything a history UI draws a timeline from.
     #[must_use]
@@ -1279,7 +1388,8 @@ impl Hub {
     /// Subscribe to the base64 CRDT update stream and read the current full
     /// snapshot, both under one lock so the snapshot version lines up with the
     /// first update the subscriber will receive.
-    pub(crate) fn subscribe(&self) -> Subscription {
+    #[must_use]
+    pub fn subscribe(&self) -> Subscription {
         let state = self.state.lock();
         let updates = self.updates.subscribe();
         Subscription {
@@ -1294,8 +1404,11 @@ impl Hub {
     /// lines up with, which is what a client needs. The websocket relay is a
     /// fan-out middleman that seeds nobody -- each websocket client takes its
     /// own snapshot after subscribing to the relay -- so it wants the stream
-    /// without paying for a snapshot export per hub delta.
-    pub(crate) fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
+    /// without paying for a snapshot export per hub delta. An in-process
+    /// consumer that already holds the hub (the Elixir binding's watch
+    /// stream, ENG-10199) is in the same position: it reads state back
+    /// through the hub and only needs to hear that something changed.
+    pub fn updates(&self) -> broadcast::Receiver<Arc<Update>> {
         self.updates.subscribe()
     }
 
@@ -1335,6 +1448,8 @@ mod tests {
                 cursor_visible: true,
                 cursor_shape: "block".to_owned(),
                 exit_code: None,
+            status: None,
+            agent: None,
             },
         )
     }
@@ -1912,7 +2027,14 @@ mod tests {
         second.commit();
         hub.import(&posted(&second)).expect("merge");
         assert_eq!(hub.choice("p", "t1", "verdict").as_deref(), Some("ship"));
-        assert_eq!(hub.inputs().len(), 1, "one field holds one answer");
+        assert_eq!(
+            hub.inputs()
+                .iter()
+                .filter(|entry| entry.field == "verdict")
+                .count(),
+            1,
+            "one field holds one answer"
+        );
     }
 
     /// The read side a producer polls: both shapes come back parsed, and a
@@ -1945,6 +2067,15 @@ mod tests {
                         value: "true".to_owned()
                     },
                 },
+                // Auto-declared with the terminal pane (untouched, so empty).
+                InputEntry {
+                    scope: "p".to_owned(),
+                    pane: "t1".to_owned(),
+                    field: "compose".to_owned(),
+                    value: Input::Note {
+                        text: String::new()
+                    },
+                },
                 InputEntry {
                     scope: "p".to_owned(),
                     pane: "t1".to_owned(),
@@ -1961,6 +2092,129 @@ mod tests {
         // getting those two crossed is what loses a colleague's sentence.
         assert_eq!(hub.choice("p", "t1", "review"), None);
         assert_eq!(hub.note("p", "t1", "approve"), None);
+    }
+
+    /// The public typed subscription (ENG-10199): a browser-shaped peer doc
+    /// writes an inputs key, the hub imports it, and the watcher yields
+    /// exactly that entry -- no mirror document, no poll.
+    #[tokio::test]
+    async fn watch_inputs_yields_a_browser_answer() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+        // `peer_id` names the hub's own writer: the peer behind the apply
+        // above is already introduced under it.
+        assert!(hub.actors().contains_key(&hub.peer_id()));
+
+        let mut watcher = hub.watch_inputs();
+
+        let browser = viewer(&hub);
+        browser
+            .get_map(INPUTS_ROOT)
+            .insert(
+                &input_key("p", "t1", "send"),
+                r#"{"id":"u1","text":"hi"}"#,
+            )
+            .expect("answer");
+        browser.commit();
+        hub.import(&posted(&browser)).expect("merge");
+
+        let batch = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            watcher.changed(),
+        )
+        .await
+        .expect("the answer must wake the watcher")
+        .expect("hub alive");
+        assert_eq!(
+            batch,
+            vec![InputEntry {
+                scope: "p".to_owned(),
+                pane: "t1".to_owned(),
+                field: "send".to_owned(),
+                value: Input::Choice {
+                    value: r#"{"id":"u1","text":"hi"}"#.to_owned()
+                },
+            }]
+        );
+    }
+
+    /// The watcher reports changes, not state: an answer that predates it is
+    /// baseline, a pane tick is not an input change, and a later batch
+    /// carries only the entry that moved.
+    #[tokio::test]
+    async fn watch_inputs_diffs_against_its_baseline() {
+        let hub = Hub::new();
+        hub.apply_scope("p", &[terminal("t1", "hello")]);
+
+        let early = viewer(&hub);
+        early
+            .get_map(INPUTS_ROOT)
+            .insert(&input_key("p", "t1", "approve"), true)
+            .expect("tick the box");
+        early.commit();
+        hub.import(&posted(&early)).expect("merge");
+
+        let mut watcher = hub.watch_inputs();
+
+        // A pane delta wakes the broadcast but changes no input, so the
+        // watcher must keep waiting rather than yield an empty batch.
+        hub.apply_scope("p", &[terminal("t1", "world")]);
+        let idle = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            watcher.changed(),
+        )
+        .await;
+        assert!(idle.is_err(), "a pane delta is not an input change: {idle:?}");
+
+        let late = viewer(&hub);
+        late.get_map(INPUTS_ROOT)
+            .insert(&input_key("p", "t1", "verdict"), "ship")
+            .expect("answer");
+        late.commit();
+        hub.import(&posted(&late)).expect("merge");
+
+        let batch = watcher.changed().await.expect("hub alive");
+        assert_eq!(
+            batch,
+            vec![InputEntry {
+                scope: "p".to_owned(),
+                pane: "t1".to_owned(),
+                field: "verdict".to_owned(),
+                value: Input::Choice {
+                    value: "ship".to_owned()
+                },
+            }],
+            "the unchanged `approve` baseline entry must not be re-reported"
+        );
+    }
+
+    /// Every terminal pane's shared compose draft exists the moment the pane
+    /// does, in the same commit, so a viewer's snapshot always carries the
+    /// mergeable container before anyone types (ENG-12457 phase 3). Only
+    /// terminals get one, and a later tick does not clobber it.
+    #[test]
+    fn a_terminal_pane_auto_declares_its_compose_note() {
+        let hub = Hub::new();
+        hub.apply_scope(
+            "p",
+            &[terminal("t1", "hello"), Pane::html("h1", "notes", "<b>x</b>")],
+        );
+        assert_eq!(hub.note("p", "t1", "compose").as_deref(), Some(""));
+        assert_eq!(
+            hub.note("p", "h1", "compose"),
+            None,
+            "only a terminal is something to type at"
+        );
+
+        // The container must be in the snapshot a viewer imports;
+        // `viewer_note` panics if a viewer would have to create it.
+        let doc = viewer(&hub);
+        let _ = viewer_note(&doc, "p", "t1", "compose");
+
+        // A later tick re-ensures rather than recreates: the declared note
+        // survives and stays a note.
+        hub.apply_scope("p", &[terminal("t1", "changed")]);
+        assert_eq!(hub.note("p", "t1", "compose").as_deref(), Some(""));
     }
 
     /// The ownership partition, both directions: a producer tick rewrites its

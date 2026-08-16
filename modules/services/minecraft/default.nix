@@ -589,7 +589,7 @@
   });
 
   mkManaged = label: source:
-    pkgs.runCommand "minecraft-managed-${label}" {} ''
+    pkgs.runCommand "minecraft-managed-${label}" {__structuredAttrs = true;} ''
       mkdir -p "$out"
       ${lib.concatStringsSep "\n" (
         lib.mapAttrsToList (
@@ -662,7 +662,7 @@
     );
 
   managed = let
-    dropins = pkgs.runCommand "minecraft-managed-${cfg.dropinDir}" {} (
+    dropins = pkgs.runCommand "minecraft-managed-${cfg.dropinDir}" {__structuredAttrs = true;} (
       ''
         mkdir -p "$out"
       ''
@@ -672,7 +672,7 @@
       '')
       managedJars
     );
-    datapacks = pkgs.runCommand "minecraft-managed-datapacks" {} (
+    datapacks = pkgs.runCommand "minecraft-managed-datapacks" {__structuredAttrs = true;} (
       ''
         mkdir -p "$out"
       ''

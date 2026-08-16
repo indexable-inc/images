@@ -100,7 +100,7 @@ impl RangeAxis {
         }
     }
 
-    fn invalid(self, message: String) -> Error {
+    const fn invalid(self, message: String) -> Error {
         match self {
             Self::Row { .. } => Error::InvalidRowRange { message },
             Self::Col { .. } => Error::InvalidColRange { message },

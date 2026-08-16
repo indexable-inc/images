@@ -1,0 +1,64 @@
+# The only workflow the public mirror carries.
+#
+# indexable-inc/index is a read-only projection of the ix monorepo's `index/`
+# subtree. Everything else under .github/ is excluded from the projection
+# (crates/tools/index-project/src/exclude.rs), because those files would run
+# here, in a public repository, against runners this repository does not have.
+# This one is written into the tree by the projector itself rather than kept in
+# the monorepo's .github/, so it can never run in ix.
+#
+# It exists because the alternative is worse than rude. The projector replaces
+# the mirror's worktree wholesale on every sync, so an open pull request is not
+# rejected, it is silently obliterated by the next update -- which is exactly
+# what happens today on the three per-crate mirrors that have no such workflow.
+# Someone who took the time to send a fix deserves to be told where it should
+# go, immediately, by name.
+#
+# `pull_request_target` rather than `pull_request`: this needs a token that can
+# comment and close, and a fork-authored `pull_request` run does not get one.
+# The safety condition for `pull_request_target` is that the job must never
+# check out or execute the proposed code, and this one does neither -- there is
+# no checkout step at all.
+name: refuse pull requests
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  refuse:
+    name: refuse
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain and close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh pr close "$NUMBER" --repo "$REPO" --comment "$(cat <<'MESSAGE'
+          Thanks for this, and sorry for the automated reply.
+
+          This repository is a read-only projection of a subtree of our internal
+          monorepo. Its `main` branch is overwritten wholesale on every sync, so
+          a pull request here cannot be merged and would be erased by the next
+          update rather than left open. Closing it now is the honest version of
+          what would otherwise happen quietly.
+
+          **Please open an issue instead:**
+          https://github.com/indexable-inc/index/issues
+
+          Issues are read, and they are the supported way to get a change made.
+          If we act on yours, the fix will show up here inside a squashed
+          `update <date>` commit with no link back to your report -- the sync
+          carries no internal history. That is a limitation of how this mirror
+          is published, not a comment on your contribution, so please do say in
+          the issue if you want to be credited.
+
+          See CONTRIBUTING.md in this repository for the full picture.
+          MESSAGE
+          )"

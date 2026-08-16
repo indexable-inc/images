@@ -1,0 +1,1007 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  inherit (lib)
+    literalExpression
+    mkOption
+    types
+    ;
+
+  cfg = config.services.syncthing;
+
+  settingsFormat = pkgs.formats.json { };
+  cleanedConfig = lib.converge (lib.filterAttrsRecursive (_: v: v != null && v != { })) cfg.settings;
+
+  isUnixGui = (builtins.substring 0 1 cfg.guiAddress) == "/";
+
+  # syncthing's configuration directory (see https://docs.syncthing.net/users/config.html)
+  syncthingDir =
+    if pkgs.stdenv.isDarwin then
+      "$HOME/Library/Application Support/Syncthing"
+    else
+      "\${XDG_STATE_HOME:-$HOME/.local/state}/syncthing";
+
+  syncthingDirShell =
+    if pkgs.stdenv.isDarwin then
+      ''
+        syncthing_dir="${syncthingDir}"
+      ''
+    else
+      ''
+        syncthing_state_dir="${syncthingDir}"
+        syncthing_config_dir="''${XDG_CONFIG_HOME:-$HOME/.config}/syncthing"
+
+        if [[ -e "$syncthing_state_dir/config.xml" || ! -e "$syncthing_config_dir/config.xml" ]]; then
+            syncthing_dir="$syncthing_state_dir"
+        else
+            syncthing_dir="$syncthing_config_dir"
+        fi
+      '';
+
+  defaultGuiAddress = "127.0.0.1:8384";
+
+  hasCustomGuiAddress = cfg.guiAddress != defaultGuiAddress;
+
+  # Syncthing supports serving the GUI over Unix sockets. If that happens, the
+  # API is served over the Unix socket as well.  This function returns the correct
+  # curl arguments for the address portion of the curl command for both network
+  # and Unix socket addresses.
+  curlAddressArgs =
+    path:
+    if
+      isUnixGui
+    # if cfg.guiAddress is a unix socket, tell curl explicitly about it.
+    # `localhost` is a placeholder authority routed to the socket by
+    # --unix-socket; a bare-dot host (`http://.`) is rejected as an invalid
+    # hostname by curl >= 8.21.
+    then
+      "--unix-socket ${cfg.guiAddress} http://localhost${path}"
+    # no adjustments are needed if cfg.guiAddress is a network address
+    else
+      "${cfg.guiAddress}${path}";
+
+  devices = lib.mapAttrsToList (_: device: device // { deviceID = device.id; }) cfg.settings.devices;
+
+  folders = lib.mapAttrsToList (
+    _: folder:
+    folder
+    // {
+      devices = map (
+        device:
+        if builtins.isString device then
+          { deviceId = cfg.settings.devices.${device}.id; }
+        else if builtins.isAttrs device then
+          { deviceId = cfg.settings.devices.${device.name}.id; } // device
+        else
+          throw "Invalid type for devices in folder '${folder.label}'; expected list or attrset."
+      ) folder.devices;
+    }
+  ) (lib.filterAttrs (_: folder: folder.enable) cfg.settings.folders);
+
+  jq = lib.getExe pkgs.jq;
+  sleep = lib.getExe' pkgs.coreutils "sleep";
+  printf = lib.getExe' pkgs.coreutils "printf";
+  cat = lib.getExe' pkgs.coreutils "cat";
+  curl = lib.getExe pkgs.curl;
+  install = lib.getExe' pkgs.coreutils "install";
+  mktemp = lib.getExe' pkgs.coreutils "mktemp";
+  syncthing = lib.getExe cfg.package;
+  mkpasswd = lib.getExe pkgs.mkpasswd;
+
+  copyKeys = pkgs.writers.writeBash "syncthing-copy-keys" ''
+    ${syncthingDirShell}
+
+    ${install} -dm700 "$syncthing_dir"
+    ${lib.optionalString (cfg.cert != null) ''
+      ${install} -Dm400 ${toString cfg.cert} "$syncthing_dir/cert.pem"
+    ''}
+    ${lib.optionalString (cfg.key != null) ''
+      ${install} -Dm400 ${toString cfg.key} "$syncthing_dir/key.pem"
+    ''}
+  '';
+
+  curlShellFunction = ''
+    ${syncthingDirShell}
+
+    # systemd sets and creates RUNTIME_DIRECTORY on Linux
+    # on Darwin, we create it manually via mktemp
+    RUNTIME_DIRECTORY="''${RUNTIME_DIRECTORY:=$(${mktemp} -d)}"
+
+    curl() {
+        # get the api key by parsing the config.xml
+        while
+            ! ${pkgs.libxml2}/bin/xmllint \
+                --xpath 'string(configuration/gui/apikey)' \
+                "$syncthing_dir/config.xml" \
+                >"$RUNTIME_DIRECTORY/api_key"
+        do ${sleep} 1; done
+        (${printf} "X-API-Key: "; ${cat} "$RUNTIME_DIRECTORY/api_key") >"$RUNTIME_DIRECTORY/headers"
+        ${curl} -sSLk -H "@$RUNTIME_DIRECTORY/headers" \
+            --retry 1000 --retry-delay 1 --retry-all-errors \
+            "$@"
+    }
+  '';
+
+  updateConfig = pkgs.writers.writeBash "merge-syncthing-config" (
+    ''
+      set -efu
+
+      # be careful not to leak secrets in the filesystem or in process listings
+      umask 0077
+
+      ${curlShellFunction}
+    ''
+    + lib.optionalString (cfg.guiCredentials != null) ''
+      ${lib.toShellVars { inherit (cfg.guiCredentials) username passwordFile; }}
+      password="$(<"$passwordFile")"
+
+      credential_eval="$(curl -X GET ${curlAddressArgs "/rest/config/gui"} | ${jq} -r '@sh "current_username=\(.user) current_password=\(.password)"')"
+      eval "$credential_eval"
+
+      if [[ "$current_username" != "$username" ]]; then
+          ${jq} -n --arg username "$username" '{user: $username}' | curl --json @- -X PATCH ${curlAddressArgs "/rest/config/gui"}
+      fi
+
+      # The REST API will return the password hashed in bcrypt format.  The
+      # user might have provided a hashed password, or might have provided a
+      # cleartext one.  Only change the password if the password from the
+      # user's configuration neither matches the hashed password from the API,
+      # nor hashes to that password.
+      if [[ -z "$current_password" ]] || { [[ "$current_password" != "$password" ]] && ! printf '%s' "$password" | ${mkpasswd} --stdin --salt "$current_password" &>/dev/null; }; then
+          ${jq} -n --arg password "$password" '{password: $password}' | curl --json @- -X PATCH ${curlAddressArgs "/rest/config/gui"}
+      fi
+
+    ''
+    +
+
+      /*
+        Syncthing's rest API for the folders and devices is almost identical.
+        Hence we iterate them using lib.pipe and generate shell commands for both at
+        the same time.
+      */
+      lib.optionalString (cleanedConfig != { }) (
+        lib.pipe
+          {
+            # The attributes below are the only ones that are different for devices /
+            # folders.
+            devs = {
+              new_conf_IDs = map (v: v.id) devices;
+              GET_IdAttrName = "deviceID";
+              override = cfg.overrideDevices;
+              conf = devices;
+              baseAddress = curlAddressArgs "/rest/config/devices";
+            };
+            dirs = {
+              new_conf_IDs = map (v: v.id) folders;
+              GET_IdAttrName = "id";
+              override = cfg.overrideFolders;
+              conf = folders;
+              baseAddress = curlAddressArgs "/rest/config/folders";
+              ignoreAddress = curlAddressArgs "/rest/db/ignores";
+            };
+          }
+          [
+            # Now for each of these attributes, write the curl commands that are
+            # identical to both folders and devices.
+            (lib.mapAttrs (
+              conf_type: s:
+              # We iterate the `conf` list now, and run a curl -X POST command for each, that
+              # should update that device/folder only.
+              lib.pipe s.conf [
+                # Quoting https://docs.syncthing.net/rest/config.html:
+                #
+                # > PUT takes an array and POST a single object. In both cases if a
+                # given folder/device already exists, it’s replaced, otherwise a new
+                # one is added.
+                #
+                # What's not documented, is that using PUT will remove objects that
+                # don't exist in the array given. That's why we use here `POST`, and
+                # only if s.override == true then we DELETE the relevant folders
+                # afterwards.
+                (map (
+                  new_cfg:
+                  let
+                    jsonPreSecretsFile = pkgs.writeTextFile {
+                      name = "${conf_type}-${new_cfg.id}-conf-pre-secrets.json";
+                      # Remove the ignorePatterns attribute, it is handled separately
+                      text = builtins.toJSON (removeAttrs new_cfg [ "ignorePatterns" ]);
+                    };
+                    injectSecretsJqCmd =
+                      {
+                        # There are no secrets in `devs`, so no massaging needed.
+                        "devs" = "${jq} .";
+                        "dirs" =
+                          let
+                            folder = new_cfg;
+                            devicesWithSecrets = lib.pipe folder.devices [
+                              (lib.filter (device: (builtins.isAttrs device) && device ? encryptionPasswordFile))
+                              (map (device: {
+                                inherit (device) deviceId;
+                                variableName = "secret_${builtins.hashString "sha256" device.encryptionPasswordFile}";
+                                secretPath = device.encryptionPasswordFile;
+                              }))
+                            ];
+                            # At this point, `jsonPreSecretsFile` looks something like this:
+                            #
+                            #   {
+                            #     ...,
+                            #     "devices": [
+                            #       {
+                            #         "deviceId": "id1",
+                            #         "encryptionPasswordFile": "/etc/bar-encryption-password",
+                            #         "name": "..."
+                            #       }
+                            #     ],
+                            #   }
+                            #
+                            # We now generate a `jq` command that can replace those
+                            # `encryptionPasswordFile`s with `encryptionPassword`.
+                            # The `jq` command ends up looking like this:
+                            #
+                            #   jq --rawfile secret_DEADBEEF /etc/bar-encryption-password '
+                            #     .devices[] |= (
+                            #       if .deviceId == "id1" then
+                            #         del(.encryptionPasswordFile) |
+                            #         .encryptionPassword = $secret_DEADBEEF
+                            #       else
+                            #         .
+                            #       end
+                            #     )
+                            #   '
+                            jqUpdates = map (device: ''
+                              .devices[] |= (
+                                if .deviceId == "${device.deviceId}" then
+                                  del(.encryptionPasswordFile) |
+                                  .encryptionPassword = ''$${device.variableName}
+                                else
+                                  .
+                                end
+                              )
+                            '') devicesWithSecrets;
+                            jqRawFiles = map (
+                              device: "--rawfile ${device.variableName} ${lib.escapeShellArg device.secretPath}"
+                            ) devicesWithSecrets;
+                          in
+                          "${jq} ${lib.concatStringsSep " " jqRawFiles} ${
+                            lib.escapeShellArg (lib.concatStringsSep "|" ([ "." ] ++ jqUpdates))
+                          }";
+                      }
+                      .${conf_type};
+                  in
+                  ''
+                    ${injectSecretsJqCmd} ${jsonPreSecretsFile} | curl --json @- -X POST ${s.baseAddress}
+                  ''
+                  /*
+                    Check if we are configuring a folder which has ignore patterns.
+                    If it does, write the ignore patterns to the rest API.
+                  */
+                  + lib.optionalString ((conf_type == "dirs") && (new_cfg.ignorePatterns != null)) ''
+                    curl -d ${
+                      lib.escapeShellArg (builtins.toJSON { ignore = new_cfg.ignorePatterns; })
+                    } -X POST ${s.ignoreAddress}?folder=${lib.strings.escapeURL new_cfg.id}
+                  ''
+                ))
+                (lib.concatStringsSep "\n")
+              ]
+              /*
+                If we need to override devices/folders, we iterate all currently configured
+                IDs, via another `curl -X GET`, and we delete all IDs that are not part of
+                the Nix configured list of IDs
+              */
+              + lib.optionalString s.override ''
+                stale_${conf_type}_ids="$(curl -X GET ${s.baseAddress} | ${jq} \
+                  --argjson new_ids ${lib.escapeShellArg (builtins.toJSON s.new_conf_IDs)} \
+                  --raw-output \
+                  '[.[].${s.GET_IdAttrName}] - $new_ids | .[]'
+                )"
+                for id in ''${stale_${conf_type}_ids}; do
+                  curl -X DELETE ${s.baseAddress}/$id
+                done
+              ''
+            ))
+            builtins.attrValues
+            (lib.concatStringsSep "\n")
+          ]
+      )
+    +
+      /*
+        Now we update the other settings defined in cleanedConfig which are not
+        "folders" or "devices".
+      */
+      (lib.pipe cleanedConfig [
+        builtins.attrNames
+        (lib.subtractLists [
+          "folders"
+          "devices"
+        ])
+        (map (subOption: ''
+          curl -X PUT -d ${
+            lib.escapeShellArg (builtins.toJSON cleanedConfig.${subOption})
+          } ${curlAddressArgs "/rest/config/${subOption}"}
+        ''))
+        (lib.concatStringsSep "\n")
+      ])
+    + lib.optionalString hasCustomGuiAddress ''
+      curl -X PATCH -d '{"address": "'${cfg.guiAddress}'"}' ${curlAddressArgs "/rest/config/gui"}
+    ''
+    + ''
+      # restart Syncthing if required
+      if curl ${curlAddressArgs "/rest/config/restart-required"} |
+         ${jq} -e .requiresRestart > /dev/null; then
+          curl -X POST ${curlAddressArgs "/rest/system/restart"}
+      fi
+    ''
+  );
+
+  doUpdateConfig = cleanedConfig != { } || cfg.guiCredentials != null || hasCustomGuiAddress;
+
+  defaultSyncthingArgs = [
+    "${syncthing}"
+    "serve"
+    "--no-browser"
+    "--no-restart"
+    "--no-upgrade"
+    "--gui-address=${if isUnixGui then "unix://" else ""}${cfg.guiAddress}"
+  ];
+
+  syncthingArgs = defaultSyncthingArgs ++ cfg.extraOptions;
+in
+{
+  meta.maintainers = [
+    lib.maintainers.rycee
+    lib.maintainers.aionescu
+  ];
+
+  imports = [
+    (lib.mkRemovedOptionModule [
+      "services"
+      "syncthing"
+      "passwordFile"
+    ] "Instead, configure services.syncthing.guiCredentials.")
+  ];
+
+  options = {
+    services.syncthing = {
+      enable = lib.mkEnableOption ''
+        Syncthing, a self-hosted open-source alternative to Dropbox and Bittorrent Sync.
+      '';
+
+      cert = mkOption {
+        type = with types; nullOr str;
+        default = null;
+        description = ''
+          Path to the `cert.pem` file, which will be copied into Syncthing's
+          config directory.
+        '';
+      };
+
+      key = mkOption {
+        type = with types; nullOr str;
+        default = null;
+        description = ''
+          Path to the `key.pem` file, which will be copied into Syncthing's
+          config directory.
+        '';
+      };
+
+      guiCredentials = mkOption {
+        default = null;
+        description = ''
+          Credentials to use for access to the Syncthing GUI.  Configuring
+          these is recommended, as otherwise any user with access to the GUI
+          web address -- which would typically include all local accounts on
+          your system -- will effectively have read/write access to the
+          filesystem with your permissions.
+        '';
+        type = types.nullOr (
+          types.submodule {
+            options = {
+              username = mkOption {
+                description = "Username to use to log into the Syncthing GUI.";
+                type = types.nonEmptyStr;
+                example = literalExpression "config.home.username";
+              };
+
+              passwordFile = lib.mkOption {
+                description = ''
+                  The full path to a file that contains the password, or a hash of
+                  the password, to set for GUI access.
+
+                  The password file is read each time Syncthing is started.
+
+                  If the password file contains a bcrypt hash, Syncthing will use
+                  that hash as-is.  Otherwise, Syncthing will hash the password
+                  provided before storing it.
+                '';
+                type = lib.types.str;
+                example = literalExpression "config.sops.secrets.syncthing.path";
+                default = null;
+              };
+            };
+          }
+        );
+      };
+
+      overrideDevices = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Whether to delete the devices which are not configured via the
+          [devices](#opt-services.syncthing.settings.devices) option.
+          If set to `false`, devices added via the web
+          interface will persist and will have to be deleted manually.
+        '';
+      };
+
+      overrideFolders = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Whether to delete the folders which are not configured via the
+          [folders](#opt-services.syncthing.settings.folders) option.
+          If set to `false`, folders added via the web
+          interface will persist and will have to be deleted manually.
+        '';
+      };
+
+      settings = mkOption {
+        type = types.submodule {
+          freeformType = settingsFormat.type;
+          options = {
+            # global options
+            options = mkOption {
+              default = { };
+              description = ''
+                The options element contains all other global configuration options
+              '';
+              type = types.submodule {
+                freeformType = settingsFormat.type;
+                options = {
+                  localAnnounceEnabled = mkOption {
+                    type = with types; nullOr bool;
+                    default = null;
+                    description = ''
+                      Whether to send announcements to the local LAN, also use such announcements to find other devices.
+                    '';
+                  };
+
+                  localAnnouncePort = mkOption {
+                    type = with types; nullOr int;
+                    default = null;
+                    description = ''
+                      The port on which to listen and send IPv4 broadcast announcements to.
+                    '';
+                  };
+
+                  relaysEnabled = mkOption {
+                    type = with types; nullOr bool;
+                    default = null;
+                    description = ''
+                      When true, relays will be connected to and potentially used for device to device connections.
+                    '';
+                  };
+
+                  urAccepted = mkOption {
+                    type = with types; nullOr int;
+                    default = null;
+                    description = ''
+                      Whether the user has accepted to submit anonymous usage data.
+                      The default, 0, mean the user has not made a choice, and Syncthing will ask at some point in the future.
+                      "-1" means no, a number above zero means that that version of usage reporting has been accepted.
+                    '';
+                  };
+
+                  limitBandwidthInLan = mkOption {
+                    type = with types; nullOr bool;
+                    default = null;
+                    description = ''
+                      Whether to apply bandwidth limits to devices in the same broadcast domain as the local device.
+                    '';
+                  };
+
+                  maxFolderConcurrency = mkOption {
+                    type = with types; nullOr int;
+                    default = null;
+                    description = ''
+                      This option controls how many folders may concurrently be in I/O-intensive operations such as syncing or scanning.
+                      The mechanism is described in detail in a [separate chapter](https://docs.syncthing.net/advanced/option-max-concurrency.html).
+                    '';
+                  };
+                };
+              };
+            };
+
+            # device settings
+            devices = mkOption {
+              default = { };
+              description = ''
+                Peers/devices which Syncthing should communicate with.
+
+                Note that you can still add devices manually, but those changes
+                will be reverted on restart if [overrideDevices](#opt-services.syncthing.overrideDevices)
+                is enabled.
+              '';
+              example = {
+                bigbox = {
+                  id = "7CFNTQM-IMTJBHJ-3UWRDIU-ZGQJFR6-VCXZ3NB-XUH3KZO-N52ITXR-LAIYUAU";
+                  addresses = [ "tcp://192.168.0.10:51820" ];
+                };
+              };
+              type = types.attrsOf (
+                types.submodule (
+                  { name, ... }:
+                  {
+                    freeformType = settingsFormat.type;
+                    options = {
+
+                      name = mkOption {
+                        type = types.str;
+                        default = name;
+                        description = ''
+                          The name of the device.
+                        '';
+                      };
+
+                      id = mkOption {
+                        type = types.str;
+                        description = ''
+                          The device ID. See <https://docs.syncthing.net/dev/device-ids.html>.
+                        '';
+                      };
+
+                      autoAcceptFolders = mkOption {
+                        type = types.bool;
+                        default = false;
+                        description = ''
+                          Automatically create or share folders that this device advertises at the default path.
+                          See <https://docs.syncthing.net/users/config.html?highlight=autoaccept#config-file-format>.
+                        '';
+                      };
+
+                    };
+                  }
+                )
+              );
+            };
+
+            # folder settings
+            folders = mkOption {
+              default = { };
+              description = ''
+                Folders which should be shared by Syncthing.
+
+                Note that you can still add folders manually, but those changes
+                will be reverted on restart if [overrideFolders](#opt-services.syncthing.overrideFolders)
+                is enabled.
+              '';
+              example = {
+                "/home/user/sync" = {
+                  id = "syncme";
+                  devices = [ "bigbox" ];
+                };
+              };
+              type = types.attrsOf (
+                types.submodule (
+                  { name, ... }:
+                  {
+                    freeformType = settingsFormat.type;
+                    options = {
+
+                      enable = mkOption {
+                        type = types.bool;
+                        default = true;
+                        description = ''
+                          Whether to share this folder.
+                          This option is useful when you want to define all folders
+                          in one place, but not every machine should share all folders.
+                        '';
+                      };
+
+                      path = mkOption {
+                        type = types.str // {
+                          check = x: types.str.check x && (lib.substring 0 1 x == "/" || lib.substring 0 2 x == "~/");
+                          description = types.str.description + " starting with / or ~/";
+                        };
+                        default = name;
+                        description = ''
+                          The path to the folder which should be shared.
+                          Only absolute paths (starting with `/`) and paths relative to
+                          the user's home directory (starting with `~/`) are allowed.
+                        '';
+                      };
+
+                      id = mkOption {
+                        type = types.str;
+                        default = name;
+                        description = ''
+                          The ID of the folder. Must be the same on all devices.
+                        '';
+                      };
+
+                      label = mkOption {
+                        type = types.str;
+                        default = name;
+                        description = ''
+                          The label of the folder.
+                        '';
+                      };
+
+                      type = mkOption {
+                        type = types.enum [
+                          "sendreceive"
+                          "sendonly"
+                          "receiveonly"
+                          "receiveencrypted"
+                        ];
+                        default = "sendreceive";
+                        description = ''
+                          Controls how the folder is handled by Syncthing.
+                          See <https://docs.syncthing.net/users/config.html#config-option-folder.type>.
+                        '';
+                      };
+
+                      devices = mkOption {
+                        type = types.listOf (
+                          types.oneOf [
+                            types.str
+                            (types.submodule {
+                              freeformType = settingsFormat.type;
+                              options = {
+                                name = mkOption {
+                                  type = types.str;
+                                  default = null;
+                                  description = ''
+                                    The name of a device defined in the
+                                    [devices](#opt-services.syncthing.settings.devices)
+                                    option.
+                                  '';
+                                };
+                                encryptionPasswordFile = mkOption {
+                                  type = types.nullOr (
+                                    types.pathWith {
+                                      inStore = false;
+                                      absolute = true;
+                                    }
+                                  );
+                                  default = null;
+                                  description = ''
+                                    Path to encryption password. If set, the file will be read during
+                                    service activation, without being embedded in derivation.
+                                  '';
+                                };
+                              };
+                            })
+                          ]
+                        );
+                        default = [ ];
+                        description = ''
+                          The devices this folder should be shared with. Each device must
+                          be defined in the [devices](#opt-services.syncthing.settings.devices) option.
+
+                          A list of either strings or attribute sets, where values
+                          are device names or device configurations.
+                        '';
+                      };
+
+                      versioning = mkOption {
+                        default = null;
+                        description = ''
+                          How to keep changed/deleted files with Syncthing.
+                          There are 4 different types of versioning with different parameters.
+                          See <https://docs.syncthing.net/users/versioning.html>.
+                        '';
+                        example = lib.literalExpression ''
+                          [
+                            {
+                              versioning = {
+                                type = "simple";
+                                params.keep = "10";
+                              };
+                            }
+                            {
+                              versioning = {
+                                type = "trashcan";
+                                params.cleanoutDays = "1000";
+                              };
+                            }
+                            {
+                              versioning = {
+                                type = "staggered";
+                                fsPath = "/syncthing/backup";
+                                params = {
+                                  cleanInterval = "3600";
+                                  maxAge = "31536000";
+                                };
+                              };
+                            }
+                            {
+                              versioning = {
+                                type = "external";
+                                params.versionsPath = pkgs.writers.writeBash "backup" '''
+                                  folderpath="$1"
+                                  filepath="$2"
+                                  rm -rf "$folderpath/$filepath"
+                                ''';
+                              };
+                            }
+                          ]
+                        '';
+                        type =
+                          with types;
+                          nullOr (submodule {
+                            freeformType = settingsFormat.type;
+                            options = {
+                              type = mkOption {
+                                type = enum [
+                                  "external"
+                                  "simple"
+                                  "staggered"
+                                  "trashcan"
+                                ];
+                                description = ''
+                                  The type of versioning.
+                                  See <https://docs.syncthing.net/users/versioning.html>.
+                                '';
+                              };
+                            };
+                          });
+                      };
+
+                      copyOwnershipFromParent = mkOption {
+                        type = types.bool;
+                        default = false;
+                        description = ''
+                          On Unix systems, tries to copy file/folder ownership from
+                          the parent directory (the directory it’s located in).
+                          Requires running Syncthing as a privileged user, or
+                          granting it additional capabilities (e.g. CAP_CHOWN on
+                          Linux).
+                        '';
+                      };
+
+                      ignorePatterns = mkOption {
+                        type = types.nullOr (types.listOf types.str);
+                        default = null;
+                        description = ''
+                          Syncthing can be configured to ignore certain files in a folder using ignore patterns.
+                          Enter them as a list of strings, one string per line.
+                          See the Syncthing documentation for syntax: <https://docs.syncthing.net/users/ignoring.html>
+                          Patterns set using the WebUI will be overridden if you define this option.
+                          If you want to override the ignore patterns to be empty, use `ignorePatterns = []`.
+                          Deleting the `ignorePatterns` option will not remove the patterns from Syncthing automatically
+                          because patterns are only handled by the module if this option is defined. Either use
+                          `ignorePatterns = []` before deleting the option or remove the patterns afterwards using the WebUI.
+                        '';
+                        example = [
+                          "// This is a comment"
+                          "*.part // Firefox downloads and other things"
+                          "*.crdownload // Chrom(ium|e) downloads"
+                        ];
+                      };
+                    };
+                  }
+                )
+              );
+            };
+
+          };
+        };
+        default = { };
+        description = ''
+          Extra configuration options for Syncthing.
+          See <https://docs.syncthing.net/users/config.html>.
+          Note that this attribute set does not exactly match the documented
+          XML format. Instead, this is the format of the JSON REST API. There
+          are slight differences. For example, this XML:
+          ```xml
+          <options>
+            <listenAddress>default</listenAddress>
+            <minHomeDiskFree unit="%">1</minHomeDiskFree>
+          </options>
+          ```
+          corresponds to the Nix code:
+          ```nix
+          {
+            options = {
+              listenAddresses = [
+                "default"
+              ];
+              minHomeDiskFree = {
+                unit = "%";
+                value = 1;
+              };
+            };
+          }
+          ```
+        '';
+        example = {
+          options.localAnnounceEnabled = false;
+          gui.theme = "black";
+        };
+      };
+
+      guiAddress = mkOption {
+        type = types.str;
+        default = defaultGuiAddress;
+        description = ''
+          The address to serve the web interface at.
+        '';
+      };
+
+      allProxy = mkOption {
+        type = with types; nullOr str;
+        default = null;
+        example = "socks5://address.com:1234";
+        description = ''
+          Overwrites the {env}`all_proxy` environment variable for the Syncthing
+          process to the given value. This is normally used to let Syncthing
+          connect through a SOCKS5 proxy server. See
+          <https://docs.syncthing.net/users/proxying.html>.
+        '';
+      };
+
+      extraOptions = mkOption {
+        type = with types; listOf str;
+        default = [ ];
+        example = [ "--reset-deltas" ];
+        description = ''
+          Extra command-line arguments to pass to {command}`syncthing`
+        '';
+      };
+
+      package = lib.mkPackageOption pkgs "syncthing" { };
+
+      tray = {
+        enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = "Whether to enable a syncthing tray service.";
+        };
+
+        command = mkOption {
+          type = types.str;
+          default = "syncthingtray --wait";
+          defaultText = literalExpression "syncthingtray --wait";
+          example = "qsyncthingtray";
+          description = "Syncthing tray command to use.";
+        };
+
+        package = lib.mkPackageOption pkgs "syncthingtray" {
+          default = "syncthingtray-minimal";
+          example = "qsyncthingtray";
+        };
+      };
+    };
+  };
+
+  config = lib.mkMerge [
+    (lib.mkIf cfg.enable {
+      home.packages = [ (lib.getOutput "man" cfg.package) ];
+
+      systemd.user.services = {
+        syncthing = {
+          Unit = {
+            Description = "Syncthing - Open Source Continuous File Synchronization";
+            Documentation = "man:syncthing(1)";
+            After = [ "network.target" ];
+            StartLimitIntervalSec = 60;
+            StartLimitBurst = 4;
+          };
+
+          Service = {
+            ExecStartPre = lib.mkIf (cfg.cert != null || cfg.key != null) "+${copyKeys}";
+            ExecStart = lib.escapeShellArgs syncthingArgs;
+            Restart = "on-failure";
+            SuccessExitStatus = [
+              3
+              4
+            ];
+            RestartForceExitStatus = [
+              3
+              4
+            ];
+            Environment = lib.mkIf (cfg.allProxy != null) "all_proxy=${cfg.allProxy}";
+
+            # Sandboxing.
+            LockPersonality = true;
+            MemoryDenyWriteExecute = true;
+            NoNewPrivileges = true;
+            PrivateUsers = true;
+            RestrictNamespaces = true;
+            SystemCallArchitectures = "native";
+            SystemCallFilter = "@system-service";
+          };
+
+          Install = {
+            WantedBy = [ "default.target" ];
+          };
+        };
+
+        syncthing-init = lib.mkIf doUpdateConfig {
+          Unit = {
+            Description = "Syncthing configuration updater";
+            Requires = [ "syncthing.service" ];
+            After = [ "syncthing.service" ];
+          };
+
+          Service = {
+            Type = "oneshot";
+            ExecStart = updateConfig;
+            RuntimeDirectory = "syncthing-init";
+            RemainAfterExit = true;
+          };
+
+          Install = {
+            WantedBy = [ "default.target" ];
+          };
+        };
+      };
+
+      launchd.agents = {
+        syncthing = {
+          enable = true;
+          config = {
+            ProgramArguments = [
+              "${pkgs.writers.writeBash "syncthing-wrapper" ''
+                ${copyKeys}    # simulate systemd's `syncthing-init.Service.ExecStartPre`
+                exec ${lib.escapeShellArgs syncthingArgs}
+              ''}"
+            ];
+            KeepAlive = {
+              Crashed = true;
+              SuccessfulExit = false;
+            };
+            ProcessType = "Background";
+            StandardOutPath = "${config.home.homeDirectory}/Library/Logs/Syncthing/syncthing-stdout.log";
+            StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/Syncthing/syncthing-stderr.log";
+          };
+        };
+
+        syncthing-init = {
+          enable = doUpdateConfig;
+          config = {
+            ProgramArguments = [ "${updateConfig}" ];
+            ProcessType = "Background";
+            RunAtLoad = true;
+            StandardOutPath = "${config.home.homeDirectory}/Library/Logs/Syncthing/syncthing-init-stdout.log";
+            StandardErrorPath = "${config.home.homeDirectory}/Library/Logs/Syncthing/syncthing-init-stderr.log";
+          };
+        };
+      };
+    })
+
+    (lib.mkIf cfg.tray.enable {
+      assertions = [
+        (lib.hm.assertions.assertPlatform "services.syncthing.tray" pkgs lib.platforms.linux)
+      ];
+
+      home.packages = [ cfg.tray.package ];
+
+      systemd.user.services = {
+        ${cfg.tray.package.pname} = {
+          Unit = {
+            Description = cfg.tray.package.pname;
+            Requires = [ "tray.target" ];
+            After = [
+              "graphical-session.target"
+              "tray.target"
+            ];
+            PartOf = [ "graphical-session.target" ];
+          };
+
+          Service = {
+            ExecStart = "${cfg.tray.package}/bin/${cfg.tray.command}";
+          };
+
+          Install = {
+            WantedBy = [ "graphical-session.target" ];
+          };
+        };
+      };
+    })
+  ];
+}

@@ -514,10 +514,7 @@ mod tests {
                 value: Expr::Int(2),
             },
         ]);
-        assert_eq!(
-            rendered(attrset),
-            "{\n  \"then\" = 1;\n  \"a b\" = 2;\n}\n"
-        );
+        assert_eq!(rendered(attrset), "{\n  \"then\" = 1;\n  \"a b\" = 2;\n}\n");
     }
 
     #[test]

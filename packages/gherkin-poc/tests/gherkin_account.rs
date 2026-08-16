@@ -145,7 +145,10 @@ fn error_reads(world: &mut AccountWorld, expected: String) {
     reason = "cucumber's macro requires steps to take `&mut World`"
 )]
 fn fails_non_positive(world: &mut AccountWorld) {
-    assert_eq!(world.last_result, Some(Err(AccountError::NonPositiveAmount)));
+    assert_eq!(
+        world.last_result,
+        Some(Err(AccountError::NonPositiveAmount))
+    );
 }
 
 #[test]

@@ -1,0 +1,125 @@
+cabal-version:  2.2
+name:           directory
+version:        1.3.8.5
+license:        BSD-3-Clause
+license-file:   LICENSE
+maintainer:     libraries@haskell.org
+bug-reports:    https://github.com/haskell/directory/issues
+synopsis:       Platform-agnostic library for filesystem operations
+description:
+  This library provides a basic set of operations for manipulating files and
+  directories in a portable way.
+category:       System
+build-type:     Configure
+tested-with:    GHC == 8.6.5 || == 8.10.7 || == 9.0.2 || == 9.2.4 || == 9.4.3
+
+extra-tmp-files:
+    autom4te.cache
+    config.log
+    config.status
+    HsDirectoryConfig.h
+
+extra-doc-files:
+    README.md
+    changelog.md
+
+extra-source-files:
+    HsDirectoryConfig.h.in
+    System/Directory/Internal/*.h
+    configure
+    configure.ac
+    directory.buildinfo
+    tests/*.hs
+    tests/util.inl
+
+source-repository head
+    type:     git
+    location: https://github.com/haskell/directory
+
+flag os-string
+  description: Use the new os-string package
+  default: False
+  manual: False
+
+Library
+    default-language: Haskell2010
+    other-extensions: CApiFFI, CPP
+
+    exposed-modules:
+        System.Directory
+        System.Directory.OsPath
+        System.Directory.Internal
+        System.Directory.Internal.Prelude
+    other-modules:
+        System.Directory.Internal.C_utimensat
+        System.Directory.Internal.Common
+        System.Directory.Internal.Config
+        System.Directory.Internal.Posix
+        System.Directory.Internal.Windows
+
+    include-dirs: .
+
+    build-depends:
+        base     >= 4.11.0 && < 4.21,
+        time     >= 1.8.0 && < 1.15
+    if os(windows)
+        build-depends: Win32 >= 2.13.3 && < 2.15
+    else
+        build-depends: unix >= 2.8.0 && < 2.9
+
+    if flag(os-string)
+      build-depends: filepath >= 1.5.0.0, os-string >= 2.0.0
+    else
+      build-depends: filepath >= 1.4.100.0 && < 1.5.0.0
+
+    ghc-options: -Wall
+
+test-suite test
+    default-language: Haskell2010
+    other-extensions: BangPatterns, CPP
+    default-extensions: OverloadedStrings
+    ghc-options:      -Wall
+    hs-source-dirs:   tests
+    main-is:          Main.hs
+    type:             exitcode-stdio-1.0
+    build-depends:    base, directory, filepath, time
+    if os(windows)
+        build-depends: Win32
+    else
+        build-depends: unix
+    other-modules:
+        TestUtils
+        Util
+        -- test-modules-begin
+        CanonicalizePath
+        CopyFile001
+        CopyFile002
+        CopyFileWithMetadata
+        CreateDirectory001
+        CreateDirectoryIfMissing001
+        CurrentDirectory001
+        Directory001
+        DoesDirectoryExist001
+        DoesPathExist
+        FileTime
+        FindFile001
+        GetDirContents001
+        GetDirContents002
+        GetFileSize
+        GetHomeDirectory001
+        GetHomeDirectory002
+        GetPermissions001
+        LongPaths
+        MakeAbsolute
+        MinimizeNameConflicts
+        PathIsSymbolicLink
+        RemoveDirectoryRecursive001
+        RemovePathForcibly
+        RenameDirectory
+        RenameFile001
+        RenamePath
+        Simplify
+        T8482
+        WithCurrentDirectory
+        Xdg
+        -- test-modules-end

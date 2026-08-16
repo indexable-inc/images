@@ -3,7 +3,7 @@ id: 0007-dev-vm-environments
 number: '0007'
 title: Forkable dev VM environments
 status: Accepted
-authors: hari
+authors: harivansh-afk
 created: '2026-06-15'
 updated: '2026-06-15'
 trackingIssue: null

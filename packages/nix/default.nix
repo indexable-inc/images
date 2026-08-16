@@ -2,21 +2,24 @@
   ix,
   lib,
   updateScriptWriter ? null,
+  # Link the in-tree Rust evaluator into the `nix` CLI, so `eval-backend =
+  # rust` and `eval-backend = shadow` have a backend to route to. Off by
+  # default because it adds a Rust toolchain and a vendored cargo registry to
+  # every host that builds this package; hydra turns it on to dogfood the
+  # evaluator under `shadow`, which serves the C++ answer and only records
+  # what the Rust arm got wrong.
+  withRustEval ? false,
 }:
-# The `indexable-inc/nix` fork's `ix-patched` branch, pinned rev by rev as the
-# `nix-src` input and surfaced as `ix.nixSrc`, built through nixpkgs' own
+# The Nix view is surfaced as `ix.nixSrc` and built through nixpkgs' own
 # modular nix packaging so the result is a protocol-compatible drop-in for the
 # 2.34.7 daemon the fleet runs.
 #
-# The source is used as it comes. The only patches applied at build time are
-# nixpkgs' own for this version (`patchesCommon` below, currently just the
-# flaky-darwin-test skip); there is no in-repo series and no `./patches`
+# The source is used as it comes. There is no in-repo series and no `./patches`
 # directory. An earlier revision of this file described one, from a de-forking
 # attempt that was reverted, and the description outlived the mechanism.
 #
 # So the fork's delta is not enumerated here, deliberately: it is the commits
-# between the upstream base and the pinned rev, their intent is recorded per
-# patch in lib/fork-packages.nix, and a list in this comment would be a second
+# between the upstream anchor and the view tip. A list here would be a second
 # copy that drifts. What the delta currently carries, in one line each: the
 # GC-roots client-interrupt daemon crash fix; treating an inaccessible default
 # lookup-path entry as absent (the macOS sandbox denies the host's
@@ -68,42 +71,32 @@ let
   updateScriptArgs = {
     name = "nix-ix-bootstrap-lock-update";
     runtimeInputs = [
-      pkgs.coreutils
       pkgs.git
     ];
-    meta.description = "Resolve the Nix bootstrap source ref into its generated lock";
+    meta.description = "Record the checked Nix view bootstrap output";
     text = ''
       # nu
       const lock_path = ".github/actions/bootstrap-patched-nix/lock.json"
+      const source_path = "views/nix"
 
-      def main [source_ref?: string] {
+      def main [] {
         let current = (open $lock_path)
-        let repository = ($current.repository | into string)
-        let requested = ($source_ref | default $current.revision)
-        let source_repo = (^mktemp -d | str trim)
-        let initialized = (^git init -q $source_repo | complete)
-        if $initialized.exit_code != 0 {
-          ^rm -rf $source_repo
-          error make {msg: $"failed to initialize bootstrap source: ($initialized.stderr | str trim)"}
-        }
-        let fetched = (
-          ^git -C $source_repo fetch --depth 1 $"https://github.com/($repository).git" $requested
-          | complete
+        let actual_system = (
+          ^nix --extra-experimental-features nix-command eval --raw --expr builtins.currentSystem
+          | str trim
         )
-        if $fetched.exit_code != 0 {
-          ^rm -rf $source_repo
-          error make {msg: $"failed to fetch bootstrap source `($requested)`: ($fetched.stderr | str trim)"}
+        if $actual_system != $current.system {
+          error make {msg: $"bootstrap lock requires ($current.system), found ($actual_system)"}
         }
-        let resolved = (^git -C $source_repo rev-parse FETCH_HEAD | complete)
-        ^rm -rf $source_repo
-        if $resolved.exit_code != 0 {
-          error make {msg: $"failed to resolve bootstrap source `($requested)`: ($resolved.stderr | str trim)"}
-        }
-        let revision = ($resolved.stdout | str trim)
-        {repository: $repository, revision: $revision}
+        let source_tree = (^git rev-parse $"HEAD:($source_path)" | str trim)
+        let output_path = (
+          ^nix build --no-link --print-out-paths $"path:./($source_path)#nix-cli"
+          | str trim
+        )
+        {outputPath: $output_path, sourceTree: $source_tree, system: $actual_system}
         | to json --indent 2
         | save --force $lock_path
-        print $"updated ($lock_path) to ($revision)"
+        print $"updated ($lock_path) to ($source_tree)"
       }
     '';
   };
@@ -118,20 +111,6 @@ let
   base = componentPkgs.nixVersions.nixComponents_2_34;
   upstreamVersion = lib.removeSuffix "\n" (builtins.readFile (ix.nixSrc + "/.version"));
 
-  # nixpkgs' own whole-source patches for this version: currently just the
-  # aarch64-darwin flaky-test skip (empty on every other system). `overrideSource`
-  # resets the scope's `patches` to `[]`, so re-apply them here to match a stock
-  # `nix_2_34` build; our own delta rides in `patchedSrc`, not here. Gated on
-  # existence because the patch lives in the consumer's nixpkgs tree, not ours:
-  # nixpkgs 26.11pre dropped it, and a flake that instantiates this package
-  # with such a nixpkgs must still evaluate (we already skip test suites on
-  # darwin, so losing the flaky-test skip changes nothing we run).
-  flakySkipPatch = componentPkgs.path + "/pkgs/tools/package-management/nix/patches/skip-flaky-darwin-tests.patch";
-  patchesCommon =
-    lib.optional
-    (componentPkgs.stdenv.hostPlatform.isDarwin && builtins.pathExists flakySkipPatch)
-    flakySkipPatch;
-
   # curl 8.21.0 started consuming the public curl_multi_wakeup() eventfd from
   # inside curl_multi_perform(). That loses a wakeup for callers which perform
   # before polling, and libstore's file-transfer worker is exactly such a
@@ -139,10 +118,9 @@ let
   # fixed it by giving the threaded resolver a separate internal wakeup pair
   # (https://github.com/curl/curl/issues/22272).
   #
-  # This patch belongs here rather than on `pkgs.curl`, even though the overlay
-  # is the usual home for a nixpkgs fix. curl reaches GHC, rustc, cargo and the
-  # whole python package set as a build input via git-minimal
-  # (ghc -> sphinx -> pytest-xdist -> execnet -> hatch-vcs -> git-minimal ->
+  # This source override belongs here instead of on `pkgs.curl`. Curl reaches
+  # GHC, rustc, cargo and the whole python package set as a build input via
+  # git-minimal (ghc -> sphinx -> pytest-xdist -> execnet -> hatch-vcs -> git-minimal ->
   # curl), so overriding it globally rehashes most of nixpkgs and detaches the
   # tree from cache.nixos.org. Measured on 2026-07-25 against nixpkgs
   # e2587cae: arrow-cpp substitutes as a 28.5 MiB download and souffle as
@@ -151,26 +129,29 @@ let
   # curl as an input, so scoping it to that component keeps the fix where the
   # stall happens and leaves everything else matching the binary cache.
   #
-  # Drop this once nixpkgs ships a curl containing
+  # The view is a Git tree, so it lacks the generated files in Curl's release
+  # tarball. Regenerating them adds an autotools step to this scoped build.
+  # Drop this override once nixpkgs ships a Curl containing
   # 009fd378e8f01c97ebe67a14a41a06d56430f3df. The version assertion makes a
-  # nixpkgs curl bump fail visibly instead of silently carrying a stale patch.
-  curlWithMultiWakeupFix = assert lib.assertMsg (componentPkgs.curl.version == "8.21.0")
-  "remove the curl wakeup patch: expected nixpkgs curl 8.21.0, got ${componentPkgs.curl.version}";
+  # nixpkgs Curl bump fail visibly instead of silently carrying a stale fork.
+  curlForNixStore = assert lib.assertMsg (componentPkgs.curl.version == "8.21.0")
+  "remove the Curl source override: expected nixpkgs Curl 8.21.0, got ${componentPkgs.curl.version}";
     componentPkgs.curl.overrideAttrs (old: {
-      patches =
-        (old.patches or [])
-        ++ [
-          (componentPkgs.fetchurl {
-            name = "curl-8.21.0-fix-multi-wakeup.patch";
-            url = "https://github.com/curl/curl/commit/009fd378e8f01c97ebe67a14a41a06d56430f3df.patch";
-            hash = "sha256-RMFcifj9jDaWY5jNBGqQc2NUoXb3+mHR/1ubrYjpHvc=";
-          })
-        ];
+      src = ix.curlSrc;
+      nativeBuildInputs = (old.nativeBuildInputs or []) ++ [componentPkgs.autoreconfHook];
+      postPatch = ''
+        # shell
+        patchShebangs scripts
+      '';
+      preConfigure = ''
+        # shell
+        substituteInPlace ./config.guess --replace-fail /usr/bin/uname uname
+      '';
     });
 
-  # The source is the indexable-inc/nix jj megamerge (nix-src input): the
-  # upstream 2.34.7 base plus the patch DAG, fetched already patched, so the
-  # only remaining build-time patches are nixpkgs' own (`patchesCommon`).
+  # The source is the complete Nix view tree. The view history carries the
+  # changes on top of upstream 2.34.7, so the only remaining build-time
+  # patches are nixpkgs' own (`patchesCommon`).
   #
   # Identify a patched daemon by version: `nix --version` (and
   # `builtins.nixVersion`) report the version each *component* was compiled
@@ -184,42 +165,110 @@ let
   # rejects a `-` suffix as a "malformed 32-bit x.y.z version number" but
   # tolerates `+`.
   patchedNix = let
-    # nixpkgs' modular components.nix derives each component's sourceRoot
-    # from `patchedSrc.name`; a raw flake input (fetchTree result) carries no
-    # `name`. stdenv unpacks a store-path src into `stripHash $src`, which is
-    # "source" for a github tarball input, so declare exactly that.
-    patchedSrc = ix.nixSrc // {name = "source";};
-    source =
-      {
-        version = upstreamVersion;
-        narHash = ix.nixSrc.narHash;
-      }
-      // lib.optionalAttrs (ix.nixSrc ? rev) {
-        revision = ix.nixSrc.rev;
-      };
-    commonPatches =
-      map (path: {
-        name = baseNameOf path;
-        digest = builtins.hashString "sha256" (builtins.readFile path);
-      })
-      patchesCommon;
+    # nixpkgs' modular components derive sourceRoot from `patchedSrc.name`.
+    # The checked view is a path whose unpacked directory is `nix-source`, so
+    # wrap that path with the one field the nixpkgs boundary requires.
+    patchedSrc = {
+      name = "nix-source";
+      outPath = ix.nixSrc;
+    };
+    source = {
+      version = upstreamVersion;
+      storePath = builtins.unsafeDiscardStringContext (toString ix.nixSrc);
+    };
+    commonPatches = [];
     sourceDigest = builtins.hashString "sha256" (builtins.toJSON {
-      sourceNarHash = source.narHash;
+      inherit (source) storePath;
       inherit commonPatches;
     });
     shortHash = builtins.substring 0 20 sourceDigest;
-    revStamp =
-      if ix.nixSrc ? rev
-      then "g${builtins.substring 0 12 ix.nixSrc.rev}."
-      else "";
-    version = "${upstreamVersion}+ix.${revStamp}h${builtins.substring 0 8 sourceDigest}";
+    version = "${upstreamVersion}+ix.h${builtins.substring 0 8 sourceDigest}";
     provenance = {
-      schema = 2;
+      schema = 3;
       algorithm = "sha256";
       inherit commonPatches sourceDigest source version;
     };
     provenanceJson = (pkgs.formats.json {}).generate "nix-ix-provenance.json" provenance;
-    patchedComponents = (((base.overrideSource patchedSrc).appendPatches patchesCommon).overrideAllMesonComponents
+
+    # The Rust evaluator, compiled in its own derivation and handed to the CLI
+    # as a prebuilt archive rather than built from inside the nix-cli build.
+    #
+    # It has to be done this way here. nixpkgs' modular packaging vendors its
+    # OWN src/nix/package.nix, so the fileset in the fork's copy -- the thing
+    # that would carry ../../rust and the derivation.nix that build.rs
+    # fingerprints -- never applies on this path. Same trap as the `wasm`
+    # feature above, whose in-tree dependency declaration is likewise ignored.
+    # Here the fileset is ours, so both inputs are easy to include.
+    #
+    # `nix build path:./views/nix#nix-cli --arg withRustEval true` still takes
+    # the in-tree cargo path; this prefix only overrides it for this build.
+    nixEvalRs = componentPkgs.stdenv.mkDerivation {
+      pname = "nix-eval-rs";
+      inherit version;
+
+      # The whole patched tree, not a fileset over it. `ix.nixSrc` is a
+      # string-like store path rather than a path, which `lib.fileset` rejects
+      # outright -- and narrowing would buy nothing anyway: this derivation is
+      # keyed on `ix.nixSrc`, so it already rebuilds exactly when the fork
+      # moves. Taking the tree whole also keeps
+      # src/libexpr/primops/derivation.nix in reach, which build.rs hashes to
+      # key the evaluator's compiler fingerprint
+      # (rust/nix-eval-rs/compiler-fingerprint.rs) and without which the crate
+      # fails in the build script before compiling anything.
+      src = ix.nixSrc;
+
+      nativeBuildInputs = [
+        componentPkgs.cargo
+        componentPkgs.rustc
+        componentPkgs.rustPlatform.cargoSetupHook
+        # Do the cargo invocation through nixpkgs' hook rather than by hand.
+        # `componentPkgs` is a CROSS set -- built on x86_64-linux, hosted on
+        # aarch64-apple-darwin -- and a bare `cargo build` targets the
+        # *builder*, so cargo compiles for x86_64-linux while stdenv's CC is
+        # the darwin cross compiler. That combination fed `--target
+        # x86_64-unknown-linux-gnu` to a darwin clang wrapper and died on a
+        # missing wchar.h; had it linked, it would have produced a Linux
+        # archive for a Darwin binary. The hook sets the six things that must
+        # agree: --target, CARGO_BUILD_TARGET, CC_<TRIPLE>, CXX_<TRIPLE>,
+        # CARGO_TARGET_<TRIPLE>_LINKER, and HOST_CC/HOST_CXX (build-platform
+        # compilers, kept distinct from the host-platform ones).
+        componentPkgs.rustPlatform.cargoBuildHook
+      ];
+
+      # Vendored so cargo never reaches the network. The lock pins rnix to a
+      # git rev (a fork adding 1_000-style digit separators), which
+      # importCargoLock cannot hash on its own.
+      cargoDeps = componentPkgs.rustPlatform.importCargoLock {
+        lockFile = ix.nixSrc + "/rust/Cargo.lock";
+        outputHashes = {
+          "rnix-0.12.0" = "sha256-CEBnghY4vr+FTR0d7tUkdjrgXgPtws+EA+Ig8aOM904=";
+        };
+      };
+      cargoRoot = "rust";
+      # The hook installs itself as buildPhase only when buildPhase is unset,
+      # so there is deliberately no buildPhase here. It cds into this subdir
+      # and pins CARGO_TARGET_DIR to <sourceRoot>/target.
+      buildAndTestSubdir = "rust";
+      cargoBuildFlags = ["-p" "nix-eval-rs"];
+      # buildRustPackage would default this; plain mkDerivation does not, and
+      # the hook interpolates it unguarded -- `--profile ""` and a
+      # CARGO_PROFILE__STRIP with an empty infix. Must be set explicitly.
+      cargoBuildType = "release";
+
+      installPhase = ''
+        # shell
+        runHook preInstall
+        mkdir -p "$out/lib" "$out/include"
+        # Cargo emits into <target-dir>/<triple>/release whenever --target is
+        # passed, which the hook always does. Take the triple from nix rather
+        # than from $CARGO_BUILD_TARGET: the hook exports that only for the
+        # cargo process itself, so it is not in scope here.
+        cp "target/${componentPkgs.stdenv.hostPlatform.rust.cargoShortTarget}/release/libnix_eval_rs.a" "$out/lib/"
+        cp rust/nix-eval-rs/include/*.h "$out/include/"
+        runHook postInstall
+      '';
+    };
+    patchedComponents = ((base.overrideSource patchedSrc).overrideAllMesonComponents
       (_: _: {inherit version;}))
       .overrideScope (_: prev: {
       # Patch 0038 (builtins.wasm, NixOS/nix#15380) adds a `wasm` meson
@@ -238,10 +287,30 @@ let
         buildInputs = (old.buildInputs or []) ++ [componentPkgs.wasmtime];
         mesonFlags = (old.mesonFlags or []) ++ ["-Dwasm=enabled"];
       });
-      # See `curlWithMultiWakeupFix` above: libstore owns the file-transfer
+      # See `curlForNixStore` above: libstore owns the file-transfer
       # worker the curl regression stalls, and it is the only component that
-      # takes curl, so the patch is scoped to it instead of `pkgs.curl`.
-      nix-store = prev.nix-store.override {curl = curlWithMultiWakeupFix;};
+      # takes Curl, so the source view is scoped to it instead of `pkgs.curl`.
+      nix-store = prev.nix-store.override {curl = curlForNixStore;};
+      # The Rust evaluator links into the CLI only -- `src/nix/meson.build`
+      # owns the cargo target, and nothing in libexpr/libstore/libfetchers
+      # depends on it -- so this is the one component that needs the flag.
+      #
+      # The meson option defaults to `disabled` rather than `auto` on purpose:
+      # nixpkgs' meson hook passes `--auto-features=enabled` (see the wasm note
+      # above), which would otherwise switch the Rust build on for every
+      # consumer of this package with no cargo in scope.
+      nix-cli =
+        if !withRustEval
+        then prev.nix-cli
+        else
+          prev.nix-cli.overrideAttrs (old: {
+            mesonFlags =
+              (old.mesonFlags or [])
+              ++ [
+                "-Drust-eval=enabled"
+                "-Drust-eval-prefix=${nixEvalRs}"
+              ];
+          });
     });
 
     # The aggregate `nix` package (daemon + client + libs), the same attribute
@@ -279,9 +348,11 @@ let
       installPhase =
         (old.installPhase or "")
         + ''
+          # shell
           install -Dm444 ${provenanceJson} "$out/share/nix/ix-provenance.json"
         ''
         + lib.optionalString isCross ''
+          # shell
           format=$(file -bL "$out/bin/nix")
           # file(1) orders arch and kind differently across versions
           # ("Mach-O 64-bit arm64 executable" vs "... executable arm64").
@@ -296,12 +367,20 @@ let
       meta =
         (old.meta or {})
         // {
-          description = "NixOS/nix ${upstreamVersion} with the index patch DAG (indexable-inc/nix megamerge, h${shortHash})";
+          description = "NixOS/nix ${upstreamVersion} from the index jj view (h${shortHash})";
           mainProgram = "nix";
         };
     });
 
   package = patchedNix;
+
+  # Test 2414 calls wakeup, perform, then poll. Curl 8.21.0 consumed the public
+  # wakeup during perform and left poll asleep until the idle timeout.
+  curlMultiWakeup = curlForNixStore.overrideAttrs (_: {
+    doCheck = true;
+    checkTarget = "test";
+    checkFlags = ["TFLAGS=2414"];
+  });
 
   # The override's real risk is that the whole modular C++ tree still links and
   # the installed binary and provenance file agree with the eval-time identity.
@@ -327,8 +406,8 @@ let
       jq -e \
         --arg version ${lib.escapeShellArg package.version} \
         --arg sourceDigest ${lib.escapeShellArg package.provenance.sourceDigest} \
-        --arg upstreamNarHash ${lib.escapeShellArg package.provenance.source.narHash} \
-        '.schema == 2 and .algorithm == "sha256" and .version == $version and .sourceDigest == $sourceDigest and .source.narHash == $upstreamNarHash' \
+        --arg sourceStorePath ${lib.escapeShellArg package.provenance.source.storePath} \
+        '.schema == 3 and .algorithm == "sha256" and .version == $version and .sourceDigest == $sourceDigest and .source.storePath == $sourceStorePath' \
         ${package}/share/nix/ix-provenance.json >/dev/null
 
       mkdir -p "$out"
@@ -397,7 +476,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildLogFastExit buildStatus daemonSignal fetchGitHeadCache machoRewrite overlayLowerGainsOutput smoke sparseLocks;
+            inherit autoGcInterrupt buildLogFastExit buildStatus curlMultiWakeup daemonSignal fetchGitHeadCache machoRewrite overlayLowerGainsOutput smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {

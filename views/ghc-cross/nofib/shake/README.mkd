@@ -1,0 +1,124 @@
+# The nofib build system
+
+This documents usage of nofib's Shake-based build system. The build system,
+`nofib-run`, automates running of the nofib benchmarks and the collection of a
+variety of compile- and run-time metrics. These metrics are recorded in a
+common semi-structured CSV file format, which can be compared and analysed with
+the included `nofib-compare` utility.
+
+## Usage
+
+The `nofib-run` executable is used to run the benchmark suite and accepts a variety of arguments.
+By default the results of the run will be placed in `_make/{compiler version}`.
+The compiler version component of this path can be overridden with the
+`--output` flag.
+
+For instance (run from the root `nofib` directory),
+```
+$ cabal v2-run -- nofib-run --compiler=/path/to/ghc --output=test
+```
+will produce a number of files in `_make/`:
+```
+$ ls -R _make
+
+_make:
+8.11.0.20200205
+
+_make/8.11.0.20200205:
+gc  imaginary  parallel  real  spectral
+
+_make/8.11.0.20200205/gc:
+cacheprof  circsim  constraints  fibheaps  gc_bench  happy  hash  lcss  linear  mutstore1  mutstore2  spellcheck  treejoin
+
+_make/8.11.0.20200205/gc/cacheprof:
+Arch_x86.hi  Arch_x86.o.result        Arch_x86.o.stats  Generics.hi  Generics.o.result        Generics.o.stats  Main.deps  Main.o         Main.o.results.csv   Main.result
+Arch_x86.o   Arch_x86.o.results.csv   config.txt        Generics.o   Generics.o.results.csv   Main              Main.hi    Main.o.result  Main.o.stats         Main.results.csv
+
+...
+```
+In the case of the `gc/cacheprof` benchmark we see the following were produced:
+
+ * build artifacts from the build of the benchmark (e.g. `*.o`, `*.hi`)
+ * for each object file a `.results.csv` file which contains the metrics for the object size
+ * `Main.results.csv`, which aggregates all of the above `*.results.csv` files
+
+
+A number of classes of metrics are collected:
+
+ * object code size for each module
+ * runtime system statistics (e.g. mutator time, GC time, GC counts,
+   allocations) from the execution of `ghc` while compiling the testcase
+ * runtime system statistics from the execution of the testcase
+
+### Running a subset of tests
+
+Individual tests or groups of tests can be run by pointing the runner to their location.
+
+To benchmark only spectral simple we would add `spectral/simple` to the command line. A full cmd line will then
+look like this:
+
+`cabal run nofib-run -- -w /opt/ghc-9.0.1/bin/ghc spectral/simple -o_simple`
+
+Multiple benchmarks can be passed this way as well. For example to run the `simple` and `dom-lt` benchmarks we might use:
+
+`cabal run nofib-run -- -w /opt/ghc-9.0.1/bin/ghc spectral/simple -o_simple spectral/dom-lt/`
+
+We can also pass a folder to the runner, which will then run all benchmarks within the folder. E.g. to run all the spectral benchmarks we would use:
+
+`cabal run nofib-run -- -w /opt/ghc-9.0.1/bin/ghc -o_simple spectral/`
+
+### Cachegrind
+
+The benchmarks can also be run under valgrind's
+[cachegrind](https://valgrind.org/docs/manual/cg-manual.html) tool with the
+`--cachegrind`, which simulates a simple cache hierarchy to allow (mostly)
+deterministic modelling of instruction counts, memory, and cache effects.
+When running with `--cachegrind` tests can be safely parallelised with the
+`-j<n>` flag.
+
+
+### Performance counters with `perf_events`
+
+The benchmarks can also be run under the Linux `perf` tool for collection of
+(micro-)architectural event counts. This mode is enabled with the `--perf` flag.
+Arguments to `perf` can be passed via `--perf-arg`.
+
+## Data format
+
+The output of `nofib-run` is a simple CSV format (defined by the `Measurements`
+type in `src/Measurements.hs`) represents semi-structured string keys (known as
+`Label`s) and floating-point values. In particular, labels have a path-like
+structure with `/` being the component delimiter.
+
+## Comparing results
+
+```
+$ cabal v2-run nofib-compare -- approach-b.results.csv approach-a.results.csv
+```
+
+nofib-compare supports several different output formats, selectable with the
+`-f` flag, namely: ascii (default), markdown, csv, latex
+
+## Broken tests
+
+Occasionally we have to deal with broken tests. The `--keep-going` flags tries to
+run as many tests as possible even if some of them are broken. This currently only
+allows for ignoring missmatched outputs, not crashes/compilation failures.
+
+There is still the option of listing the non-broken tests explicitly if --keep-going
+doesn't work.
+
+## head.hackage
+
+It's often necessary to use the
+[head.hackage](https://gitlab.haskell.org/ghc/head.hackage) patchset
+to compile the dependencies with development GHC versions. `nofib-run`
+supports this conveniently via the `--head` flag.
+
+First, update the `head.hackage` package index with:
+
+```
+cabal v2-update --project-file=cabal.project.head-hackage head.hackage.ghc.haskell.org
+```
+
+Now run `nofib-run` as usual, adding the `--head` flag to your command-line.

@@ -1,0 +1,11 @@
+[Install]
+WantedBy=test.target
+
+[Service]
+ExecStart=@wlsunset@/bin/wlsunset -L128.8 -T6000 -g0.6 -l12.3 -t3500
+
+[Unit]
+After=test.target
+ConditionEnvironment=WAYLAND_DISPLAY
+Description=Day/night gamma adjustments for Wayland compositors.
+PartOf=test.target

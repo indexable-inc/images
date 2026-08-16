@@ -128,9 +128,148 @@ fn module_rename_comes_from_the_attribute_args() {
 }
 
 #[test]
-fn data_enums_are_rejected() {
+fn the_record_marker_on_an_enum_points_at_enumeration() {
     let message = error_message("mod m { #[unibind::record] pub enum Kind { A, B } }");
-    assert!(message.contains("data enums"), "{message}");
+    assert!(message.contains("#[unibind::enumeration]"), "{message}");
+}
+
+#[test]
+fn unit_enums_lower_with_snake_case_wire_spellings() {
+    let interface = lower(
+        "mod m {
+            /// How a machine is doing.
+            #[unibind::enumeration]
+            pub enum MachineStatus {
+                /// Up and answering.
+                Running,
+                NotFound,
+            }
+            pub fn status() -> MachineStatus { MachineStatus::Running }
+            pub fn set(status: MachineStatus) {}
+        }",
+    )
+    .expect("unit enums lower");
+    let declared = &interface.enums[0];
+    assert_eq!(declared.name, "MachineStatus");
+    assert_eq!(declared.docs, ["How a machine is doing."]);
+    let wires: Vec<&str> = declared
+        .variants
+        .iter()
+        .map(|variant| variant.wire.as_str())
+        .collect();
+    assert_eq!(wires, ["running", "not_found"]);
+    // The Python member identifier is decided once, at lowering, so the two
+    // Python renderers cannot derive it differently.
+    let members: Vec<Option<&str>> = declared
+        .variants
+        .iter()
+        .map(|variant| variant.names.py.as_deref())
+        .collect();
+    assert_eq!(members, [Some("RUNNING"), Some("NOT_FOUND")]);
+    assert_eq!(declared.variants[0].docs, ["Up and answering."]);
+    // Both positions resolve: an enum is owned data, like a record.
+    assert!(matches!(
+        interface.functions[0].ret,
+        Some(ir::Type::Named(ref name)) if name == "MachineStatus"
+    ));
+    assert!(matches!(
+        interface.functions[1].args[0].ty,
+        ir::Type::Named(ref name) if name == "MachineStatus"
+    ));
+}
+
+#[test]
+fn rename_all_sets_the_wire_spelling() {
+    let interface = lower(
+        "mod m {
+            #[unibind::enumeration(rename_all = \"PascalCase\")]
+            pub enum Kind { PhaseStarted, Done }
+            pub fn kind() -> Kind { Kind::Done }
+        }",
+    )
+    .expect("rename_all lowers");
+    let wires: Vec<&str> = interface.enums[0]
+        .variants
+        .iter()
+        .map(|variant| variant.wire.as_str())
+        .collect();
+    assert_eq!(wires, ["PhaseStarted", "Done"]);
+}
+
+#[test]
+fn an_unknown_rename_all_convention_lists_the_ones_that_exist() {
+    let message = error_message(
+        "mod m { #[unibind::enumeration(rename_all = \"Train-Case\")] pub enum K { A } }",
+    );
+    assert!(message.contains("`Train-Case`"), "{message}");
+    assert!(message.contains("SCREAMING_SNAKE_CASE"), "{message}");
+}
+
+#[test]
+fn rename_all_outside_an_enumeration_is_rejected() {
+    let message =
+        error_message("mod m { #[unibind::record(rename_all = \"snake_case\")] pub struct R {} }");
+    assert!(message.contains("`rename_all`"), "{message}");
+}
+
+#[test]
+fn a_variant_with_data_names_the_variant_and_the_shape() {
+    let message = error_message(
+        "mod m { #[unibind::enumeration] pub enum Frame { Phase { at: u32 }, Done } }",
+    );
+    assert!(message.contains("`Frame::Phase`"), "{message}");
+    assert!(message.contains("sum type"), "{message}");
+    assert!(message.contains("not supported yet"), "{message}");
+}
+
+#[test]
+fn a_tuple_variant_is_data_too() {
+    let message = error_message("mod m { #[unibind::enumeration] pub enum Frame { Phase(u32) } }");
+    assert!(message.contains("`Frame::Phase`"), "{message}");
+}
+
+#[test]
+fn variants_colliding_on_the_wire_are_rejected() {
+    let message = error_message(
+        "mod m { #[unibind::enumeration(rename_all = \"lowercase\")] pub enum K { AB, Ab } }",
+    );
+    assert!(message.contains("already claims"), "{message}");
+}
+
+#[test]
+fn an_enumeration_argument_cannot_carry_a_default() {
+    let message = error_message(
+        "mod m {
+            #[unibind::enumeration] pub enum K { A }
+            pub fn go(#[unibind(default = \"a\")] value: K) {}
+        }",
+    );
+    assert!(message.contains("cannot carry a default"), "{message}");
+    assert!(message.contains("`K`"), "{message}");
+}
+
+#[test]
+fn an_empty_enumeration_is_rejected() {
+    let message = error_message("mod m { #[unibind::enumeration] pub enum K {} }");
+    assert!(message.contains("at least one variant"), "{message}");
+}
+
+#[test]
+fn an_enumeration_shares_the_type_namespace() {
+    let message = error_message(
+        "mod m {
+            #[unibind::record] pub struct Kind { pub a: u32 }
+            #[unibind::enumeration] pub enum Kind { A }
+        }",
+    );
+    assert!(message.contains("declared twice"), "{message}");
+}
+
+#[test]
+fn the_enumeration_marker_on_a_struct_points_at_record() {
+    let message =
+        error_message("mod m { #[unibind::enumeration] pub struct K { pub a: u32 } }");
+    assert!(message.contains("#[unibind::record]"), "{message}");
 }
 
 #[test]
@@ -185,7 +324,7 @@ fn export_backends_parses_and_rejects() {
     assert!(
         error
             .message
-            .contains("expected `py`, `ts`, `ex`, or `jvm`"),
+            .contains("expected `py`, `ts`, `ex`, `jvm`, or `wasm`"),
         "{}",
         error.message
     );

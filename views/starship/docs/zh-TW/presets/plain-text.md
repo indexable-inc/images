@@ -1,0 +1,17 @@
+[Return to Presets](./#plain-text-symbols)
+
+## Plain Text Symbols Preset
+
+This preset changes the symbols for each module into plain text. Great if you don't have access to Unicode.
+
+![純文字符號預設樣式的截圖](/presets/img/plain-text-symbols.png)
+
+### 設定
+
+```sh
+starship preset plain-text-symbols -o ~/.config/starship.toml
+```
+
+[點擊此處下載 TOML](/presets/toml/plain-text-symbols.toml){download}
+
+<<< @/public/presets/toml/plain-text-symbols.toml

@@ -17,9 +17,10 @@
       or (throw "claude-code-debug: needs the claude-code sibling (flake package set only)");
   # The stock upstream binary as Anthropic shipped it (autopatchelfed on Linux),
   # exposed by claude-code as `passthru.stockCli`. Debugging the stock bytes
-  # keeps both the house wrapper AND the byte patches the wrapped binary now
-  # carries (the dev-channels gate swap) out of the picture while inspecting
-  # internals.
+  # keeps the house wrapper out of the picture while inspecting internals. The
+  # wrapped binary carries no byte patch at present (claude-code's dev-channels
+  # gate swap is commented out), but that is the wrapper's choice to reverse, so
+  # this stays pinned to the download rather than following it.
   claudeBin = "${claude-code.stockCli}/bin/claude";
 in
   writeNushellApplication {

@@ -1,0 +1,8 @@
+error:
+       … while calling the 'readFile' builtin
+         at /pwd/lang/eval-fail-readFile-dangling-symlink.nix:1:1:
+            1| builtins.readFile ./symlink-reads/dangling
+             | ^
+            2|
+
+       error: path '/pwd/lang/symlink-reads/no-such-target' does not exist

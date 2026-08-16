@@ -175,10 +175,9 @@ impl Mapper<'_> {
                 number.span,
                 "Nix distinguishes integers from floats; use `int` or `float`",
             )),
-            ast::TSType::TSNullKeyword(null) => Err(self.err(
-                null.span,
-                "`null` is only checkable in a union: `T | null`",
-            )),
+            ast::TSType::TSNullKeyword(null) => {
+                Err(self.err(null.span, "`null` is only checkable in a union: `T | null`"))
+            }
             ast::TSType::TSUndefinedKeyword(undefined) => Err(self.err(
                 undefined.span,
                 "`undefined` has no Nix equivalent; use `T | null`",

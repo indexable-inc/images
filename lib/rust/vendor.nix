@@ -200,7 +200,7 @@
         assert lib.assertMsg (
           pkg ? checksum
         ) "Package ${pkg.name} ${pkg.version} is missing a Cargo.lock checksum.";
-          pkgs.runCommand "${pkg.name}-${pkg.version}" {} ''
+          pkgs.runCommand "${pkg.name}-${pkg.version}" {__structuredAttrs = true;} ''
             mkdir "$out"
             tar xf ${crateTarball} -C "$out" --strip-components=1
             printf '{"files":{},"package":"${crateTarball.outputHash}"}' > "$out/.cargo-checksum.json"

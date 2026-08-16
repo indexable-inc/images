@@ -9,26 +9,10 @@
   lists,
   # Shared pins reader, threaded through to policy.nix (see its arg doc).
   pins,
-  # Flips `allowSubstitutes` back on for darwin cross-lane eval-time IFD nodes;
-  # threaded down to vendor.nix / patched-src.nix. See its doc comment.
+  # Flips `allowSubstitutes` back on for darwin cross-lane eval-time IFD nodes.
   evalTimeSubstitutable,
 }: let
   inherit (builtins) toString;
-
-  # llm-clippy bootstraps before the full `ix` handle exists (below cargoUnit /
-  # rustWorkspace), so build the patched-source util here to hand it the same
-  # `ix.patchedSrc` the packageSet path gets. Since the jj megamerge migration
-  # it only applies the fork's nix-derived patches (lib/fork-packages.nix
-  # `derivedPatches`) on top of the already-patched `clippy-src` tree. Reached
-  # via `repoRoot` (not a `../` literal, which the astlog `no-parent-path`
-  # rule bans).
-  patchedSrcFor = pkgs:
-    import (repoRoot + "/lib/util/patched-src.nix") {
-      inherit lib evalTimeSubstitutable pkgs;
-      inherit (pkgs) applyPatches;
-      inherit (import (repoRoot + "/lib/fork-packages.nix")) forkPackages;
-      patchesRoot = repoRoot;
-    };
 
   repoRustToolchainFile = lib.importTOML (repoRoot + "/rust-toolchain.toml");
   repoRustChannel = repoRustToolchainFile.toolchain.channel;
@@ -58,13 +42,11 @@
         evalTimeSubstitutable
         ;
       # llm-clippy bootstraps before cargoUnit / rustWorkspace exist, so the
-      # `ix` closure it receives carries only `buildRustPackage` plus the
-      # `patchedSrc` util that appends its derived patches to `clippy-src`.
+      # `ix` closure it receives carries only `buildRustPackage` and `pkgs`.
       # `buildIxRustTool` adds the richer surface for packages that need it.
       clippyPackage = pkgs.callPackage (packagePath "llm-clippy") {
         ix = {
           inherit buildRustPackage pkgs;
-          patchedSrc = patchedSrcFor pkgs;
         };
         inherit clippy-src;
       };

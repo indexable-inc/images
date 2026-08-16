@@ -1,8 +1,7 @@
 # Patch the `rnix` crate inside a rust tool's vendored cargo dependencies so
 # the tool lexes underscore digit separators in nix numeric literals
-# (`1_000`, `1_000.000_1`, `2.5e1_0`) -- the dialect the patched nix lexer
-# accepts (packages/nix/patches/0014-libexpr-accept-underscore-digit-
-# separators-in-numeri.patch). alejandra, statix, and deadnix all parse nix
+# (`1_000`, `1_000.000_1`, `2.5e1_0`), the dialect the checked Nix view
+# accepts. alejandra, statix, and deadnix all parse nix
 # through rnix, and none of them can format or lint a tree using separators
 # until their tokenizer takes them; their package dirs under packages/nix/
 # apply this to the nixpkgs builds.
@@ -18,10 +17,9 @@
 #
 # The tokenizer moved across rnix releases, so the overlay source is selected
 # by the vendored version, and an unknown version fails the build with
-# instructions (a nixpkgs bump onto a new rnix minor adds a flavor here, not
-# silence). Each flavor is a registry fork of nix-community/rnix-parser
-# (lib/fork-packages.nix entries `rnix-0-12` / `rnix-0-14`): a jj megamerge
-# on the tag the in-use crate was cut from, so the flavor's `src/` tree IS
+# instructions (a nixpkgs bump onto a new rnix minor adds a view, not silence).
+# Each flavor is a jj view based on the matching nix-community/rnix-parser tag,
+# so the flavor's `src/` tree is
 # the patched tokenizer and this overlays it over the vendored crate. The
 # `.cargo-checksum.json` files the nixpkgs vendorers write carry no per-file
 # hashes (`"files": {}`), so the edit needs no checksum rewrite; the guard
@@ -33,9 +31,7 @@
 # `_`). Token text keeps the separators, so a formatter passes them through
 # verbatim.
 {
-  # The two patched rnix-parser source trees (jj megamerge fork inputs,
-  # lib/fork-packages.nix `rnix-0-12` / `rnix-0-14`); their `src/` dirs
-  # replace the vendored crate's.
+  # The two rnix-parser views replace the vendored crate's `src/` directory.
   rnix012Src,
   rnix014Src,
 }: tool:
@@ -109,7 +105,7 @@ tool.overrideAttrs (old: {
           rnix-0.13.* | rnix-0.14.*) rnixOverlay="${rnix014Src}" ;;
           *)
             echo "rnix-digit-separators: no overlay flavor for vendored $version;" >&2
-            echo "add a registry fork (lib/fork-packages.nix) pinned to the matching rnix-parser tag" >&2
+            echo "add an rnix view based on the matching rnix-parser tag" >&2
             exit 1
             ;;
         esac

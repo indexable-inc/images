@@ -1,0 +1,1 @@
+{ appended = "x"; base = "file.txt"; isPath = true; notRelative = true; parent = "dir"; sameRoot = true; }

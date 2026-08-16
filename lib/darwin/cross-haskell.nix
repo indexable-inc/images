@@ -91,7 +91,6 @@
     # Direct dependencies as *cross-built* derivations (each carries
     # `passthru.crossHaskellClosure`).
     deps,
-    patches ? [],
     extraConfigureFlags ? [],
     # Configure the whole package, not `lib:<pname>`: per-component setup
     # cannot see internal sub-libraries (attoparsec:attoparsec-internal),
@@ -105,7 +104,11 @@
     stdenv.mkDerivation {
       pname = "${hsDrv.pname}-${crossGhc.target}";
       inherit (hsDrv) version src;
-      inherit patches postInstall;
+      inherit postInstall;
+
+      # Cross-compiled: test executables would target darwin and cannot run
+      # on the build host; tests/benchmarks stay disabled by design (above).
+      doCheck = false;
 
       strictDeps = true;
       nativeBuildInputs =
@@ -223,7 +226,7 @@
 
       passthru = {
         crossHaskellClosure = closure;
-        inherit hsDrv;
+        inherit crossGhc hsDrv;
       };
 
       # Meta rides along unchanged: the Darwin package alias evaluates this
@@ -233,11 +236,9 @@
     };
 in {
   # Cross-build `root` (a nixpkgs haskellPackages-style derivation) and its
-  # closure. `patchesFor.<pname>` appends patches to that closure member;
-  # `postInstall` and the executable toggle apply to the root package.
+  # closure. `postInstall` and the executable toggle apply to the root package.
   build = {
     root,
-    patchesFor ? {},
     # Extra `Setup configure` flags per closure package, keyed by pname.
     configureFlagsFor ? {},
     postInstall ? "",
@@ -266,7 +267,6 @@ in {
           ${item.key} = buildOne {
             hsDrv = item.drv;
             deps = map (d: self.${d.pname}) (libDepsOf item.drv);
-            patches = patchesFor.${item.key} or [];
             extraConfigureFlags = configureFlagsFor.${item.key} or [];
           };
         })
@@ -275,7 +275,6 @@ in {
     buildOne {
       hsDrv = root;
       deps = map (d: crossSet.${d.pname}) rootDeps;
-      patches = patchesFor.${root.pname} or [];
       extraConfigureFlags = configureFlagsFor.${root.pname} or [];
       inherit extraNativeBuildInputs postInstall;
     };

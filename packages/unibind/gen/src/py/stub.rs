@@ -1,7 +1,8 @@
 //! Render the `.pyi` stub for one interface.
 //!
-//! Ordering is deterministic: module docstring, imports (`os` when an
-//! argument accepts a path), errors, records, object classes, stream
+//! Ordering is deterministic: module docstring, imports (`enum` when the
+//! interface declares one, `os` when an argument accepts a path), errors,
+//! enumerations, records, object classes, stream
 //! classes, functions, and the trailing `__version__` the generated
 //! `pymodule` sets. Everything keeps the interface's declaration order
 //! within its group, so the stub diffs the way the Rust module does.
@@ -20,6 +21,9 @@ pub fn render(interface: &ir::Interface) -> String {
     if !interface.docs.is_empty() {
         blocks.push(docstring(&interface.docs, 0));
     }
+    if !interface.enums.is_empty() {
+        blocks.push("import enum".to_owned());
+    }
     if needs_os_import(interface) {
         blocks.push("import os".to_owned());
     }
@@ -29,6 +33,11 @@ pub fn render(interface: &ir::Interface) -> String {
     }
     for error in &interface.errors {
         error_classes(error, &mut blocks);
+    }
+    // Enumerations before records: a record's `__init__` annotation names
+    // one, and a stub reads top to bottom.
+    for declared in &interface.enums {
+        blocks.push(enum_class(declared));
     }
     for record in &interface.records {
         blocks.push(record_class(interface, record));
@@ -92,7 +101,13 @@ fn needs_os_import(interface: &ir::Interface) -> bool {
     let object_args = interface
         .objects
         .iter()
-        .flat_map(|object| object.constructor.iter().chain(object.methods.iter()))
+        .flat_map(|object| {
+            object
+                .constructor
+                .iter()
+                .chain(object.associated.iter())
+                .chain(object.methods.iter())
+        })
         .flat_map(|function| function.args.iter())
         .map(|arg| &arg.ty);
     function_args
@@ -117,6 +132,36 @@ fn error_classes(error: &ir::ErrorType, blocks: &mut Vec<String>) {
             &variant.docs,
         ));
     }
+}
+
+/// One `enum.StrEnum` subclass per enumeration, one member per variant.
+///
+/// `StrEnum` rather than `Enum`: the member IS the string that crossed, so a
+/// caller's existing `status == "running"` keeps working while `isinstance`,
+/// `in MachineStatus`, and a checker's exhaustiveness all start working. The
+/// extension builds this same class at import through the `enum` module's
+/// functional API, from the same IR, so the stub describes the class that is
+/// really there rather than a parallel declaration.
+fn enum_class(declared: &ir::Enum) -> String {
+    let name = types::py_name(&declared.names, &declared.name);
+    let members: Vec<String> = declared
+        .variants
+        .iter()
+        .map(|variant| {
+            let member = types::py_name(&variant.names, &variant.name);
+            let value = crate::literal::double_quoted(&variant.wire);
+            if variant.docs.is_empty() {
+                format!("    {member} = {value}")
+            } else {
+                format!("    {member} = {value}\n{}", docstring(&variant.docs, 1))
+            }
+        })
+        .collect();
+    class_with_members(
+        &format!("class {name}(enum.StrEnum):"),
+        &declared.docs,
+        &members,
+    )
 }
 
 /// A class whose body is its docstring, or `...` without one.
@@ -232,6 +277,12 @@ fn object_class(interface: &ir::Interface, object: &ir::Object) -> String {
     if let Some(ctor) = &object.constructor {
         members.push(constructor_def(interface, ctor));
     }
+    for factory in &object.associated {
+        let receiver = Receiver::Associated {
+            object: &object.name,
+        };
+        members.push(callable_def(interface, factory, &receiver));
+    }
     let close = resource_close(object);
     for method in &object.methods {
         // The resource surface owns `close`; the backend skips the generic
@@ -334,6 +385,9 @@ fn stream_class(interface: &ir::Interface, export: &StreamExport<'_>) -> String 
 enum Receiver<'a> {
     Free,
     Method { object: &'a str },
+    /// A `@staticmethod` on `object`: indented like a method, but with no
+    /// `self` parameter.
+    Associated { object: &'a str },
 }
 
 /// A function or method stub: literal defaults, `None` for undefaulted
@@ -348,11 +402,11 @@ fn callable_def(
 ) -> String {
     let (indent, owner) = match receiver {
         Receiver::Free => (0, None),
-        Receiver::Method { object } => (1, Some(*object)),
+        Receiver::Method { object } | Receiver::Associated { object } => (1, Some(*object)),
     };
     let name = types::py_name(&function.names, &function.name);
     let mut params = Vec::new();
-    if owner.is_some() {
+    if matches!(receiver, Receiver::Method { .. }) {
         params.push("self".to_owned());
     }
     params.extend(function.args.iter().map(|arg| parameter(interface, arg)));
@@ -365,7 +419,11 @@ fn callable_def(
     };
     let def = def_keyword(function.asyncness);
     let pad = "    ".repeat(indent);
-    let header = format!("{pad}{def} {name}({}) -> {ret}:", params.join(", "));
+    let decorator = match receiver {
+        Receiver::Associated { .. } => format!("{pad}@staticmethod\n"),
+        Receiver::Free | Receiver::Method { .. } => String::new(),
+    };
+    let header = format!("{decorator}{pad}{def} {name}({}) -> {ret}:", params.join(", "));
     def_block(&header, &doc_lines_with_raises(interface, function), indent)
 }
 

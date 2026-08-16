@@ -1,0 +1,6 @@
+GNUmakefile
+dist-install/
+dist-newstyle/
+dist/
+ghc.mk
+.stack-work/

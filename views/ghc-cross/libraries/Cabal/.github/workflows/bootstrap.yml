@@ -1,0 +1,92 @@
+name: Bootstrap
+
+# See: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency.
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+# Note: This workflow file contains the required job "Bootstrap post job". We are using path filtering
+# here to ignore PRs which only change documentation. This can cause a problem, see the workflow file
+# "bootstrap.skip.yml" for a description of the problem and the solution provided in that file.
+on:
+  push:
+    paths-ignore:
+      - 'doc/**'
+      - '**/README.md'
+      - 'CONTRIBUTING.md'
+    branches:
+      - master
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - '**/README.md'
+      - 'CONTRIBUTING.md'
+  release:
+    types:
+      - created
+
+jobs:
+  bootstrap:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        ghc: ["9.0.2", "9.2.8", "9.4.8", "9.6.4", "9.8.2"]
+        include:
+          - os: macos-latest
+            ghc: "9.2.8"
+    name: Bootstrap ${{ matrix.os }} ghc-${{ matrix.ghc }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Work around XDG directories existence (haskell-actions/setup#62)
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          rm -rf ~/.config/cabal
+          rm -rf ~/.cache/cabal
+
+      - uses: actions/cache@v3
+        name: Cache the downloads
+        id: bootstrap-cache
+        with:
+          path: "/home/runner/work/cabal/cabal/_build"
+          key: bootstrap-${{ runner.os }}-${{ matrix.ghc }}-20221115-${{ github.sha }}
+          restore-keys: bootstrap-${{ runner.os }}-${{ matrix.ghc }}-20221115-
+
+      - uses: actions/checkout@v4
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: ${{ matrix.ghc }}
+
+      - name: bootstrap.py
+        run: |
+          GHC_VERSION=${{ matrix.ghc }}
+          # Fetch the bootstrap sources (we use linux dependencies also on macos)
+          python3 bootstrap/bootstrap.py -d bootstrap/linux-$GHC_VERSION.json fetch
+
+          # Bootstrap using the bootstrap sources
+          python3 bootstrap/bootstrap.py --bootstrap-sources bootstrap-sources.tar.gz
+
+      - name: Smoke test
+        run: |
+          _build/bin/cabal --version
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: cabal-${{ matrix.os }}-${{ matrix.ghc }}-bootstrapped
+          path: _build/artifacts/*
+
+  # We use this job as a summary of the workflow
+  # It will fail if any of the previous jobs does it
+  # This way we can use it exclusively in branch protection rules
+  # and abstract away the concrete jobs of the workflow, including their names
+  bootstrap-post-job:
+    if: always()
+    name: Bootstrap post job
+    runs-on: ubuntu-latest
+    # IMPORTANT! Any job added to the workflow should be added here too
+    needs: [bootstrap]
+
+    steps:
+      - run: |
+          echo "jobs info: ${{ toJSON(needs) }}"
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1

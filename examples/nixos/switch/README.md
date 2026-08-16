@@ -40,8 +40,9 @@ nothing is recreated.
 - [`flake.nix`](flake.nix) is the native `ix apply` entrypoint. It exposes
   `nixosConfigurations.devbox`, which `ix apply .#devbox` resolves to the NixOS
   system closure.
-- [`default.ix`](default.ix) declares the VM with `index.lib.mkVm`; the
-  flake exposes it as `ix.default`.
+- [`default.ix`](default.ix) declares the VM with `index.lib.mkVm`; the flake
+  inherits `nixosConfigurations` from that result and binds no `ix.default`,
+  which a fleet result cannot satisfy.
 - [`configuration.nix`](configuration.nix) is the NixOS module you edit.
 
 ## Fork it

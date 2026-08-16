@@ -264,7 +264,9 @@ pub fn render_stream_handle_fn(
         params.len()
     ));
     lines.push("instead of an `Enumerable`, so a process grants demand with".to_owned());
-    lines.push(format!("`{ns}.stream_demand/2` and matches items in its own"));
+    lines.push(format!(
+        "`{ns}.stream_demand/2` and matches items in its own"
+    ));
     lines.push(format!(
         "`handle_info/2` with `{ns}.stream_message/2` instead of blocking on"
     ));
@@ -336,7 +338,10 @@ pub fn stream_helper(out: &mut String, ns: &str) {
     out.push_str("  `:nomatch` for anything that did not come from this stream, so\n");
     out.push_str("  a `handle_info/2` clause can fall through to its own handling.\n");
     out.push_str("  \"\"\"\n");
-    let _ = writeln!(out, "  @spec stream_message({ns}.StreamHandle.t(), term()) ::");
+    let _ = writeln!(
+        out,
+        "  @spec stream_message({ns}.StreamHandle.t(), term()) ::"
+    );
     out.push_str("          {:item, term()} | :done | :nomatch\n");
     out.push_str("  def stream_message(%StreamHandle{ref: ref}, message) do\n");
     out.push_str("    case message do\n");

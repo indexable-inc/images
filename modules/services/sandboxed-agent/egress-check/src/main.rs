@@ -87,9 +87,7 @@ fn probe(target: &str) -> ! {
         .to_socket_addrs()
         .ok()
         .and_then(|mut addrs| addrs.next())
-        .is_some_and(|addr| {
-            TcpStream::connect_timeout(&addr, Duration::from_secs(5)).is_ok()
-        });
+        .is_some_and(|addr| TcpStream::connect_timeout(&addr, Duration::from_secs(5)).is_ok());
     process::exit(if reached { 0 } else { UNREACHED });
 }
 

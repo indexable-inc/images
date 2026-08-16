@@ -137,10 +137,9 @@ impl SmtpSender {
         let password = non_empty(PASSWORD_ENV).context(MissingSnafu { name: PASSWORD_ENV })?;
         let port = match non_empty(PORT_ENV) {
             None => DEFAULT_PORT,
-            Some(value) => value
-                .parse()
-                .ok()
-                .context(BadPortSnafu { value: value.clone() })?,
+            Some(value) => value.parse().ok().context(BadPortSnafu {
+                value: value.clone(),
+            })?,
         };
         let from = non_empty(FROM_ENV).unwrap_or_else(|| username.clone());
         Ok(Some(Self {
@@ -188,12 +187,11 @@ impl SmtpSender {
             .iter()
             .map(|address| parse_address(address))
             .collect::<Result<Vec<_>>>()?;
-        let envelope = lettre::address::Envelope::new(Some(from), to).map_err(|error| {
-            Error::BadAddress {
+        let envelope =
+            lettre::address::Envelope::new(Some(from), to).map_err(|error| Error::BadAddress {
                 address: self.from.clone(),
                 detail: error.to_string(),
-            }
-        })?;
+            })?;
 
         // Port 465 is implicit TLS; everything else is STARTTLS on a plain
         // connection. Both are encrypted -- there is no cleartext path here.
@@ -233,10 +231,12 @@ fn parse_address(address: &str) -> Result<lettre::Address> {
         (Some(open), Some(close)) if open < close => &address[open + 1..close],
         _ => address,
     };
-    bare.trim().parse().map_err(|error: lettre::address::AddressError| Error::BadAddress {
-        address: address.to_owned(),
-        detail: error.to_string(),
-    })
+    bare.trim()
+        .parse()
+        .map_err(|error: lettre::address::AddressError| Error::BadAddress {
+            address: address.to_owned(),
+            detail: error.to_string(),
+        })
 }
 
 fn non_empty(name: &str) -> Option<String> {
@@ -249,7 +249,10 @@ mod tests {
 
     #[test]
     fn a_bare_address_parses() {
-        assert_eq!(parse_address("a@example.com").expect("parses").to_string(), "a@example.com");
+        assert_eq!(
+            parse_address("a@example.com").expect("parses").to_string(),
+            "a@example.com"
+        );
     }
 
     #[test]
@@ -297,6 +300,9 @@ mod tests {
         let described = sender.describe();
 
         assert!(described.contains("smtp.example.com"));
-        assert!(!described.contains("hunter2"), "status output must not carry the credential");
+        assert!(
+            !described.contains("hunter2"),
+            "status output must not carry the credential"
+        );
     }
 }

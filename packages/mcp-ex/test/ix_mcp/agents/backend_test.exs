@@ -28,6 +28,24 @@ defmodule IxMcp.Agents.BackendTest do
     assert {~c"CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS", ~c"1"} in spec.env
   end
 
+  test "claude argv transport puts the brief right after -p and closes stdin" do
+    spec =
+      Backend.command(:claude,
+        bin: "/bin/remote-claude",
+        launcher_args: ["loom-a1", "/root/work"],
+        prompt_transport: :argv,
+        prompt: "the brief"
+      )
+
+    assert spec.stdin == :closed
+    # Directly after -p, ahead of every variadic flag, so nothing can
+    # swallow it; no stdin means no --input-format.
+    assert ["loom-a1", "/root/work", "-p", "the brief" | rest] = spec.args
+    refute "--input-format" in rest
+    assert "--output-format" in rest
+    assert value_of(spec.args, "--disallowedTools") == "Agent,Task"
+  end
+
   test "claude resume and allowed tools" do
     spec =
       Backend.command(:claude,

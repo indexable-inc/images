@@ -95,6 +95,16 @@
   # from the rendered permissions (policy/permissions.nix); pair with omitting
   # the `forceMerge` prompt rule so prompt and permissions agree.
   protectedMergeGuard ? true,
+  # Strict opt-in mode: the index Elixir kernel is the ONLY tool surface. Every
+  # built-in tool and every non-index MCP server is dropped, so the agent does
+  # its work in the kernel's persistent Elixir workspace -- bindings, modules
+  # and jobs that survive across calls -- rather than in ad-hoc shell that
+  # leaves nothing behind. See `agent/policy/permissions.nix` for the policy and
+  # the two-layer enforcement; this wrapper adds the two things only it can do,
+  # which are emptying the built-in tool table and refusing to bake the other
+  # MCP servers at all. Default false, and false is a no-op: the render is
+  # byte-identical to a build that never passed it.
+  kernelOnly ? false,
   # Directories baked into the wrapper as `--add-dir=<dir>` flags, one per entry.
   # `--add-dir` grants tool file-access to a directory, AND (the reason this arg
   # exists) Claude Code loads any `<dir>/.claude/skills/` and `<dir>/CLAUDE.md`
@@ -289,6 +299,12 @@
     cron = false;
     fableFallback = true;
     autoCompactWindow = 300000;
+    # Experimental upstream (mesh teammate sessions + the "Team:" panel).
+    # Off, matching upstream's default. Distinct from subagents, which are
+    # stock: SendMessage to a running or completed subagent works without
+    # this (sub-agents.md: "SendMessage doesn't require agent teams to be
+    # enabled; only structured team-protocol messages ... do").
+    agentTeams = false;
   };
   unknownFeatures = lib.subtractLists (builtins.attrNames defaultFeatures) (builtins.attrNames features);
   effectiveFeatures =
@@ -308,19 +324,40 @@
     // lib.optionalAttrs (effectiveFeatures.autoCompactWindow != null) {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW = toString effectiveFeatures.autoCompactWindow;
     };
-  # SendMessage is gated on this env var as well as on its permission row:
-  # agent teams is experimental, so a permission row without the var renders a
-  # deny-free tool the session never actually shows. Derived from the tool row
-  # (defined below) so the two cannot drift, which is how the row came to
-  # promise a tool no consumer had (#4224).
-  agentTeamsEnv = lib.optionalAttrs effectiveSystemTools.SendMessage {
+  # Historically this env var was derived from the SendMessage tool row
+  # because the tool was believed teams-only (#4224). Upstream docs now state
+  # the opposite: SendMessage-to-subagents is stock, and only team-protocol
+  # messages need teams (sub-agents.md, verified 2026-08-04). So the two are
+  # decoupled: the tool row keeps subagent continuation working (denying it
+  # reintroduces ENG-10401, the duplicate-agent spawn the Agent description
+  # provokes when SendMessage is denied), and teams is an ordinary feature
+  # toggle, default off like upstream.
+  agentTeamsEnv = lib.optionalAttrs effectiveFeatures.agentTeams {
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
   };
   wrapperEnvDefaults = disabledFeatureEnv // agentTeamsEnv;
 
+  # The servers actually baked. Strict mode keeps `index` and drops the rest:
+  # a server that is never baked exports no tools, which is a stronger and
+  # cheaper exclusion than denying its tools by name after loading it. The
+  # by-name denies below are the belt to this braces, and both are derived from
+  # this one attrset rather than from a hand-written list of server names.
+  effectiveMcpServers =
+    if kernelOnly
+    then lib.filterAttrs (name: _: name == "index") mcpServers
+    else mcpServers;
+
+  # Servers strict mode dropped, rendered as whole-server denies. Redundant
+  # with not baking them, deliberately: `--mcp-config` layers MERGE, so a user's
+  # own config or a discovered project `.mcp.json` can still introduce a server
+  # this wrapper never baked, and only the deny reaches that.
+  droppedMcpServerDenies = map (name: "mcp__${name}") (
+    builtins.attrNames (builtins.removeAttrs mcpServers (builtins.attrNames effectiveMcpServers))
+  );
+
   # Whether the index kernel rides along, which decides the tools the kernel
   # supersedes (shared policy below).
-  indexKernelBaked = mcpServers ? index;
+  indexKernelBaked = effectiveMcpServers ? index;
 
   # Disabling a tool here puts its BARE name in `permissions.deny`, which
   # strips the tool's schema from the model context entirely; Claude Code has
@@ -406,10 +443,16 @@
     Workflow = true;
   };
   unknownSystemTools = lib.subtractLists (builtins.attrNames defaultSystemTools) (builtins.attrNames systemTools);
+  # Strict mode turns every row off, and does it AFTER the caller's
+  # `systemTools`, so an explicit `systemTools.Agent = true` cannot punch a hole
+  # in it. That ordering is the point: `kernelOnly` is a boundary the operator
+  # asked for, not a default to be overridden a layer down. A consumer that
+  # wants a tool back turns the mode off.
+  kernelOnlySystemTools = lib.genAttrs (lib.attrNames defaultSystemTools) (_: false);
   effectiveSystemTools =
     if unknownSystemTools != []
     then throw "claude-code.systemTools: unknown tool(s): ${lib.concatStringsSep ", " unknownSystemTools}"
-    else defaultSystemTools // systemTools;
+    else defaultSystemTools // systemTools // lib.optionalAttrs kernelOnly kernelOnlySystemTools;
   disabledSystemTools = builtins.attrNames (lib.filterAttrs (_: enabled: !enabled) effectiveSystemTools);
 
   # The computed settings render leaves this package only through
@@ -507,6 +550,7 @@
       personalStartupContext
       alwaysOnReview
       extraSessionStart
+      kernelOnly
       ;
   };
 
@@ -516,8 +560,8 @@
   # the overlay build (no kernel) keeps them.
   sharedPermissions = import (ix.paths.packagesRoot + "/agent/policy/permissions.nix") {
     inherit lib indexKernelBaked;
-    exaSearchBaked = mcpServers ? exa;
-    inherit protectedMergeGuard;
+    exaSearchBaked = effectiveMcpServers ? exa;
+    inherit protectedMergeGuard kernelOnly;
   };
 
   # Controlled keys this package always owns: the highest-priority settings
@@ -536,6 +580,7 @@
           (extraSettings.permissions.deny or [])
           ++ disabledSystemTools
           ++ sharedPermissions.claude.deniedToolPatterns
+          ++ droppedMcpServerDenies
         );
       };
       # Full Claude hook set rendered from shared agent policy.
@@ -564,7 +609,7 @@
     settingsPolicy;
 
   mcpConfigFile = (formats.json {}).generate "claude-code-mcp-config.json" {
-    inherit mcpServers;
+    mcpServers = effectiveMcpServers;
   };
 
   # Dirs prepended to PATH at launch (the old `--prefix PATH :`): ps for process
@@ -624,7 +669,7 @@
       systemPrompt != null
     ) "--system-prompt-file=${builtins.toFile "claude-code-system-prompt.txt" systemPrompt}"
     # Bake the shared MCP server set when present.
-    ++ lib.optional (mcpServers != {}) "--mcp-config=${mcpConfigFile}"
+    ++ lib.optional (effectiveMcpServers != {}) "--mcp-config=${mcpConfigFile}"
     # `--add-dir` is variadic, so the `=` form is required.
     ++ map (d: "--add-dir=${d}") addDirs
     # Plugins carry namespaced skills, agents, hooks, and MCP declarations.
@@ -654,6 +699,16 @@
       }
       // lib.optionalAttrs (agentAgentsDir != null) {
         IX_CLAUDE_AGENTS_DIR = "${agentAgentsDir}";
+      }
+      # Attest to the kernel-only-guard hook that this invocation really
+      # carries the index kernel. The hook arms machine-wide through
+      # managed-settings.json, which the desktop app and ccd sessions also
+      # read -- but only wrapper launches bake the MCP server, and a guard
+      # that fires without a kernel bricks the session (guards.rs
+      # KERNEL_BAKED_ENV). Launch env, never settings `env`: settings ride
+      # the managed layer to exactly the sessions that must not see this.
+      // lib.optionalAttrs indexKernelBaked {
+        IX_KERNEL_MCP_BAKED = "1";
       };
     env_defaults = lib.mapAttrs (_: toString) wrapperEnvDefaults;
     path_prepend = pathPrepend;
@@ -678,6 +733,28 @@
     inherit (target) hash;
   };
 
+  # The dev-channels-gate byte patch is DISABLED: the launched helper is the
+  # untouched download. Turned off while investigating a Claude Code session
+  # where subagent output disappeared from the transcript and subagents queued
+  # without ever starting, to remove a modified binary as a variable. Nothing
+  # links the patch to either symptom and the mechanism makes it unlikely (the
+  # swap forces one onboarding branch and touches neither the agent scheduler
+  # nor the renderer), so this is variable elimination, not a diagnosis.
+  #
+  # What it costs while off: every interactive launch stops on the full-screen
+  # "WARNING: Loading development channels" confirm, because this wrapper bakes
+  # our own `index` stdio server as a development channel.
+  #
+  # To restore: uncomment the block below and point `patchedBinary` back at the
+  # `applyBytePatch` fold, then invert `tests.dev-channels-gate-intact` back to
+  # asserting the patched bytes. `devChannelsGateAnchor` is commented with the
+  # rest because nothing consumes it while the patch is off; its four entries
+  # were counted against 2.1.220 and are STALE for any later version, since
+  # upstream reminifies the surrounding identifiers between releases. Re-derive
+  # all four from the pinned binaries before turning the patch back on.
+  patchedBinary = nativeBinary;
+
+  /*
   # Shared equal-length byte-patch layer primitive (also used by
   # claude-code-rainbow), so patches compose as a cacheable DAG over the single
   # download. See ./byte-patch.nix.
@@ -745,6 +822,7 @@
     input = nativeBinary;
     rules = devChannelsGatePatch;
   };
+  */
 
   stockCli = stdenv.mkDerivation {
     pname = "claude-code-stock";
@@ -752,6 +830,8 @@
     dontUnpack = true;
     dontStrip = true;
     strictDeps = true;
+    # Upstream Bun-standalone binary repack; nothing to test at build time.
+    doCheck = false;
     nativeBuildInputs = lib.optional stdenv.hostPlatform.isElf autoPatchelfHook;
     installPhase = ''
       # shell
@@ -830,18 +910,44 @@ in
       # 1Password docs confirm the prompt shows "the process being authorized (for
       # example, iTerm2 or Terminal)", not the code signature or CFBundleName:
       # https://developer.1password.com/docs/cli/app-integration-security/
-      helper="$out/libexec/Claude Code"
+      # Everything below `bin/` goes under a per-`binName` directory, because
+      # two wrappers built from this package (the ordinary `claude` and an
+      # overridden strict `claude-kernel`, say) are meant to sit in ONE user
+      # profile, and `buildEnv` refuses any relative path two inputs both
+      # provide. Only `bin/${binName}` was derived from the name, so
+      # `libexec/Claude Code` and the launch spec collided and the profile
+      # would not build at all (ENG-12737, hit on hydra).
+      #
+      # A directory rather than a name suffix, so the property holds for
+      # whatever gets installed here next: anything under this prefix is
+      # collision-free by construction, where a `-${binName}` suffix has to be
+      # remembered once per file. `checks.claude-code-profile-coexist` is the
+      # thing that now fails if that stops being true.
+      #
+      # Both paths are consumed as absolute paths and neither is looked up by
+      # convention, so moving them is safe: the launcher reads the spec from
+      # `IX_LAUNCH_SPEC` (config-launch/src/main.rs, which takes the full path
+      # out of the environment), and the helper's location reaches the launcher
+      # only through the @helper@ substitution below.
+      mkdir -p "$out/libexec/${binName}" "$out/share/${binName}"
+
+      # The BASENAME stays "Claude Code" whatever the command is called: it is
+      # the human-facing product label 1Password shows in its CLI access
+      # prompt, which is why it is spelled this way at all (see above). Only
+      # the directory carries the alias.
+      helper="$out/libexec/${binName}/Claude Code"
       install -m755 ${patchedBinary} "$helper"
 
       # All flag/env/PATH injection lives in `launchSpec` (see its let-binding and
       # `wrapperFlags` for the per-flag rationale); bake the helper's real path
       # into the @helper@ placeholder, then point the launcher at the spec.
-      install -m644 ${launchSpec} $out/share/claude-code-launch-spec.json
-      substituteInPlace $out/share/claude-code-launch-spec.json --subst-var-by helper "$helper"
+      spec="$out/share/${binName}/claude-code-launch-spec.json"
+      install -m644 ${launchSpec} "$spec"
+      substituteInPlace "$spec" --subst-var-by helper "$helper"
       makeBinaryWrapper ${ix.rustWorkspace.units.binaries.config-launch}/bin/config-launch \
         $out/bin/${binName} \
         --inherit-argv0 \
-        --set IX_LAUNCH_SPEC $out/share/claude-code-launch-spec.json
+        --set IX_LAUNCH_SPEC "$spec"
 
       runHook postInstall
     '';
@@ -899,20 +1005,33 @@ in
         # on Linux), i.e. genuinely stock behavior.
         inherit nativeBinary stockCli;
 
-        # Byte proof that the dev-channels gate is disabled in the SHIPPED helper
-        # (post-sign, post-fixup): the silent-load branch is forced
-        # (`if(true||En()` present) and the original gated condition
-        # (`if(!g()||En()`) is gone. Grep needs no exec, so it runs on darwin too
-        # (the AMFI re-sign-then-exec caveat that blocks a runtime smoke does not
-        # apply to byte inspection). The patcher's `expect` gate already fails the
-        # build if the swap does not land exactly once; this additionally proves
-        # signing did not disturb the JS region.
-        tests.dev-channels-gate-disabled = pkgs.runCommand "claude-code-dev-channels-gate-disabled" {} ''
+        # Byte proof that the SHIPPED helper (post-fixup, post-sign) carries no
+        # forced-true dev-channels gate, i.e. the byte patch above is really off
+        # and nothing downstream reintroduced it. Deliberately keyed to strings
+        # that survive reminification, NOT to `devChannelsGateAnchor`: those
+        # anchors are re-derived by hand per upstream binary, and while the patch
+        # is off there is nothing a per-version anchor would catch which
+        # `patchedBinary = nativeBinary` does not already guarantee by
+        # construction. Invert this back to the anchor-keyed assertion when the
+        # patch returns, since then the anchors are load-bearing again.
+        #
+        # `if(true||` was counted as absent from the stock 2.1.220 and 2.1.221
+        # darwin-arm64 downloads, so a hit means a patch landed rather than
+        # upstream minifying it that way. The `"firstParty"` check keeps the
+        # absence assertion from passing vacuously against a JS region grep can
+        # no longer read (compression, a packaging change, a corrupted fixup).
+        #
+        # Both are `grep -c`, i.e. counts of matching LINES in a binary that is
+        # not one line: `"firstParty"` lands on 46 of them in stock 2.1.221. So
+        # these are presence and absence assertions, and the thresholds must stay
+        # `-ge 1` and `-eq 0`; an `-eq 1` here fails on the stock download, which
+        # is how this comment got written.
+        tests.dev-channels-gate-intact = pkgs.runCommand "claude-code-dev-channels-gate-intact" {__structuredAttrs = true;} ''
           helper="${finalAttrs.finalPackage}/libexec/Claude Code"
-          patched=$(grep -c 'if(true||En()' "$helper" || true)
-          gated=$(grep -c 'if(!g()||En()' "$helper" || true)
-          [ "$patched" -ge 1 ] || { echo "FAIL: gate-disabled bytes absent" >&2; exit 1; }
-          [ "$gated" -eq 0 ] || { echo "FAIL: original gate condition present ($gated)" >&2; exit 1; }
+          forced=$(grep -cF 'if(true||' "$helper" || true)
+          readable=$(grep -cF '"firstParty"' "$helper" || true)
+          [ "$readable" -ge 1 ] || { echo "FAIL: gate region not greppable in the shipped helper; the absence check below would pass vacuously" >&2; exit 1; }
+          [ "$forced" -eq 0 ] || { echo "FAIL: forced-true gate present on $forced line(s); the byte patch is not off" >&2; exit 1; }
           touch "$out"
         '';
 

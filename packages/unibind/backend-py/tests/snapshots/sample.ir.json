@@ -469,6 +469,7 @@
         "ret": null,
         "throws": "SampleError"
       },
+      "associated": [],
       "methods": [
         {
           "name": "len",
@@ -553,6 +554,7 @@
       ],
       "resource": false,
       "constructor": null,
+      "associated": [],
       "methods": [
         {
           "name": "advance",

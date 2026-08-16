@@ -85,10 +85,16 @@ impl Reachability {
         let (dst_start, src_start) = (dst * self.words, src * self.words);
         let (dst_row, src_row) = if dst_start < src_start {
             let (left, right) = self.data.split_at_mut(src_start);
-            (&mut left[dst_start..dst_start + self.words], &right[..self.words])
+            (
+                &mut left[dst_start..dst_start + self.words],
+                &right[..self.words],
+            )
         } else {
             let (left, right) = self.data.split_at_mut(dst_start);
-            (&mut right[..self.words], &left[src_start..src_start + self.words])
+            (
+                &mut right[..self.words],
+                &left[src_start..src_start + self.words],
+            )
         };
         for (into, from) in dst_row.iter_mut().zip(src_row) {
             *into |= *from;
@@ -285,11 +291,7 @@ fn critical_path(plan: &Plan, depth: &[u32]) -> Vec<usize> {
         return Vec::new();
     };
     let mut path = vec![at];
-    while let Some(&next) = plan.nodes[at]
-        .deps
-        .iter()
-        .max_by_key(|&&dep| depth[dep])
-    {
+    while let Some(&next) = plan.nodes[at].deps.iter().max_by_key(|&&dep| depth[dep]) {
         path.push(next);
         at = next;
     }

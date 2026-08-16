@@ -1,0 +1,33 @@
+[package]
+name = "loom-launch"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Loom control-VM launchers: identity-watched zellij workspace and claude lead session, key-loading claude wrapper, remote exec into a fork, and the imperative VM provisioner"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+nix = { workspace = true, features = ["net", "signal"] }
+
+[[bin]]
+name = "loom-session"
+path = "src/bin/loom_session.rs"
+
+[[bin]]
+name = "loom-lead"
+path = "src/bin/loom_lead.rs"
+
+[[bin]]
+name = "loom-claude"
+path = "src/bin/loom_claude.rs"
+
+[[bin]]
+name = "loom-remote-claude"
+path = "src/bin/loom_remote_claude.rs"
+
+[[bin]]
+name = "loom-provision"
+path = "src/bin/loom_provision.rs"

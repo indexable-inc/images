@@ -1,0 +1,184 @@
+name: Quick jobs
+
+# See: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency.
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  release:
+    types:
+      - created
+
+env:
+  GHC_FOR_QUICK_JOBS: 9.6.5
+
+jobs:
+  meta:
+    name: Meta checks
+    runs-on: ubuntu-latest
+    env:
+      cabal_build: >-
+        cabal build --builddir=dist-newstyle-meta --project-file=cabal.meta.project
+        gen-cabal-macros
+        gen-paths-module
+        gen-spdx
+        gen-spdx-exc
+    # This job is not run in a container, any recent GHC should be fine
+    steps:
+      - name: ghcup
+        run: |
+          ghcup --version
+          ghcup config set cache true
+          ghcup install ghc $GHC_FOR_QUICK_JOBS
+          ghcup set ghc $GHC_FOR_QUICK_JOBS
+      - name: Haskell versions
+        run: |
+          ghc --version
+          cabal --version
+      - name: Update Hackage index
+        run: cabal v2-update
+      - uses: actions/checkout@v4
+      - name: Generate build plan for correct cache key
+        run: ${{ env.cabal_build }} --dry-run
+      - name: Restore cached dependencies
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ~/.local/state/cabal
+          key: linux-store-meta-${{ hashfiles('dist-newstyle-meta/cache/plan.json') }}
+          restore-keys: linux-store-meta-
+      - name: Build tools
+        run: ${{ env.cabal_build }}
+      - name: Regenerate files
+        run: |
+          make -B spdx
+          make -B templates
+      - name: Check that diff is clean
+        run: |
+          git status > /dev/null
+          git diff-files -p --exit-code
+      - name: Cache dependencies
+        uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.local/state/cabal
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  doctest:
+    name: Doctest Cabal
+    runs-on: ubuntu-latest
+    steps:
+      # It is complicated to get a proper cache key for the dependencies of a package
+      # (here: doctest) that we just `cabal install`.
+      # So, as a heuristics we update the cache once per day.
+      # Updating it with each run would be an alternative, but we a short of cache space,
+      # and this would generate too many new caches.
+      - name: Use date as cache key
+        run: |
+          echo "DATE=$(date +'%Y-%m-%d')" >> "${GITHUB_ENV}"
+      - name: Restore cached dependencies
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ~/.local/state/cabal
+          key: linux-store-doctest-${{ env.DATE }}
+          restore-keys: linux-store-doctest
+      - name: ghcup
+        run: |
+          ghcup --version
+          ghcup config set cache true
+          ghcup install ghc $GHC_FOR_QUICK_JOBS
+          ghcup set ghc $GHC_FOR_QUICK_JOBS
+      - name: Haskell versions
+        run: |
+          ghc --version
+          cabal --version
+      - name: Update Hackage index
+        run: cabal v2-update
+      - uses: actions/checkout@v4
+      - name: Install doctest
+        run: make doctest-install
+      - name: Doctest
+        run: make doctest
+      - name: Cache dependencies
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.local/state/cabal
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  buildinfo:
+    name: Check Field Syntax Reference
+    runs-on: ubuntu-latest
+    env:
+      cabal_build: cabal build buildinfo-reference-generator
+    steps:
+      - name: Set PATH
+        run: |
+          echo "$HOME/.cabal/bin" >> $GITHUB_PATH
+      - uses: actions/cache@v3
+        with:
+          path: ~/.cabal/store
+          key: linux-store-buildinfo-doc-diff
+      - name: ghcup
+        run: |
+          ghcup --version
+          ghcup config set cache true
+          ghcup install ghc $GHC_FOR_QUICK_JOBS
+          ghcup set ghc $GHC_FOR_QUICK_JOBS
+      - name: Haskell versions
+        run: |
+          ghc --version
+          cabal --version
+      - name: Update Hackage index
+        run: cabal v2-update
+      - uses: actions/checkout@v4
+      - name: Generate build plan for correct cache key
+        run: ${{ env.cabal_build }} --dry-run
+      - name: Restore cached dependencies
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: ~/.local/state/cabal
+          key: linux-store-buildinfo-doc-diff-${{ hashfiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: linux-store-buildinfo-doc-diff
+      - name: Build buildinfo-reference-generator
+        run: ${{ env.cabal_build }}
+      - name: Are buildinfo docs up to date?
+        run: make doc/buildinfo-fields-reference.rst
+      - name: Cache dependencies
+        uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.local/state/cabal
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  release-project:
+    name: Check Release Project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set PATH
+        run: |
+          echo "$HOME/.cabal/bin" >> $GITHUB_PATH
+      - name: ghcup
+        run: |
+          ghcup --version
+          ghcup config set cache true
+          ghcup install ghc $GHC_FOR_QUICK_JOBS
+          ghcup set ghc $GHC_FOR_QUICK_JOBS
+      - name: Haskell versions
+        run: |
+          ghc --version
+          cabal --version
+      - name: Update Hackage Index
+        run: cabal v2-update
+      - uses: actions/checkout@v4
+      - name: Check Release with Pinned Hackage
+        run: cabal build all --dry-run --project-file=cabal.release.project
+      - name: Check Release with Latest Hackage
+        run: cabal build all --dry-run --project-file=cabal.release.project --index-state="hackage.haskell.org HEAD"

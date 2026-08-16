@@ -10,6 +10,9 @@ tags:
   - infrastructure
 ---
 
+This July 2026 design was superseded in August 2026 when ix moved fork
+histories into checked jj views in the ix repository.
+
 All 14 maintained forks moved from in-repo patch series (`patches/*.patch`
 plus a generated `dag.json`) to real fork repos where every patch is a git
 commit whose parents are its true dependencies. An "ix megamerge" commit

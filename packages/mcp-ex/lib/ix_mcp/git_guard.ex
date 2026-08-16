@@ -62,14 +62,25 @@ defmodule IxMcp.GitGuard do
   subcommand outside the closed set, and every read.
   """
   @spec check!(binary(), [binary()], Path.t()) :: :ok
-  def check!(cmd, args, cd) do
+  def check!(cmd, args, cd), do: check!(cmd, args, cd, [])
+
+  @doc """
+  The same check, given the child's `env` as well.
+
+  `GIT_DIR`/`GIT_WORK_TREE` aim git somewhere other than its cwd, so a guard
+  that never sees the env can be stepped around by exporting one of them:
+  `git add -A` with `env: [{"GIT_DIR", protected}]` was measured ALLOWED against
+  a protected checkout while the plain form was refused.
+  """
+  @spec check!(binary(), [binary()], Path.t(), [{binary(), binary() | false}]) :: :ok
+  def check!(cmd, args, cd, env) do
     with false <- PrimaryCheckouts.flag_set?(@kill_switch),
          globs when globs != [] <- PrimaryCheckouts.globs(),
          true <- git?(cmd),
          {sub, rest} <- split_subcommand(args),
          {:ok, reason} <- mutation(sub, rest),
          target when is_binary(target) <-
-           PrimaryCheckouts.protected_dir(target_dir(args, cd), globs) do
+           PrimaryCheckouts.protected_dir(target_dir(args, cd, env), globs) do
       raise ArgumentError, refusal(sub, reason, target)
     else
       _allowed -> :ok
@@ -99,14 +110,18 @@ defmodule IxMcp.GitGuard do
 
   defp git?(cmd), do: Path.basename(cmd) == "git"
 
-  # The subcommand is the first argument that is not a global option. `-C`
-  # and `-c` take a value, so their argument is skipped rather than mistaken
-  # for the subcommand.
+  # The subcommand is the first argument that is not a global option. The flags
+  # below take a value, so their argument is skipped rather than mistaken for the
+  # subcommand -- `git --git-dir P/.git add -A` otherwise read "P/.git" as the
+  # subcommand, found it outside the mutating set, and allowed a staging command
+  # into a protected checkout.
+  @valued_globals ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]
+
   defp split_subcommand(args), do: split_subcommand(args, [])
 
   defp split_subcommand([], _seen), do: :no_subcommand
 
-  defp split_subcommand([flag, _value | rest], seen) when flag in ["-C", "-c"],
+  defp split_subcommand([flag, _value | rest], seen) when flag in @valued_globals,
     do: split_subcommand(rest, seen)
 
   defp split_subcommand([<<"-", _::binary>> | rest], seen), do: split_subcommand(rest, seen)
@@ -156,11 +171,53 @@ defmodule IxMcp.GitGuard do
 
   # `git -C <dir>` aims the command at `<dir>`, whatever the spawn's cwd is.
   # A relative `-C` resolves against that cwd, the way git resolves it.
-  defp target_dir(args, cd) do
-    case Enum.chunk_every(args, 2, 1, :discard) |> Enum.find(&match?(["-C", _dir], &1)) do
-      ["-C", dir] -> Path.expand(dir, cd)
-      nil -> Path.expand(cd)
+  #
+  # `--work-tree`/`--git-dir` and their GIT_WORK_TREE/GIT_DIR env twins aim it
+  # somewhere else again, and reading only `-C` meant
+  # `git --git-dir P/.git --work-tree P add -A` reached a protected checkout
+  # unrefused. Precedence follows git's own: an explicit flag beats the
+  # environment, a work tree beats a git dir, and a bare git dir stands for its
+  # parent (P/.git -> P), which is the checkout a mutation would land in.
+  defp target_dir(args, cd, env) do
+    from_c = Path.expand(valued_global(args, "-C") || ".", cd)
+    work_tree = valued_global(args, "--work-tree") || env_value(env, "GIT_WORK_TREE")
+    git_dir = valued_global(args, "--git-dir") || env_value(env, "GIT_DIR")
+
+    cond do
+      is_binary(work_tree) -> Path.expand(work_tree, from_c)
+      is_binary(git_dir) -> git_dir |> Path.expand(from_c) |> strip_git_dir()
+      true -> from_c
     end
+  end
+
+  defp strip_git_dir(dir) do
+    if Path.basename(dir) == ".git", do: Path.dirname(dir), else: dir
+  end
+
+  # Both spellings: `--git-dir P` and `--git-dir=P`.
+  defp valued_global(args, flag) do
+    prefix = flag <> "="
+
+    case Enum.find(args, &String.starts_with?(&1, prefix)) do
+      nil -> separate_value(args, flag)
+      arg -> String.replace_prefix(arg, prefix, "")
+    end
+  end
+
+  defp separate_value(args, flag) do
+    args
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.find_value(fn
+      [^flag, value] -> value
+      _other -> nil
+    end)
+  end
+
+  defp env_value(env, name) do
+    Enum.find_value(env, fn
+      {^name, value} when is_binary(value) -> value
+      _other -> nil
+    end)
   end
 
   defp refusal(sub, reason, target) do

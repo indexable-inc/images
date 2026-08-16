@@ -52,7 +52,9 @@ pub fn state(build_dir: &Path, checkout: &Path) -> Result<State> {
                 "meson-info/meson-info.json"
             )));
         }
-        Err(error) => return Err(error).with_context(|| format!("reading {}", info_path.display())),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", info_path.display()));
+        }
     };
     let info: MesonInfo =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", info_path.display()))?;
@@ -101,7 +103,9 @@ pub fn ninja(build_dir: &Path, target: &str, extra: &[String], quiet: bool) -> R
 /// There is deliberately no fallback: a failed ninja build means the tree does
 /// not compile, and quietly reaching for `nix build` would hide that.
 fn run(mut command: Command, what: &str, quiet: bool) -> Result<Duration> {
-    command.stdout(progress_sink(quiet)?).stderr(Stdio::inherit());
+    command
+        .stdout(progress_sink(quiet)?)
+        .stderr(Stdio::inherit());
     let started = Instant::now();
     let status = command.status().with_context(|| {
         format!("spawning {what} (is this running inside the checkout's dev shell?)")

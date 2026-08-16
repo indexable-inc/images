@@ -44,6 +44,10 @@ in
     strictDeps = true;
     nativeBuildInputs = [unzip];
 
+    # Asset extraction from the client jar; `unzip` already fails loudly on
+    # a missing path, which is the only failure mode to test.
+    doCheck = false;
+
     # `unzip -j` flattens the archive paths into our own flat layout; the `*.png`
     # globs also drop the sibling `.mcmeta` files we do not use. Each group fails
     # loudly (`unzip` exits non-zero) if a path stops existing in a future jar, so

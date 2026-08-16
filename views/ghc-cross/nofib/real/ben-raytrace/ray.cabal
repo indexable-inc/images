@@ -1,0 +1,76 @@
+cabal-version:       >=1.10
+name:                ray
+version:             0.1.0.0
+-- synopsis:
+-- description:
+-- bug-reports:
+license:             BSD3
+author:              Ben Gamari
+maintainer:          ben@smart-cactus.org
+copyright:           (c) 2020 Ben Gamari
+-- category:
+build-type:          Simple
+
+-------------------------------------------------
+-- PRNG implementations
+-------------------------------------------------
+flag rng-lehmer64-mut
+  description: Use the mutable Lehmer64 PRNG.
+  default: False
+  manual: True
+
+flag rng-lehmer64
+  description: Use the pure Lehmer64 PRNG.
+  default: False
+  manual: True
+
+flag rng-wyhash64
+  description: Use the pure Wyhash64 PRNG.
+  default: False
+  manual: True
+
+-------------------------------------------------
+-- Sampler monad
+-------------------------------------------------
+
+flag unboxed-sampler
+  description: Use the unboxed SamplerM implementation.
+  default: False
+  manual: True
+
+
+executable ray
+  main-is:             Main.hs
+  other-modules:       Colour, Figure, Image, Interval, Ray, Sampler, Vector, Matrix, Mesh,
+                       Random, Random.Lehmer64, Random.Wyhash64, RandomDist,
+                       BoundingBox, BVH, UnboxedBVH,
+                       SamplerMonad,
+                       Scene.Type, Scene.Scene1, Scene.Scene2, STL
+  if flag(rng-lehmer64-mut)
+    other-modules:     SamplerMonad.STRand Random.Lehmer64Mut
+    cpp-options:       -DRNG_LEHMER64_MUT
+
+  if flag(rng-lehmer64)
+    other-modules:     SamplerMonad.Unboxed, SamplerMonad.Naive
+    cpp-options:       -DRNG_LEHMER64
+
+  if flag(rng-wyhash64)
+    other-modules:     SamplerMonad.Unboxed, SamplerMonad.Naive
+    cpp-options:       -DRNG_WYHASH64
+
+  if flag(unboxed-sampler)
+    cpp-options:       -DUNBOXED_SAMPLER
+
+  ghc-options:         -Wall -O2 -threaded -rtsopts -eventlog -fprint-potential-instances
+  cpp-options:         -DRNG_SIGNED
+  build-depends:       base,
+                       binary,
+                       bytestring,
+                       array,
+                       parallel,
+                       primitive,
+                       transformers,
+                       mtl,
+                       ghc-prim,
+                       random >= 1.2
+  default-language:    Haskell2010

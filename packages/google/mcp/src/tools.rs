@@ -387,9 +387,9 @@ impl GoogleMcp {
                 .chain(&message.bcc)
                 .cloned()
                 .collect();
-            smtp.send(&recipients, &raw)
-                .await
-                .map_err(|error| ErrorData::new(ErrorCode::INTERNAL_ERROR, error.to_string(), None))?;
+            smtp.send(&recipients, &raw).await.map_err(|error| {
+                ErrorData::new(ErrorCode::INTERNAL_ERROR, error.to_string(), None)
+            })?;
             return Ok(json!({
                 "sent": true,
                 "via": "smtp",
@@ -476,7 +476,11 @@ impl GoogleMcp {
         &self,
         Parameters(args): Parameters<MailDraftListArgs>,
     ) -> Result<String, ErrorData> {
-        json_tool_result(self.gmail()?.list_drafts(args.max_results.unwrap_or(20)).await)
+        json_tool_result(
+            self.gmail()?
+                .list_drafts(args.max_results.unwrap_or(20))
+                .await,
+        )
     }
 
     #[tool(description = "Delete a Gmail draft by id.")]

@@ -1,0 +1,51 @@
+[package]
+authors.workspace = true
+build = "build.rs"
+description = "Nushell's core language commands"
+repository = "https://github.com/nushell/nushell/tree/main/crates/nu-cmd-lang"
+edition.workspace = true
+license.workspace = true
+name = "nu-cmd-lang"
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+nu-engine.workspace = true
+nu-experimental.workspace = true
+nu-parser.workspace = true
+nu-protocol.workspace = true
+nu-utils.workspace = true
+nu-cmd-base.workspace = true
+
+itertools = { workspace = true }
+semver = { workspace = true }
+shadow-rs = { version = "2.0", default-features = false }
+
+[build-dependencies]
+shadow-rs = { version = "2.0", default-features = false, features = ["build"] }
+
+[dev-dependencies]
+nu-test-support = { path = "../nu-test-support" }
+
+quickcheck = { workspace = true }
+quickcheck_macros = { workspace = true }
+miette = { workspace = true }
+
+[features]
+default = ["os"]
+os = [
+  "nu-engine/os",
+  "nu-protocol/os",
+  "nu-test-support/os",
+  "nu-utils/os",
+]
+plugin = [
+  "nu-protocol/plugin",
+  "os",
+]

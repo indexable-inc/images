@@ -1,0 +1,9 @@
+{
+  systemd-services = ./services.nix;
+  systemd-packages = ./packages.nix;
+  systemd-session-variables = ./session-variables.nix;
+  systemd-user-config = ./user-config.nix;
+  systemd-empty-user-config = ./empty-user-config.nix;
+  systemd-slices = ./slices.nix;
+  systemd-timers = ./timers.nix;
+}

@@ -267,6 +267,11 @@ impl Session {
             cols,
             scrollback_lines: 50_000,
             env: vec![("FLEETVIEW".to_owned(), "1".to_owned())],
+            // Fleetview keeps its own status inference until it consumes
+            // tui::publish (ENG-12457 phase 6); declaring the agent here
+            // would matter only to a dashboard producer this binary does not
+            // run yet.
+            agent: None,
         };
         let instance = manager.spawn("sh".to_owned(), vec!["-c".to_owned(), script], config)?;
 

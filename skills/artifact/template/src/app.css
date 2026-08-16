@@ -1,0 +1,224 @@
+/* Theme tokens. One accent; semantic colors only for their meaning. */
+:root {
+  color-scheme: light dark;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+html[data-theme='light'] {
+  --bg: #ffffff;
+  --bg-raised: #f7f7f5;
+  --fg: #1d1d1c;
+  --fg-muted: #6f6e69;
+  --border: #e8e8e6;
+  --accent: #2f6fed;
+  --accent-soft: rgba(47, 111, 237, 0.09);
+  /* Diff foregrounds are checked against the *tinted* row, not the page:
+     #1a7f37 on the green tint was 4.46:1, just under AA. */
+  --add-fg: #15672c;
+  --add-bg: rgba(46, 160, 67, 0.12);
+  --del-fg: #b4232e;
+  --del-bg: rgba(248, 81, 73, 0.12);
+  --warn-fg: #8a6116;
+  --warn-bg: rgba(212, 153, 34, 0.1);
+  --code-bg: #f7f7f5;
+  --chip-bg: #f7f7f5;
+  --chip-border: #e8e8e6;
+}
+
+html[data-theme='dark'] {
+  --bg: #191919;
+  --bg-raised: #202020;
+  --fg: #e6e5e1;
+  --fg-muted: #9b9a95;
+  --border: #2e2e2c;
+  --accent: #6c9cf5;
+  --accent-soft: rgba(108, 156, 245, 0.13);
+  /* On the tinted diff rows #57ab5a measured 5.0:1 and #e5534b only
+     4.1:1; these clear AA with room to spare (9.3:1 and 7.7:1). */
+  --add-fg: #7ee787;
+  --add-bg: rgba(70, 149, 74, 0.16);
+  --del-fg: #ffa198;
+  --del-bg: rgba(229, 83, 75, 0.14);
+  --warn-fg: #e0b155;
+  --warn-bg: rgba(212, 167, 87, 0.12);
+  --code-bg: #202020;
+  /* Inline code chips need to read as a chip. #202020 on #191919 is
+     1.1:1 -- invisible -- so the chip gets its own lighter surface and
+     a border rather than borrowing the code-block background. */
+  --chip-bg: #3a3a36;
+  --chip-border: #4d4d48;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Notion-like page measure: a calm single column with generous air. */
+.page {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 6rem;
+}
+
+.prose h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+}
+
+.prose h2 {
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 2.25rem 0 0.6rem;
+}
+
+.prose h3 {
+  font-size: 1.05rem;
+  font-weight: 650;
+  margin: 1.75rem 0 0.4rem;
+}
+
+.prose p {
+  margin: 0.7rem 0;
+}
+
+.prose a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+.prose a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4rem;
+  margin: 0.7rem 0;
+}
+
+.prose li {
+  margin: 0.25rem 0;
+}
+
+.prose blockquote {
+  margin: 1rem 0;
+  padding: 0.1rem 1.25rem;
+  color: var(--fg-muted);
+  background: var(--bg-raised);
+  border-radius: 8px;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+}
+
+.prose :not(pre) > code {
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-border);
+  border-radius: 5px;
+  padding: 0.1em 0.35em;
+}
+
+.prose table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.25rem 0;
+  font-size: 0.92rem;
+}
+
+.prose th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.prose th,
+.prose td {
+  padding: 0.5rem 0.9rem 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Header rule reads as the head/body divider, so give it more weight
+   than the per-row rules it sits above. */
+.prose thead th {
+  border-bottom: 2px solid var(--border);
+}
+
+.prose td:last-child,
+.prose th:last-child {
+  padding-right: 0;
+}
+
+.prose img,
+.prose svg {
+  max-width: 100%;
+}
+
+.prose figure {
+  margin: 1.5rem 0;
+}
+
+.prose figcaption {
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  margin-top: 0.5rem;
+}
+
+/* Code blocks: shiki emits both palettes as CSS variables
+   (defaultColor: false); the active theme picks one. */
+.prose pre.shiki {
+  margin: 1.25rem 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+html[data-theme='light'] .shiki,
+html[data-theme='light'] .shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+html[data-theme='dark'] .shiki,
+html[data-theme='dark'] .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
+html[data-theme='light'] .prose pre.shiki,
+html[data-theme='dark'] .prose pre.shiki {
+  background-color: var(--code-bg);
+}

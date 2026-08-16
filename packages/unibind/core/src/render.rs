@@ -57,9 +57,13 @@ impl RenderError {
 ///
 /// Fails for a name that is not usable as an identifier even raw.
 pub fn name_ident(name: &str) -> Result<Ident, RenderError> {
+    // syn's parse error only ever says "expected identifier", which the message
+    // below already says with the offending name in it, so there is no source
+    // worth carrying: reduce to Option before naming the failure.
     syn::parse_str::<Ident>(name)
         .or_else(|_| syn::parse_str::<Ident>(&format!("r#{name}")))
-        .map_err(|_| RenderError::new(format!("`{name}` is not usable as an identifier")))
+        .ok()
+        .ok_or_else(|| RenderError::new(format!("`{name}` is not usable as an identifier")))
 }
 
 /// `snake_case` or `camelCase` to `PascalCase`, for generated class names.

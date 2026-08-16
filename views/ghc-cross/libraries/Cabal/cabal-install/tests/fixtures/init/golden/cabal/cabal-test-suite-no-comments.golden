@@ -1,0 +1,28 @@
+cabal-version:      3.0
+name:               y
+version:            0.1.0.0
+synopsis:           synopsis
+-- description:
+homepage:           home
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             foo-kmett
+maintainer:         foo-kmett@kmett.kmett
+-- copyright:
+category:           Data
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+test-suite y-test
+    import:           warnings
+    default-language: Haskell2010
+    -- other-modules:
+    -- other-extensions:
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    build-depends:    base

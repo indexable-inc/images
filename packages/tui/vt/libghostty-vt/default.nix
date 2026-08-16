@@ -1,6 +1,6 @@
-# libghostty-vt: ghostty's VT engine built as a standalone C library, from the
-# PATCHED fork source (packages/ghostty/patches). The patch series includes
-# C-API additions -- per-cell OSC 8 hyperlink URIs (index#3835) -- that
+# libghostty-vt: Ghostty's VT engine built as a standalone C library from the
+# checked `views.ghostty` source. Its local commits include C-API additions,
+# such as per-cell OSC 8 hyperlink URIs (index#3835), that
 # `ix-vt-sys` binds, so the artifact every consumer links (this flake output,
 # the Rust workspace's unit graph, and indexable-inc/ix via
 # `index.packages.<system>.libghostty-vt`) must carry them.
@@ -8,8 +8,7 @@
 # The build recipe (zon2nix-vendored deps, the `-Demit-lib-vt=true` zig build,
 # and the darwin SDK shim) lives in `lib/build/libghostty-vt.nix` so the Rust
 # workspace can reuse the exact same artifact when linking `ix-vt-sys`. This
-# package is the thin flake-output wrapper plus a smoke test. ghostty-src is
-# the jj megamerge fork tree, already patched.
+# package is the thin flake-output wrapper plus a smoke test.
 {
   ix,
   pkgs,
