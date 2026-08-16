@@ -5,7 +5,7 @@ title: "The README flywheel cycles the tools this repo actually sharpens"
 tags: [readme, svg, animation]
 links:
   - label: readme heroes
-    href: https://github.com/indexable-inc/index/tree/main/.github/readme
+    href: https://github.com/indexable-inc/index/tree/main/assets/readme
 ---
 
 The flywheel hero animates its own thesis: a pulse circles the loop and each

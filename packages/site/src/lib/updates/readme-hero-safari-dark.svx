@@ -5,7 +5,7 @@ title: "README hero SVGs get committed dark twins so Safari readers can see them
 tags: [readme, svg, safari]
 links:
   - label: readme heroes
-    href: https://github.com/indexable-inc/index/tree/main/.github/readme
+    href: https://github.com/indexable-inc/index/tree/main/assets/readme
   - label: WebKit bug 199134
     href: https://bugs.webkit.org/show_bug.cgi?id=199134
 ---
@@ -13,7 +13,7 @@ links:
 Safari never evaluates `prefers-color-scheme` inside an SVG loaded through an
 `<img>` tag (WebKit bug 199134, fixed only in Safari Technology Preview 234), so
 every README hero rendered its light palette on GitHub's dark theme: near-black
-text on a near-black page. Each hero under `.github/readme/` now has a committed
+text on a near-black page. Each hero under `assets/readme/` now has a committed
 `-dark.svg` twin with the dark palette as its defaults, and the README embeds
 both through a `<picture>` element whose page-level media query works in every
 engine. The `readme-globe` generator emits both files, and the

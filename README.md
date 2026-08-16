@@ -2,8 +2,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/globe-dark.svg">
-    <img src=".github/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/globe-dark.svg">
+    <img src="assets/readme/globe.svg" alt="a spinning globe: the whole world, rendered as braille text" width="480">
   </picture>
 </p>
 
@@ -15,8 +15,8 @@ It exists because agents now write patches faster than upstream review can absor
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/flywheel-dark.svg">
-    <img src=".github/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/flywheel-dark.svg">
+    <img src="assets/readme/flywheel.svg" alt="the flywheel: a change lands once, it reaches everything, everything improves, and the next change is cheaper; the loop spins faster and faster" width="720">
   </picture>
 </p>
 
@@ -24,8 +24,8 @@ It exists because agents now write patches faster than upstream review can absor
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/one-graph-dark.svg">
-    <img src=".github/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/one-graph-dark.svg">
+    <img src="assets/readme/one-graph.svg" alt="one patch fans out to every package in the graph" width="720">
   </picture>
 </p>
 
@@ -35,8 +35,8 @@ Patch a compiler, fix a library, tighten a lint: nothing quietly runs last year'
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/upstream-dark.svg">
-    <img src=".github/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/upstream-dark.svg">
+    <img src="assets/readme/upstream.svg" alt="a fix lands in this repo now; upstream can take it someday" width="720">
   </picture>
 </p>
 
@@ -46,8 +46,8 @@ Patches live next to the code that needs them. No dependency has a bus factor ou
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/one-standard-dark.svg">
-    <img src=".github/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/one-standard-dark.svg">
+    <img src="assets/readme/one-standard.svg" alt="clippy, cve scan, and licenses applied to every package in the graph" width="720">
   </picture>
 </p>
 
@@ -57,8 +57,8 @@ Add a rule and every package meets it, in the same change.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/refactor-dark.svg">
-    <img src=".github/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/refactor-dark.svg">
+    <img src="assets/readme/refactor.svg" alt="an api change migrates every call site in one commit" width="720">
   </picture>
 </p>
 
@@ -68,8 +68,8 @@ Every consumer of an API lives in this repo, and agents make repo-wide refactors
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/readme/prebuilt-dark.svg">
-    <img src=".github/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/prebuilt-dark.svg">
+    <img src="assets/readme/prebuilt.svg" alt="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos" width="720">
   </picture>
 </p>
 

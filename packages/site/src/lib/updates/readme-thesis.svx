@@ -10,4 +10,4 @@ links:
 
 The README now opens with why the repo exists instead of what it contains. Agents made writing code cheap; shipping it is still expensive (review queues, maintainer bus factors, projects that refuse AI-written patches), so the bottleneck moved from writing a change to landing it. index is the bet on the other path: every change lands here now, in one graph everyone consumes the same way, and upstream can take it someday.
 
-A new animated hero (`.github/readme/unblocked.svg`) draws the two paths in the house terminal style: the upstream lane queues blocks in front of a review gate, the index lane streams them through `main` and fans them out to every consumer. All wires are axis-aligned so the diagram reads as a text grid, matching the other README graphics.
+A new animated hero (`assets/readme/unblocked.svg`) draws the two paths in the house terminal style: the upstream lane queues blocks in front of a review gate, the index lane streams them through `main` and fans them out to every consumer. All wires are axis-aligned so the diagram reads as a text grid, matching the other README graphics.

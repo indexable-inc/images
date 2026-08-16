@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-label="ci pushes builds to cache.ix.dev, prebuilt for linux and cross-compiled macos">
+  <style>
+    :root { --fg: #e6e6e9; --muted: #7f838c; --line: #3c3c42; }
+    text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; fill: var(--fg); }
+    .m { fill: var(--muted); }
+    .cap { font-size: 12px; letter-spacing: 0.08em; }
+    .frame { fill: none; stroke: var(--line); stroke-width: 1.3; }
+    .wire { fill: none; stroke: var(--fg); stroke-width: 1.3; }
+    .mwire { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+    .dash { stroke-dasharray: 3 4; }
+    .head { fill: var(--fg); }
+    .mhead { fill: var(--muted); }
+    .ink { fill: var(--fg); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="head" d="M 0 0 L 8 4 L 0 8 z"/>
+    </marker>
+    <marker id="am" viewBox="0 0 8 8" refX="6.5" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mhead" d="M 0 0 L 8 4 L 0 8 z"/>
+    </marker>
+  </defs>
+  <rect class="frame" x="1" y="14" width="718" height="152" rx="8"/>
+  <text x="60" y="95">ci</text>
+  <path class="wire" marker-end="url(#a)" d="M 92 90 H 214"/>
+  <rect class="wire" x="226" y="68" width="152" height="44" rx="4"/>
+  <text x="302" y="95" text-anchor="middle">cache.ix.dev</text>
+  <path class="wire" marker-end="url(#a)" d="M 378 83 H 434 V 66 H 484"/>
+  <text x="496" y="70">linux</text>
+  <path class="wire" marker-end="url(#a)" d="M 378 97 H 434 V 114 H 484"/>
+  <text x="496" y="118">macos (cross)</text>
+</svg>
