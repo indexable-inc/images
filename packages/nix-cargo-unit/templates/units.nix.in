@@ -1023,6 +1023,11 @@ in
     # the "binary" and "dump-test-names" modes against each other.
     testManifestDrv
     testNameUnits
+    # Raw per-target records ({ name; targetName; binary; packageName;
+    # packageVersion; packageRoot; sourceStoreName; kind; edition; names? }),
+    # exported so the workspace nextest export can hand every prebuilt test
+    # binary to cargo-nextest without re-listing the graph.
+    testTargets
     testTargetNamesByPackage
     unusedCrateDependenciesByPackage
     units

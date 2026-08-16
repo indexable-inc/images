@@ -933,6 +933,68 @@
         echo "ran ${targetName} test target" > "$out/result"
       '';
     nextestByTarget = lib.mapAttrs mkNextestForTarget (units.tests or {});
+    # Whole-workspace nextest metadata for running the prebuilt test binaries
+    # OUTSIDE nix, on a machine that never compiled them:
+    #   cargo nextest run \
+    #     --binaries-metadata <nextestExport>/binaries-metadata.json \
+    #     --cargo-metadata <nextestExport>/cargo-metadata.json \
+    #     --workspace-remap <real checkout root>
+    # nextest derives each test's cwd from the cargo-metadata manifest dirs
+    # remapped onto the real checkout, and its list phase executes each binary
+    # once. Interpolating every target's binary store path (the JSON below plus
+    # the executability probe) pins the whole suite into this export's closure,
+    # the same mechanism testPlan uses, so substituting the export substitutes
+    # every test binary. The renderer refuses an empty binary list, so a
+    # workspace without test targets has no buildable export rather than a
+    # vacuously green one.
+    nextestExportBinaries = pkgs.writeText "cargo-unit-nextest-export-binaries.json" (
+      builtins.toJSON (
+        map (target: {
+          # The raw cargo target name, not the workspace-global attr key:
+          # nextest binary ids are package-scoped already.
+          "target-name" = target.targetName;
+          "package-name" = target.packageName;
+          "package-version" = target.packageVersion;
+          "package-root" = target.packageRoot;
+          inherit (target) kind edition;
+          "binary-path" = target.binary;
+        }) (units.testTargets or [])
+      )
+    );
+    nextestExport =
+      pkgs.runCommand "cargo-unit-nextest-export"
+      {
+        __structuredAttrs = true;
+        strictDeps = true;
+        nativeBuildInputs = [
+          pkgs.coreutils
+          nixCargoUnit
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        workspace_root="$TMPDIR/nextest-ws"
+        mkdir -p "$workspace_root" "$out"
+        : > "$out/test-binaries"
+        ${lib.concatMapStrings (target: ''
+          test_binary="$(readlink -f ${escapeShellArg target.binary})"
+          if [ ! -x "$test_binary" ]; then
+            echo >&2 "error: cargo-unit test binary missing or not executable: $test_binary"
+            exit 1
+          fi
+          printf '%s\n' "$test_binary" >> "$out/test-binaries"
+        '') (units.testTargets or [])}
+        sort -u -o "$out/test-binaries" "$out/test-binaries"
+
+        nix-cargo-unit nextest-metadata-workspace \
+          --workspace-root "$workspace_root" \
+          --binaries ${nextestExportBinaries} \
+          --target-triple ${escapeShellArg nextestTargetTriple} \
+          --rust-libdir ${escapeShellArg nextestRustLibDir} \
+          --cargo-metadata "$out/cargo-metadata.json" \
+          --binaries-metadata "$out/binaries-metadata.json"
+      '';
     libtestByTarget = lib.mapAttrs (_targetName: target: target.all) (units.tests or {});
     testChecksByTarget =
       if args.policy.tests.useNextest
@@ -962,6 +1024,7 @@
         vendorDir
         testPolicyByPackage
         nextestByTarget
+        nextestExport
         testChecksByTarget
         testChecksAll
         ;

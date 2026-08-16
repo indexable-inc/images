@@ -6353,6 +6353,10 @@
         message = "cargo-unit workspaces should expose an aggregate test-check derivation";
       }
       {
+        assertion = lib.isDerivation cargoUnitWorkspace.nextestExport;
+        message = "cargo-unit workspaces should expose a whole-workspace nextest metadata export";
+      }
+      {
         assertion = cargoUnitWorkspace.doctests != {};
         message = "cargo-unit workspaces should expose doctest targets as separate checks";
       }
@@ -7303,6 +7307,14 @@
     }
     test -f ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/result
     test ! -e ${cargoUnitWorkspace.nextestByTarget.cargo_unit_hello}/junit.xml
+    # The workspace nextest export: a lib unittest binary keys by bare package
+    # name, its package id appears in both metadata files (nextest hard-fails
+    # on any mismatch), and the binary store path rides the export's closure.
+    grep -q '"binary-id": "cargo-unit-hello"' ${cargoUnitWorkspace.nextestExport}/binaries-metadata.json
+    grep -q '/bin/cargo_unit_hello"' ${cargoUnitWorkspace.nextestExport}/binaries-metadata.json
+    grep -q '#cargo-unit-hello@0.1.0"' ${cargoUnitWorkspace.nextestExport}/binaries-metadata.json
+    grep -q '#cargo-unit-hello@0.1.0"' ${cargoUnitWorkspace.nextestExport}/cargo-metadata.json
+    grep -q '/bin/cargo_unit_hello$' ${cargoUnitWorkspace.nextestExport}/test-binaries
     test -d ${(builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).all}
     test -d ${(builtins.head (builtins.attrValues (builtins.head (builtins.attrValues cargoUnitWorkspace.doctests)).cases))}
     test -s ${cargoUnitWorkspace.testPlan}/packages/cargo-unit-hello/test-binaries

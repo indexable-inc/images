@@ -3991,6 +3991,31 @@ fn join_target_entries(by_key: BTreeMap<String, String>) -> String {
     entries
 }
 
+/// The cargo target kind a runnable binary tests, normalized to the kind
+/// vocabulary cargo-nextest keys binary ids by: every library kind collapses
+/// to `lib` (a unit-test binary of an rlib/dylib target is still the
+/// package's lib unittest binary), proc-macro stays distinct, and
+/// test/bench/example/bin pass through. An unrecognized kind passes through
+/// verbatim so a new cargo target kind reads as itself downstream instead of
+/// being silently misfiled as a library.
+fn runnable_target_kind(unit: &Unit) -> &str {
+    if unit.target.has_kind("test") {
+        "test"
+    } else if unit.target.has_kind("bench") {
+        "bench"
+    } else if unit.target.has_kind("example") {
+        "example"
+    } else if unit.target.has_kind("bin") {
+        "bin"
+    } else if unit.is_proc_macro() {
+        "proc-macro"
+    } else if unit.target.has_library_kind() {
+        "lib"
+    } else {
+        unit.target.kind.first().map_or("lib", String::as_str)
+    }
+}
+
 /// One `{ name; binary; ... }` per unique runnable binary target across every
 /// root set. Tests and benchmarks share the same record shape; the only
 /// difference is which root units `keys` selects. The template feeds these into
@@ -4029,13 +4054,20 @@ fn render_runnable_target_entries(
         by_key.insert(
             key.clone(),
             format!(
-                "{{ name = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {};{names} }}",
+                "{{ name = {}; targetName = {}; binary = \"{}\"; packageName = {}; packageVersion = {}; packageRoot = {}; sourceStoreName = {}; kind = {}; edition = {};{names} }}",
                 nix_attr(key),
+                // `name` is the workspace-global attr key (unit-specific when
+                // target names collide across packages); `targetName` is the
+                // raw cargo target name, which nextest binary ids are built
+                // from (they are already package-scoped).
+                nix_attr(&unit.target.name),
                 test_binary_expr(unit, prepared, index),
                 nix_attr(&unit.package_name()),
                 nix_attr(unit.package_version()),
                 nix_attr(source.package_root()),
                 nix_attr(&source.name),
+                nix_attr(runnable_target_kind(unit)),
+                nix_attr(&unit.target.edition),
             ),
         );
     }
@@ -5147,11 +5179,16 @@ mod tests {
         assert!(rendered.contains("testTargetNamesByPackage ="));
         assert!(rendered.contains("pkgs.lib.groupBy (target: target.packageName) testTargets"));
         assert!(rendered.contains("doctestTargetNamesByPackage ="));
-        assert!(rendered.contains("{ name = \"hello\"; binary ="));
+        assert!(rendered.contains("{ name = \"hello\"; targetName = \"hello\"; binary ="));
         assert!(!rendered.contains("units.\\\""));
         assert!(rendered.contains("packageName = \"hello\";"));
         assert!(rendered.contains("packageRoot = \".\";"));
         assert!(rendered.contains("sourceStoreName = \"cargo-unit-source-hello-0.1.0-"));
+        // testTargets records carry the raw cargo target name, kind, and
+        // edition so the workspace nextest export can synthesize
+        // binaries/cargo metadata without re-deriving any of them from unit
+        // keys.
+        assert!(rendered.contains("; kind = \"lib\"; edition = \"2024\";"));
         assert!(rendered.contains("sourcePackageRoot ="));
         assert!(rendered.contains("test_cwd="));
         assert!(rendered.contains("cd \"$test_cwd\""));
@@ -5437,7 +5474,8 @@ version = "0.1.0"
         assert!(rendered.contains("benchmarks = {"));
         assert!(rendered.contains("\"greeting\" = units."));
         assert!(rendered.contains("benchmarkTargets = ["));
-        assert!(rendered.contains("{ name = \"greeting\"; binary ="));
+        assert!(rendered.contains("{ name = \"greeting\"; targetName = \"greeting\"; binary ="));
+        assert!(rendered.contains("; kind = \"bench\"; edition = \"2024\";"));
         assert!(
             rendered.contains("benchmarkPlan = mkBenchmarkPlan \"cargo-unit-benchmark-plan\";")
         );
