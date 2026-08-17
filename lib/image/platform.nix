@@ -1020,6 +1020,61 @@ in {
     systemd.services = {
       "serial-getty@ttyS0".enable = false;
       "serial-getty@hvc0".enable = false;
+
+      # The rescue prompt the masked instances above cannot be. Masking is
+      # still correct -- the generator's instances are unfixable, because the
+      # `BindsTo=dev-%i.device` is baked into the systemd store path and no
+      # .device unit ever activates under `boot.isContainer` -- but masking on
+      # its own left ix guests with exactly one interactive path: ix-console
+      # over vsock. That path runs inside the guest as a process scheduled
+      # alongside the workload, so the failure that most needs a rescue shell
+      # is the failure that takes the rescue shell with it. On the 2026-08-17
+      # dev fleet a guest that pegged its single entitled core starved the
+      # ix-agent QUIC endpoint until it stopped answering, and there was no
+      # second way in: the VM was wedged with a live kernel, a live serial
+      # console carrying printk, and nothing on the far end of it to log into.
+      #
+      # This unit is that second way in. It is deliberately NOT an instance of
+      # `serial-getty@`: it carries no `BindsTo=`, no `After=dev-ttyS0.device`,
+      # and no `Requires=` on anything a container-mode guest cannot activate,
+      # so it starts on the same boot every generator instance would have hung
+      # on. `ConditionPathExists` is the whole device check -- devtmpfs has
+      # /dev/ttyS0 long before multi-user.target, and a guest booted without a
+      # serial port simply skips the unit as a satisfied no-op rather than
+      # failing it.
+      #
+      # Cost: agetty's login banner and prompt land in the captured serial log
+      # (ClickHouse `vm_serial_logs`) alongside kernel printk. That is a few
+      # lines per boot and a known, accepted trade for having any rescue path
+      # at all; `--noclear` keeps it from also emitting a screen-clear escape
+      # sequence into the log on every respawn.
+      ix-serial-getty = {
+        description = "Rescue serial login prompt on ttyS0";
+        documentation = ["man:agetty(8)"];
+        wantedBy = ["multi-user.target"];
+        # Ordering only, never a dependency: a rescue shell that refuses to
+        # start because a normal-boot unit failed is not a rescue shell.
+        after = ["systemd-user-sessions.service"];
+        # A switch must not kill the session an operator is using to debug the
+        # switch. Same reasoning nixpkgs applies to its own gettys.
+        restartIfChanged = false;
+        unitConfig.ConditionPathExists = "/dev/ttyS0";
+        serviceConfig = {
+          ExecStart = "${pkgs.util-linux}/sbin/agetty --keep-baud --noclear ttyS0 115200 vt100";
+          Type = "idle";
+          Restart = "always";
+          RestartSec = 5;
+          UtmpIdentifier = "ttyS0";
+          TTYPath = "/dev/ttyS0";
+          TTYReset = true;
+          TTYVHangup = true;
+          KillMode = "process";
+          IgnoreSIGPIPE = false;
+          SendSIGHUP = true;
+          StandardInput = "tty";
+          StandardOutput = "tty";
+        };
+      };
     };
 
     # Capture native crashes (JVM segfault, Rust panics in extern, anything
