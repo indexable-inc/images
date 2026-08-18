@@ -42,16 +42,19 @@ std::pair<StorePath, Hash> fetchToStore2(
     auto [subpath, fingerprint] = filter ? std::pair<CanonPath, std::optional<std::string>>{path.path, std::nullopt}
                                          : path.accessor->getFingerprint(path.path);
 
-    /* A git-store-backed accessor (the jj workdir fetcher) knows its
-       root's git tree hash a priori: the VCS maintained it incrementally,
-       Merkle-fashion, while snapshotting. With the `git` ingestion method
-       that hash IS the content address, so the store path follows from it
-       with zero file reads -- where the NAR method's flat hash has to
-       re-read the whole tree on every content change. */
+    /* An accessor reading out of a content-addressed object store (the jj
+       workdir fetcher) knows its root's tree id a priori: the VCS
+       maintained it incrementally, Merkle-fashion, while snapshotting. When
+       the id's family is one nix also ingests, that id IS the content
+       address, so the store path follows from it with zero file reads --
+       where the NAR method's flat hash has to re-read the whole tree on
+       every content change. A family nix does not ingest is not an address
+       here and falls through to reading the tree. */
     std::optional<Hash> knownHash;
-    if (method == ContentAddressMethod::Raw::Git && !filter && path.path.isRoot() && path.accessor->knownGitTreeHash
+    if (method == ContentAddressMethod::Raw::Git && !filter && path.path.isRoot() && path.accessor->knownTreeRoot
+        && path.accessor->knownTreeRoot->family == KnownTreeRoot::Family::Git
         && experimentalFeatureSettings.isEnabled(Xp::GitHashing))
-        knownHash = path.accessor->knownGitTreeHash;
+        knownHash = path.accessor->knownTreeRoot->id;
 
     std::optional<Hash> trustedHash;
     bool trustedFromCache = false;

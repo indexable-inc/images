@@ -125,12 +125,45 @@ fn mapped(source: &str) -> Result<map::Mapped, Error> {
             .labels
             .first()
             .map_or(0, oxc_diagnostics::LabeledSpan::offset);
-        return Err(Error::at_offset32(
-            offset,
-            source,
-            format!("parse error: {}", diagnostic.message),
-        ));
+        let mut message = format!("parse error: {}", diagnostic.message);
+        if looks_like_nix(source) {
+            message.push_str(NIX_SOURCE_HINT);
+        }
+        return Err(Error::at_offset32(offset, source, message));
     }
 
     map::module(&parsed.program, source)
+}
+
+/// Appended to a parse error when [`looks_like_nix`] fires. One string, so
+/// every surface the diagnostic reaches (the `builtins.wasm` trap inside an
+/// eval VM, a CLI running the converter natively) carries the same words.
+const NIX_SOURCE_HINT: &str = "\nhelp: this file looks like Nix source, and `.ix` modules use \
+                               JavaScript syntax. Nix source belongs in a `.nix` file: a flake is \
+                               `flake.nix`, an ix config module is `ix.nix`.";
+
+/// Whether source that failed to parse as JavaScript reads as Nix instead.
+///
+/// The mistake this names is real and external: a shared Nix flake saved as
+/// `default.ix`, where the JS parser dies at the first hyphenated attribute
+/// name (`extra-substituters`) and the raw diagnostic surfaces as a wasm
+/// backtrace that reads like a converter crash, not like the user's own file.
+/// Writing Nix into `.ix` is the most likely recurring failure of a dialect
+/// whose whole point is *not* being Nix, so it gets a purpose-built message.
+///
+/// Deliberately conservative, and only consulted after the parse has already
+/// failed: the source must open like a Nix attrset, function, or comment
+/// (`{` or `#`, but not a JS hashbang) AND carry Nix's `name = value;`
+/// binding shape closed by `};`/`];`/`";` -- the shape a flake or NixOS
+/// module cannot avoid, and idiomatic `.ix` (an `export default` module)
+/// cannot have.
+fn looks_like_nix(source: &str) -> bool {
+    let trimmed = source.trim_start();
+    let opens_like_nix =
+        trimmed.starts_with('{') || (trimmed.starts_with('#') && !trimmed.starts_with("#!"));
+    let has_nix_binding = source.contains(" = ")
+        && ["};", "];", "\";"]
+            .iter()
+            .any(|close| source.contains(close));
+    opens_like_nix && has_nix_binding
 }

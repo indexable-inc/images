@@ -696,7 +696,10 @@ struct JjInputScheme : InputScheme
                    instead of flat-NAR-hashing the whole tree on every
                    content edit (fetch-to-store.cc, paths.cc). */
                 if (skipped.empty() && !repo->hasCommitExtraHeader(meta.rev, "jj:trees"))
-                    accessor->knownGitTreeHash = repo->getTreeHash(meta.rev);
+                    accessor->knownTreeRoot = KnownTreeRoot{
+                        .family = KnownTreeRoot::Family::Git,
+                        .id = repo->getTreeHash(meta.rev),
+                    };
                 return {accessor, std::move(input)};
             }
         }

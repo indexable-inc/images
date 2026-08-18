@@ -91,9 +91,12 @@ void EvalState::ensureLazyPathCopied(const StorePath & path)
         path.name(),
         /* Ingest with the same method mountInput used, or this re-fetch
            lands on a different store path and the mismatch check below
-           misfires. `knownGitTreeHash` survives on the accessor exactly
-           when the mount was git-CA (mountInput clears it otherwise). */
-        mount->knownGitTreeHash ? ContentAddressMethod::Raw::Git : ContentAddressMethod::Raw::NixArchive);
+           misfires. `knownTreeRoot` survives on the accessor exactly when
+           the mount was git-CA: mountInput clears it both when the feature
+           or a narHash promise rules git-CA out AND when the id's family is
+           one nix cannot ingest, so the predicate here stays a presence
+           test and the two sites cannot drift apart. */
+        mount->knownTreeRoot ? ContentAddressMethod::Raw::Git : ContentAddressMethod::Raw::NixArchive);
 
     /* This can happen if the source gets modified by another process while we are evaluaing
        from it. Alternatively, the caching might be unsound and fetcher cache is poisoned somehow.
@@ -175,20 +178,24 @@ EvalState::mountInput(fetchers::Input & input, const fetchers::Input & originalI
         }
     }
 
-    /* Content-address the mount by its git tree hash when the accessor
-       already knows it (the jj workdir fetcher announces it): the store
-       path then costs zero file reads, where the NAR method re-reads all
-       of a 14k+-file tree on every source edit. Only for inputs that made
-       no narHash promise -- a locked input's narHash can only be checked
-       by NAR-ingesting the tree. */
+    /* Content-address the mount by the tree id the accessor already knows
+       (the jj workdir fetcher announces it): the store path then costs zero
+       file reads, where the NAR method re-reads all of a 14k+-file tree on
+       every source edit. Only for ids whose family nix ingests, and only
+       for inputs that made no narHash promise -- a locked input's narHash
+       can only be checked by NAR-ingesting the tree. */
     auto method = ContentAddressMethod::Raw::NixArchive;
-    if (accessor->knownGitTreeHash) {
-        if (experimentalFeatureSettings.isEnabled(Xp::GitHashing) && !originalInput.getNarHash())
+    if (accessor->knownTreeRoot) {
+        if (accessor->knownTreeRoot->family == KnownTreeRoot::Family::Git
+            && experimentalFeatureSettings.isEnabled(Xp::GitHashing) && !originalInput.getNarHash())
             method = ContentAddressMethod::Raw::Git;
         else
             /* Drop the hint so ensureLazyPathCopied re-fetches this mount
-               with the same (NAR) method it is being created with. */
-            accessor->knownGitTreeHash.reset();
+               with the same (NAR) method it is being created with. This is
+               also the path a family nix cannot ingest takes: the id stays
+               true, but it is not a store path address, so it must not
+               reach a consumer that would treat it as one. */
+            accessor->knownTreeRoot.reset();
     }
 
     auto [storePath, hash] = fetchToStore2(fetchSettings, *store, accessor, mode, input.getName(), method);

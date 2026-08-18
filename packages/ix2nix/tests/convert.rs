@@ -572,3 +572,27 @@ fn errors_render_like_compiler_diagnostics() {
     assert!(rendered.contains("--> 1:16"), "{rendered}");
     assert!(rendered.contains("export default a === b;"), "{rendered}");
 }
+
+#[test]
+fn nix_source_in_an_ix_file_names_the_real_mistake() {
+    // The external failure mode this guards: a shared Nix flake saved as
+    // `default.ix`. The JS parser dies at the first hyphenated attribute
+    // name, and before this hint the diagnostic surfaced as a bare wasm
+    // backtrace that read like a converter crash. The hint rides the parse
+    // error itself so every consumer carries it.
+    let error = diagnostic(
+        "{\n  nixConfig = {\n    extra-substituters = [\"https://cache.example\"];\n  };\n}\n",
+    );
+    assert!(error.message().starts_with("parse error"), "{error}");
+    assert!(error.message().contains("looks like Nix source"), "{error}");
+    assert!(error.message().contains("flake.nix"), "{error}");
+}
+
+#[test]
+fn a_javascript_typo_is_not_accused_of_being_nix() {
+    // Broken JS is still JS: the hint must not fire on an ordinary typo in a
+    // real `.ix` module, or every syntax error starts lying about its cause.
+    let error = diagnostic("export default { a: , };\n");
+    assert!(error.message().starts_with("parse error"), "{error}");
+    assert!(!error.message().contains("looks like Nix"), "{error}");
+}

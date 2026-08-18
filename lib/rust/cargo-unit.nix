@@ -947,19 +947,17 @@
     # every test binary. The renderer refuses an empty binary list, so a
     # workspace without test targets has no buildable export rather than a
     # vacuously green one.
-    nextestExportBinaries = pkgs.writeText "cargo-unit-nextest-export-binaries.json" (
-      builtins.toJSON (
-        map (target: {
-          # The raw cargo target name, not the workspace-global attr key:
-          # nextest binary ids are package-scoped already.
-          "target-name" = target.targetName;
-          "package-name" = target.packageName;
-          "package-version" = target.packageVersion;
-          "package-root" = target.packageRoot;
-          inherit (target) kind edition;
-          "binary-path" = target.binary;
-        }) (units.testTargets or [])
-      )
+    nextestExportBinaries = (pkgs.formats.json { }).generate "cargo-unit-nextest-export-binaries.json" (
+      map (target: {
+        # The raw cargo target name, not the workspace-global attr key:
+        # nextest binary ids are package-scoped already.
+        target-name = target.targetName;
+        package-name = target.packageName;
+        package-version = target.packageVersion;
+        package-root = target.packageRoot;
+        inherit (target) kind edition;
+        binary-path = target.binary;
+      }) (units.testTargets or [])
     );
     nextestExport =
       pkgs.runCommand "cargo-unit-nextest-export"

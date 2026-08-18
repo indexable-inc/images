@@ -64,7 +64,13 @@
     # dependency (the eval depends on the `.ix` file through `readFile`
     # itself, not through the context).
     fileName = builtins.unsafeDiscardStringContext (baseNameOf path + ".nix");
-    nixSource = builtins.unsafeDiscardStringContext (convert (builtins.readFile path));
+    # A conversion failure must name the module it came from: the wasm trap
+    # alone positions the error at the converter, not at the user's file.
+    nixSource = builtins.unsafeDiscardStringContext (
+      builtins.addErrorContext
+      "while converting the .ix module `${builtins.unsafeDiscardStringContext (baseNameOf path)}` (JavaScript syntax) to Nix"
+      (convert (builtins.readFile path))
+    );
   in
     import (builtins.toFile fileName nixSource) {
       __dir = dirOf path;

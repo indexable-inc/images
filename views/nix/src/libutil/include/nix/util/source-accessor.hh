@@ -38,6 +38,47 @@ MakeError(NotADirectory, SourceAccessorError);
 MakeError(NotARegularFile, SourceAccessorError);
 
 /**
+ * A content address a fetcher already knows for the tree its accessor's
+ * root serves, together with the addressing scheme that produced it.
+ *
+ * The scheme has to travel *with* the id. A bare hash cannot say which
+ * serialization it addresses, and the only use for a known tree id is to
+ * turn it into a store path -- which requires ingesting the tree the same
+ * way the id was computed. Two ids over different tree serializations are
+ * different addresses even when they share a hash algorithm, so a consumer
+ * that guessed would produce a store path that does not correspond to the
+ * content. Carrying the family makes that mistake unrepresentable rather
+ * than merely unlikely.
+ */
+struct KnownTreeRoot
+{
+    enum struct Family {
+        /**
+         * A Git tree object hash: the id of the root tree as Git
+         * serializes it. `ContentAddressMethod::Raw::Git` ingests trees
+         * that way, so this family can become a store path with no file
+         * reads.
+         */
+        Git,
+
+        /**
+         * A root tree id from jj's own native (non-Git) object store, which
+         * jj maintained incrementally while snapshotting. No nix ingestion
+         * method serializes trees that way, so this family cannot become a
+         * store path: a consumer must fall back to a method that reads the
+         * tree, and may use the id only where an opaque content fingerprint
+         * is wanted.
+         */
+        JjNative,
+    };
+
+    Family family;
+
+    /** The id itself, in whatever hash algorithm the family uses. */
+    Hash id;
+};
+
+/**
  * A read-only filesystem abstraction. This is used by the Nix
  * evaluator and elsewhere for accessing sources in various
  * filesystem-like entities (such as the real filesystem, tarballs or
@@ -209,16 +250,25 @@ struct SourceAccessor : std::enable_shared_from_this<SourceAccessor>
     std::optional<std::string> fingerprint;
 
     /**
-     * If set, the git object hash (tree hash, for a directory) that this
-     * accessor's root provably serves. Set only by fetchers that read
-     * straight out of a git object store and know the served tree is
-     * byte-identical to the named object: no omitted gitlinks, no
-     * content stored outside the tree. Under the `git-hashing`
-     * experimental feature, `fetchToStore()` can then derive a git-CA
-     * store path from it with zero file reads, where the NAR method's
-     * flat hash re-reads the whole tree on every content change.
+     * If set, the content address that this accessor's root provably
+     * serves, and the family it belongs to. Set only by fetchers that read
+     * straight out of a content-addressed object store and know the served
+     * tree is byte-identical to the named object: no omitted entries, no
+     * content stored outside the tree.
+     *
+     * A consumer that wants to turn the id into a store path must test the
+     * family against the specific one it can ingest -- never merely test
+     * that an id is present, and never accept "some family addresses a
+     * store path" as a proxy, because the ingestion method has to match the
+     * serialization the id addresses. `Family::Git` plus
+     * `ContentAddressMethod::Raw::Git` is that pairing today: it derives a
+     * CA store path with zero file reads, where the NAR method's flat hash
+     * re-reads the whole tree on every content change. Nix cannot name
+     * `ContentAddressMethod` here (that is a libstore type), which is why
+     * this header carries the family and each consumer states the pairing
+     * itself.
      */
-    std::optional<Hash> knownGitTreeHash;
+    std::optional<KnownTreeRoot> knownTreeRoot;
 
     /**
      * Return the fingerprint for `path`. This is usually the
