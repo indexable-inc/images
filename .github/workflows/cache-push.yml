@@ -92,7 +92,7 @@ env:
   # indexable-inc/ix#6149); the fallback-detection warning in the realise
   # phase below goes with it.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    experimental-features = nix-command flakes ca-derivations wasm-builtin blake3-hashes
     accept-flake-config = false
     timeout = 600
     fallback = true
@@ -529,12 +529,18 @@ jobs:
       contents: write
     steps:
       # The self-hosted runner exposes a minimal PATH (git + nix +
-      # coreutils); this job shells out to more than that. Referenced by
-      # repo, not `./.github/actions/...`: this job never checks the
-      # repository out (it is pure `gh api`), so there is no local action
-      # tree to resolve a relative path against.
+      # coreutils); this job shells out to more than that. The sparse
+      # checkout exists only so ensure-tools resolves as a local action:
+      # the repo-ref form downloads the whole repository tarball, which
+      # fails on views/nix's dangling-symlink fixtures (see check.yml's
+      # flake-check for the full story).
+      - name: Checkout the CI actions tree
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
       - name: Provision missing CLI tools
-        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        uses: ./.github/actions/ensure-tools
         with:
           tools: gh jq
 

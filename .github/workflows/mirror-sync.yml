@@ -33,7 +33,7 @@ env:
   # they are not daemon-owned, and a client value silently overrides the
   # fleet tuning. check.yml owns the explanation.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    experimental-features = nix-command flakes ca-derivations wasm-builtin blake3-hashes
     accept-flake-config = false
     timeout = 600
 

@@ -34,7 +34,7 @@ env:
   # they are not daemon-owned, and a client value silently overrides the
   # fleet tuning. check.yml owns the explanation.
   NIX_CONFIG: |-
-    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    experimental-features = nix-command flakes ca-derivations wasm-builtin blake3-hashes
     accept-flake-config = false
     timeout = 600
 
@@ -44,7 +44,9 @@ jobs:
       actions: read
       contents: read
       pull-requests: read
-    uses: indexable-inc/index/.github/workflows/ci-budget-read-only.yml@main
+    # Local form: same commit, no repo-tarball download (see check.yml's
+    # flake-check sparse-checkout comment for why the tarball is fatal).
+    uses: ./.github/workflows/ci-budget-read-only.yml
     with:
       pull-request-number: 0
       force-big-change: true
