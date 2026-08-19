@@ -29,6 +29,20 @@ ignore = [
     # here would only make the next sync conflict. Duplication in them is real
     # but is upstream's to remove, not this repo's to ratchet.
     "*/users/*/config/nvim/*",
+    # The upstream view trees (views/nix, views/jj, views/starship, ...):
+    # verbatim mirrors of public upstream repositories, materialized by the
+    # views machinery (ENG-12220) and advanced wholesale on every view sync.
+    # Their duplication is upstream's to remove, not this repo's to ratchet -
+    # the same reasoning is_view_path uses to exempt them from the projection's
+    # boundary and secret gates, and the nvim entry above uses for dotfiles.
+    # Measured 2026-08-19: views carried 99.4% of all duplicated fragment
+    # lines (1,086,342 of ~1,092,600) and had dragged the whole-tree measure
+    # to 4.35% against the 0.43% ratchet, because nothing ran this gate in the
+    # three weeks after the GitHub archive froze the standalone repo's CI.
+    # (Caveat, inherited from the glob style here: this also matches a
+    # views/ directory nested deeper in the tree, which is_view_path would
+    # NOT treat as a view root. No such directory exists today.)
+    "*/views/*",
 ]
 
 # Duplication budget consumed by `nix run .#clone` and enforced by the `clone`
@@ -119,6 +133,13 @@ ignore = [
 # names.rs / twin.rs, backend-ts mirror.rs). Both together measure 0.266%,
 # which clears 0.275% by 3% and so would fail this file's own headroom rule
 # anyway. Filed as follow-up; lower this budget when it lands.
+# 2026-08-19 (mirror-CI restoration): budget UNCHANGED at 0.43. The upstream
+# view trees joined the ignore list (see the entry above): they had never been
+# scanned while the standalone repo's CI was alive at 0.43-passing sizes, and
+# three weeks of ungated view syncs after the GitHub archive dragged the
+# whole-tree measure to 4.35%. With views exempted the repo's own code
+# measures 0.3894% (2,503 duplicated of 642,811 gated lines) - inside the
+# ratchet it had all along.
 [budget]
 global_pct = 0.43
 diff_pct = 0.0
