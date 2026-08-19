@@ -1,0 +1,47 @@
+diff --git a/Makefile.am b/Makefile.am
+index 03356e0..21daf69 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -113,7 +113,7 @@ LIBGMPXX_LT_REVISION = 0
+ LIBGMPXX_LT_AGE      = 7
+ 
+ 
+-SUBDIRS = tests mpn mpz mpq mpf printf scanf rand cxx demos tune doc
++SUBDIRS = tests mpn mpz mpq mpf printf scanf rand cxx demos tune
+ 
+ EXTRA_DIST = configfsf.guess configfsf.sub .gdbinit INSTALL.autoconf \
+ 	     COPYING.LESSERv3 COPYINGv2 COPYINGv3
+diff --git a/Makefile.in b/Makefile.in
+index 3653994..5010c39 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -573,7 +573,7 @@ LIBGMP_LT_AGE = 5
+ LIBGMPXX_LT_CURRENT = 11
+ LIBGMPXX_LT_REVISION = 0
+ LIBGMPXX_LT_AGE = 7
+-SUBDIRS = tests mpn mpz mpq mpf printf scanf rand cxx demos tune doc
++SUBDIRS = tests mpn mpz mpq mpf printf scanf rand cxx demos tune
+ 
+ # Put asl.h here for now.
+ 
+diff --git a/configure b/configure
+index 7910aa0..c06bc80 100755
+--- a/configure
++++ b/configure
+@@ -28030,7 +28030,7 @@ echo "define(\`__CONFIG_M4_INCLUDED__')" >> $gmp_configm4
+ # FIXME: Upcoming version of autoconf/automake may not like broken lines.
+ #        Right now automake isn't accepting the new AC_CONFIG_FILES scheme.
+ 
+-ac_config_files="$ac_config_files Makefile mpf/Makefile mpn/Makefile mpq/Makefile mpz/Makefile printf/Makefile scanf/Makefile rand/Makefile cxx/Makefile tests/Makefile tests/devel/Makefile tests/mpf/Makefile tests/mpn/Makefile tests/mpq/Makefile tests/mpz/Makefile tests/rand/Makefile tests/misc/Makefile tests/cxx/Makefile doc/Makefile tune/Makefile demos/Makefile demos/calc/Makefile demos/expr/Makefile gmp.h:gmp-h.in gmp.pc:gmp.pc.in gmpxx.pc:gmpxx.pc.in"
++ac_config_files="$ac_config_files Makefile mpf/Makefile mpn/Makefile mpq/Makefile mpz/Makefile printf/Makefile scanf/Makefile rand/Makefile cxx/Makefile tests/Makefile tests/devel/Makefile tests/mpf/Makefile tests/mpn/Makefile tests/mpq/Makefile tests/mpz/Makefile tests/rand/Makefile tests/misc/Makefile tests/cxx/Makefile tune/Makefile demos/Makefile demos/calc/Makefile demos/expr/Makefile gmp.h:gmp-h.in gmp.pc:gmp.pc.in gmpxx.pc:gmpxx.pc.in"
+ 
+ cat >confcache <<\_ACEOF
+ # This file is a shell script that caches the results of configure
+@@ -29174,7 +29174,6 @@ do
+     "tests/rand/Makefile") CONFIG_FILES="$CONFIG_FILES tests/rand/Makefile" ;;
+     "tests/misc/Makefile") CONFIG_FILES="$CONFIG_FILES tests/misc/Makefile" ;;
+     "tests/cxx/Makefile") CONFIG_FILES="$CONFIG_FILES tests/cxx/Makefile" ;;
+-    "doc/Makefile") CONFIG_FILES="$CONFIG_FILES doc/Makefile" ;;
+     "tune/Makefile") CONFIG_FILES="$CONFIG_FILES tune/Makefile" ;;
+     "demos/Makefile") CONFIG_FILES="$CONFIG_FILES demos/Makefile" ;;
+     "demos/calc/Makefile") CONFIG_FILES="$CONFIG_FILES demos/calc/Makefile" ;;

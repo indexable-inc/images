@@ -351,7 +351,12 @@ in
     # matching -- a moved directory, a renamed extension -- the loop below runs
     # zero times and this check reports success having read nothing. Count first.
     workflows=(${githubRoot}/workflows/*.yml)
-    if [ ''${#workflows[@]} -lt 18 ]; then
+    # 16 today: the 2026-08-18 projection amendment deleted the three
+    # self-mutating updater lanes and approve-user-change, and moved
+    # refuse-pull-requests.yml in from the deleted index-project overlay.
+    # The floor is a staleness guard, not a census (matches the ix-side
+    # check's minWorkflows = 14 in nix/checks/lint.nix).
+    if [ ''${#workflows[@]} -lt 14 ]; then
       printf 'workflow-hosted-runner: found only %s workflow(s) under .github/workflows; the scan glob has stopped matching and this check would pass without reading anything\n' \
         "''${#workflows[@]}" >&2
       exit 1

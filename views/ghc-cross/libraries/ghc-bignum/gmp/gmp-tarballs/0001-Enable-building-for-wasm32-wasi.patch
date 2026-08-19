@@ -1,0 +1,66 @@
+From 2a11b8ed33fd994801432a080acccf5d751e7e11 Mon Sep 17 00:00:00 2001
+From: Cheng Shao <astrohavoc@gmail.com>
+Date: Sat, 5 Nov 2022 14:12:38 +0000
+Subject: [PATCH] Enable building for wasm32-wasi
+
+This patch enables gmp-6.2.1 to build for wasm32-wasi, which lacks
+signals and raise.h.
+---
+ errno.c   | 4 ++++
+ invalid.c | 9 ++++++++-
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/errno.c b/errno.c
+index b4be555..17dde90 100644
+--- a/errno.c
++++ b/errno.c
+@@ -34,7 +34,11 @@ see https://www.gnu.org/licenses/.  */
+ 
+ #include <stdlib.h>
+ 
++#ifdef HAVE_RAISE
+ #include <signal.h>
++#else
++#define raise(sig) exit(sig)
++#endif
+ 
+ #include "gmp-impl.h"
+ 
+diff --git a/invalid.c b/invalid.c
+index e09eab2..71cf7d5 100644
+--- a/invalid.c
++++ b/invalid.c
+@@ -34,7 +34,10 @@ see https://www.gnu.org/licenses/.  */
+ 
+ #include "config.h"
+ 
++#ifdef HAVE_RAISE
+ #include <signal.h>
++#endif
++
+ #include <stdlib.h>
+ 
+ #if HAVE_UNISTD_H
+@@ -47,7 +50,7 @@ see https://www.gnu.org/licenses/.  */
+ /* Incidentally, kill is not available on mingw, but that's ok, it has raise
+    and we'll be using that.  */
+ #if ! HAVE_RAISE
+-#define raise(sig)   kill (getpid(), sig)
++#define raise(sig)   exit(sig)
+ #endif
+ 
+ 
+@@ -77,6 +80,10 @@ see https://www.gnu.org/licenses/.  */
+ void
+ __gmp_invalid_operation (void)
+ {
++#ifdef SIGFPE
+   raise (SIGFPE);
++#else
++  __gmp_junk = 10 / __gmp_0;
++#endif
+   abort ();
+ }
+-- 
+2.38.1
+
