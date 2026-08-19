@@ -1,11 +1,11 @@
-# The only workflow the public mirror carries.
+# Close pull requests, politely: this repository takes no contributions.
 #
 # indexable-inc/index is a read-only projection of the ix monorepo's `index/`
-# subtree. Everything else under .github/ is excluded from the projection
-# (crates/tools/index-project/src/exclude.rs), because those files would run
-# here, in a public repository, against runners this repository does not have.
-# This one is written into the tree by the projector itself rather than kept in
-# the monorepo's .github/, so it can never run in ix.
+# subtree. The projection carries this whole .github/ tree verbatim (owner
+# decision 2026-08-18, recorded in ix docs/adr/0006-unify-index-into-ix.md:
+# the mirror RUNS its CI - check, cache-push, package mirrors - on the ix
+# CI dispatcher's runners), but it accepts no pull requests: main only ever
+# moves by a projector push.
 #
 # It exists because the alternative is worse than rude. The projector replaces
 # the mirror's worktree wholesale on every sync, so an open pull request is not
@@ -27,6 +27,10 @@ on:
 
 permissions:
   pull-requests: write
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   refuse:

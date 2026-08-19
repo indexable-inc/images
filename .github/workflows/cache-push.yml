@@ -1,0 +1,588 @@
+name: Cache push
+
+# Publish packages to cache.ix.dev on push to main so consumers substitute
+# instead of rebuilding: `push` realises x86_64-linux (including the
+# Linux->Darwin cross packages) on the self-hosted pool (#1639), and
+# `advance-cache-ready` moves the consumer pin once every root realised: a
+# run with failed roots still publishes what did realise, but it concludes
+# failure and the pin holds (#3195). The native aarch64-darwin lane lives in
+# the deleted hosted-mac lane: GitHub keeps one pending run per group,
+# so the 2h+ hosted-mac runs sharing this group superseded-cancelled every
+# queued run behind them (24 in a row on 2026-07-19) and starved this pin
+# (#3586). Non-gating for merges.
+#
+# WHY THIS LANE WENT 18 HOURS WITHOUT A SUCCESSFUL RUN (2026-07-25). Three
+# causes, in the order they matter. Three consecutive `push` jobs each ran for
+# exactly 3h10m02s and died with exit 143:
+#
+#     30152532864  10:12:57 -> 13:22:59
+#     30157757744  13:23:05 -> 16:33:07
+#     30163241281  16:33:13 -> 19:43:15
+#
+# 1. EVERY BUILD COMPILED SINGLE-THREADED. The `env:` block below used to
+#    carry `cores = 1`, which is not a client hint the daemon may decline: it
+#    rides the `SetOptions` wire message as a dedicated field and is assigned
+#    before the trust check (see the long note in check.yml, which owns this
+#    explanation). It overrode the fleet's `cores = 16` on every dispatcher
+#    host. The daemon-side fix for exactly this (ix#7249, "`ninja -j1`
+#    compiling nix-ix for ~50 min while max-jobs=32 sat idle") had been inert
+#    here the whole time. This is the reason the realise took hours rather
+#    than the ~20-60 min indexable-inc/ix's cache-warm lane takes on the same
+#    runner pool while setting neither knob.
+#
+# 2. THE RUNNER DIES AT 190 MINUTES, NOT 300. `services.ix.ciDispatcher
+#    .runnerMaxRuntimeSecs` (ix nix/modules/services/host/ci-dispatcher
+#    /module.nix) caps one runner unit's lifetime and SIGTERMs it, so the old
+#    `timeout-minutes: 300` was unreachable by 110 minutes and every overrun
+#    surfaced as a bare 143 with no annotation naming the cause. The ceiling
+#    below now sits under that cap so an overrun fails as a legible job
+#    timeout instead of an opaque kill.
+#
+# 3. ONE RUNNER CARRIED ALL 208 ROOTS. Because each run restarts against a
+#    newer main, the backlog never shrank -- the probe reported 126, 208, 144,
+#    110, 123 of 208 over six consecutive runs. Main takes ~6 commits/hour and
+#    a cycle was 3h10m, so ~19 commits of fresh work landed per cycle.
+#    Sharding spreads the roots over the five dispatcher hosts so a cycle is
+#    shorter than the interval between pushes even when a rebuild is wide.
+#
+# Cause 1 is the one that made the work slow; 2 and 3 are what turned slow
+# into never-finishing. Fixing only 1 would leave the lane one wide rebuild
+# away from the same wall.
+#
+# The shard index goes BEFORE the `-cache-push` suffix in the runs-on label.
+# The ix-public push credential is gated on `label.ends_with("-cache-push")`
+# (ix crates/ci/dispatcher/src/handler/workflow_job/credential_gate.rs), and
+# that gate has a test pinning that `...-cache-push-extra` is refused. A
+# trailing shard index would silently deliver no credential and every shard
+# would fail on the guard below.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      full_pass:
+        description: "Skip the already-cached probe: realise and push every root (heals holes left by partially-failed pushes)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# `ix up` pins arbitrary merged revs, so every merged commit must get pushed.
+concurrency:
+  group: cache-push
+  cancel-in-progress: false
+
+env:
+  # Shared with check.yml; restricted settings are daemon-owned and ignored
+  # here. `max-jobs` and `cores` are deliberately absent -- they are the two
+  # settings that are NOT daemon-owned, and check.yml's env block carries the
+  # full explanation and the measurement.
+  #
+  # `fallback` is push-only (not in check.yml): a poisoned substitute -- a
+  # truncated HTTP 200 NAR from a cache incident (ix#6139) -- otherwise aborts
+  # realising a push root, and that root silently never publishes. Run
+  # 28657772825 lost the cross-IFD `cargo-vendor-dir` root exactly this way,
+  # leaving Darwin consumers unable to eval cross packages (#1711). Falling
+  # back to a source build keeps every root publishable regardless of cache
+  # health. Remove once indexable-inc/ix#6139 closes with the cache serving
+  # verified-complete NARs (the migrate-guard root cause already landed in
+  # indexable-inc/ix#6149); the fallback-detection warning in the realise
+  # phase below goes with it.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+    timeout = 600
+    fallback = true
+
+jobs:
+  push:
+    name: push (shard ${{ matrix.shard }})
+    strategy:
+      # One slow or broken shard must not cancel the others: every shard that
+      # completes publishes its own roots, and the next run's probe skips them.
+      # Partial progress is the property that makes this lane converge.
+      fail-fast: false
+      matrix:
+        # Ten shards. The binding constraint is not the root count, it is how
+        # many of these the fleet holds at once, and that is a function of the
+        # resource class the dispatcher gives them.
+        #
+        # A cache-push shard is routed to the SMALL class (24 GiB) rather than
+        # index's default LARGE (128 GiB), so seven fit a host's 176 GiB runner
+        # slice instead of one, and the fleet's five dispatcher hosts hold
+        # dozens instead of five. That routing lives in ix
+        # crates/ci/dispatcher/src/handler/workflow_job.rs `classify`, keyed on
+        # the same `-cache-push` label suffix the credential gate uses.
+        #
+        # THE EVAL FAN-OUT BELOW IS WHAT MAKES THAT SAFE, so the two must move
+        # together. `nix-eval-jobs --max-memory-size` is a bound PER WORKER
+        # ("4GiB per worker by default"), not a total: the flake-check gate's
+        # `--workers 16 --max-memory-size 6144` is a 96 GiB ceiling, and that
+        # product is exactly where index's measured 94.1 GiB peak and its large
+        # class came from. The shards below use `--workers 3` against 4096 MiB,
+        # a 12 GiB ceiling, which fits 24 GiB with room for the checkout, the
+        # xargs fan-out and attic. Raising either number here without raising
+        # the class there OOMs the unit.
+        #
+        # Realisation is not part of that budget at all: builds execute in the
+        # nix-daemon cgroup (nixDaemonMemoryMaxBytes), not in the runner unit
+        # the class sizes. Only eval is charged here, which is why capping eval
+        # is enough to make an otherwise heavy job small.
+        #
+        # History: six shards plus a separate darwin-eval job was seven
+        # large-class jobs for a five-slot pool. They could not co-schedule and
+        # they queued in front of Check, the gating lane; three was the largest
+        # that fit. The class change is what lifted the ceiling.
+        #
+        # The count is read from `strategy.job-total` below rather than
+        # duplicated, so this list is the only edit needed to rebalance.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # Warm-store pool shared with check.yml. The dispatcher recognises the
+    # `-cache-push` suffix and attaches the push-only ix-public token as a
+    # per-job systemd credential (spawn.rs ix_public_push_eligible). The shard
+    # index sits before that suffix; see the header note.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-shard{2}-cache-push', github.run_id, github.run_attempt, matrix.shard) }}"]
+    # Under the dispatcher's 190-min runnerMaxRuntimeSecs (see the header), so
+    # an overrun fails as a job timeout naming the shard instead of a bare
+    # exit 143. 170 leaves 20 min of cleanup slack against the unit cap.
+    timeout-minutes: 170
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # Darwin eval guard (#3587). Deleting the hosted-mac lane removed the
+      # only thing in CI that instantiated cachePushRoots.aarch64-darwin, so a
+      # package that stops EVALUATING on darwin would next be discovered by a
+      # human on a mac. Eval is pure: it needs no darwin builder, nothing is
+      # realised, and error rows are reported naming the attr.
+      #
+      # On shard 0 only, and inside the shard rather than as its own job. It
+      # is 27 seconds of evaluation, and a separate job would reserve a whole
+      # 128 GiB large-class slot -- a fifth of the fleet's index capacity --
+      # to spend them (see the matrix note above). Running it on one shard
+      # gets the guard without paying for it N times or taking a host.
+      #
+      # The count of genuinely native (non-cross-aliased) rows is the #3586
+      # ratchet: it should only ever shrink as packages gain `cross = true`.
+      #
+      # Report-only, deliberately. The deleted lane's own filter was
+      # `select(.error == null and ...)`, i.e. it tolerated error rows and
+      # never recorded how many there were, so there is no trustworthy
+      # baseline to fail against and a fail-closed gate here would just red
+      # main on pre-existing breakage. Two or three green runs establish the
+      # real numbers; commit them as budgets and turn both counts into hard
+      # gates then (#3586).
+      - name: Evaluate cachePushRoots.aarch64-darwin
+        if: matrix.shard == 0
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+
+          eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+          jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
+
+          rows="$workdir/darwin-rows.jsonl"
+          "$eval_jobs" \
+            --flake .#cachePushRoots.aarch64-darwin \
+            --workers 3 \
+            --max-memory-size 4096 \
+            2>"$workdir/darwin-eval.err" \
+            > "$rows" || true
+
+          errors="$("$jq" -rs '[.[] | select(.error != null)] | length' "$rows")"
+          native="$("$jq" -rs '[.[] | select(.system == "aarch64-darwin")] | length' "$rows")"
+          echo "::notice::cache-push: cachePushRoots.aarch64-darwin evaluates; ${native} root(s) still native-only (#3586 ratchet)"
+          if [ "$errors" -gt 0 ]; then
+            "$jq" -rs '.[] | select(.error != null) | "::warning::darwin eval failed: \(.attr): \(.error | split("\n")[0])"' "$rows"
+            echo "::warning::cache-push: ${errors} root(s) in cachePushRoots.aarch64-darwin do not evaluate"
+          fi
+
+      - name: Publish this shard's packages to cache.ix.dev
+        id: publish
+        shell: bash
+        env:
+          FULL_PASS: ${{ inputs.full_pass && '1' || '' }}
+          SHARD: ${{ matrix.shard }}
+          SHARD_COUNT: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+
+          phase() { echo "::notice::cache-push shard ${SHARD} phase '$1' took $(( SECONDS - $2 ))s"; }
+
+          # Which root broke has always been in the log; WHY never was. The only
+          # line nix writes to stderr for a build failure is `Cannot build
+          # '<drv>'` -- the builder's own output goes to the nix log store and
+          # nowhere else -- so ix-site-0.1.0 failed three consecutive main
+          # merges (runs 30179574924, 30180017487, 30180206346) with the cause
+          # (a SvelteKit prerender 404 on a dangling in-page link) visible only
+          # to someone who reproduced the build by hand. `nix log` is the whole
+          # fix. Bounded on both axes -- lines per derivation and derivations
+          # per shard -- because a builder that fails late after a chatty phase
+          # would otherwise bury every other annotation in the run.
+          realise_log_lines=200
+          realise_log_drvs=5
+          realise_log() {
+            printf '::group::builder log, last %s lines: %s\n' "$realise_log_lines" "${1##*/}"
+            # No entry when the derivation was never built here (substituted
+            # failure, or a build on a remote builder that kept its own log);
+            # nix says so on stderr and that message is itself the diagnosis.
+            nix log "$1" > "$workdir/nix-log.txt" 2>&1 || true
+            tail -n "$realise_log_lines" "$workdir/nix-log.txt"
+            printf '::endgroup::\n'
+          }
+
+          # Attached to every main push; absence is a dispatcher regression.
+          cred="${CREDENTIALS_DIRECTORY:-}/${IX_PUBLIC_PUSH_CREDENTIAL_NAME:-}"
+          if [ ! -f "$cred" ]; then
+            echo "::error::ix-public push credential not delivered (see ci-dispatcher spawn.rs ix_public_push_eligible); if the runs-on label was edited, check it still ENDS with '-cache-push'"
+            exit 1
+          fi
+
+          set -a
+          # shellcheck disable=SC1090
+          . "$cred"
+          set +a
+          : "${ATTIC_IX_PUBLIC_PUSH_TOKEN:?credential file missing ATTIC_IX_PUBLIC_PUSH_TOKEN}"
+
+          # Token via config file, never `attic login`: argv is world-readable
+          # through /proc/<pid>/cmdline.
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          export XDG_CONFIG_HOME="$workdir/config"
+          install -d -m700 "$XDG_CONFIG_HOME/attic"
+          ( umask 077
+            {
+              printf 'default-server = "ix-public-push"\n'
+              printf '[servers.ix-public-push]\n'
+              printf 'endpoint = "http://127.0.0.1:8070/"\n'
+              printf 'token = "%s"\n' "$ATTIC_IX_PUBLIC_PUSH_TOKEN"
+            } > "$XDG_CONFIG_HOME/attic/config.toml"
+          )
+
+          # Flake-pinned tools: runner PATH has nix + coreutils but no
+          # findutils. ^bin/^out pick one output from multi-output packages.
+          tools_t=$SECONDS
+          eval_jobs="$(nix build .#nix-eval-jobs --no-link --print-out-paths)/bin/nix-eval-jobs"
+          attic="$(nix build .#attic-client --no-link --print-out-paths)/bin/attic"
+          jq="$(nix build '.#jq^bin' --no-link --print-out-paths)/bin/jq"
+          xargs="$(nix build '.#findutils^out' --no-link --print-out-paths)/bin/xargs"
+          phase tools "$tools_t"
+
+          # cachePushRoots = packages minus the never-dedup *-oci.tar archives
+          # (lib/per-system.nix). Enumerate by drvPath: floating-CA outputs are
+          # null at eval time.
+          #
+          # Every shard evaluates the full attrset (25s) rather than one shard
+          # planning and handing the list to the rest. Eval is deterministic
+          # given the checkout SHA and all shards check out the same SHA, so a
+          # shared plan would buy 25s at the cost of an artifact round-trip and
+          # a serial dependency in front of the whole matrix.
+          all_roots="$workdir/all-roots.tsv"
+          drvs="$workdir/drvs.txt"
+          outs="$workdir/outs.txt"
+          roots="$workdir/roots.tsv"
+          eval_t=$SECONDS
+          "$eval_jobs" \
+            --flake .#cachePushRoots.x86_64-linux \
+            --workers 3 \
+            --max-memory-size 4096 \
+            2>"$workdir/eval.err" \
+            | "$jq" -r 'select(.drvPath != null) | [.drvPath, (.outputs.out // "")] | @tsv' \
+            | sort -u > "$all_roots" || true
+          # The bootstrap client cannot sit in cachePushRoots: evaluating that
+          # flake requires the client this local view provides. The action
+          # above has already realized it without evaluating the parent flake.
+          bootstrap_installable='path:./views/nix#nix-cli'
+          bootstrap_out="$(nix build --no-link --print-out-paths "$bootstrap_installable")"
+          locked_bootstrap_out="$(nix eval --raw \
+            --file .github/actions/bootstrap-patched-nix/read-lock.nix \
+            --apply 'lock: lock.outputPath')"
+          if [ "$bootstrap_out" != "$locked_bootstrap_out" ]; then
+            echo "::error::bootstrap Nix output is $bootstrap_out; lock requires $locked_bootstrap_out"
+            exit 1
+          fi
+          bootstrap_drv="$(nix path-info --derivation "$bootstrap_installable")"
+          printf '%s\t%s\n' "$bootstrap_drv" "$bootstrap_out" >> "$all_roots"
+          sort -u -o "$all_roots" "$all_roots"
+          phase eval "$eval_t"
+
+          # Round-robin over the sorted list. `sort -u` above makes the order
+          # identical in every shard, so the slices partition the roots exactly
+          # once with no coordination. Pure bash: the runner PATH has no awk.
+          # Round-robin rather than contiguous blocks because roots sort by
+          # drvPath (a hash), so adjacent entries are unrelated and any
+          # slicing is equally arbitrary -- but round-robin keeps the slice
+          # sizes within one of each other for any root count.
+          i=0
+          while IFS=$'\t' read -r drv out; do
+            if [ "$(( i % SHARD_COUNT ))" -eq "$SHARD" ]; then
+              printf '%s\t%s\n' "$drv" "$out"
+            fi
+            i=$(( i + 1 ))
+          done < "$all_roots" > "$roots"
+          echo "::notice::cache-push shard ${SHARD}/${SHARD_COUNT}: $(wc -l < "$roots") of $(wc -l < "$all_roots") roots in this slice"
+
+          # Skip roots already pushed: makes the run O(changed), not O(full
+          # closure). Probe the atticd endpoint the push writes to, not
+          # cache.ix.dev (ncps in front 404s ix-public paths, which made every
+          # probe miss). Probe failure counts as a miss; CA roots have no
+          # eval-time path and always realise. FULL_PASS=1 re-realises
+          # everything to heal roots skipped over a failed dep push.
+          probe_t=$SECONDS
+          : > "$workdir/cached.txt"
+          if [ -z "${FULL_PASS:-}" ]; then
+            # shellcheck disable=SC2016  # $1 expands in the child bash, not here
+            cut -f2 "$roots" | sort -u \
+              | "$xargs" -r -P16 -n1 bash -c \
+                  'nix path-info --store http://127.0.0.1:8070/ix-public "$1" >/dev/null 2>&1 && printf "%s\n" "$1"' _ \
+              > "$workdir/cached.txt" || true
+          fi
+          declare -A cached=()
+          while IFS= read -r p; do [ -n "$p" ] && cached[$p]=1; done < "$workdir/cached.txt"
+          while IFS=$'\t' read -r drv out; do
+            if [ -z "$out" ] || [ -z "${cached[$out]:-}" ]; then
+              printf '%s\n' "$drv"
+            fi
+          done < "$roots" > "$drvs"
+          phase probe "$probe_t"
+          echo "::notice::cache-push shard ${SHARD} probe: $(wc -l < "$drvs") of $(wc -l < "$roots") roots in this slice need realising"
+
+          # -n1, not one batch: a batched realise prints no paths at all if any
+          # single drv fails, which would publish nothing. The per-drv wrapper
+          # additionally records WHICH root failed (bare xargs only reports
+          # "something failed" via its exit status): nix does not cache
+          # failures, so a broken root re-realises and re-fails on every
+          # merge, and two such roots once taxed every run ~16 min while
+          # staying warning-level invisible (indexable-inc/index#1863). The
+          # error annotation below names them so a chronic failure is loud.
+          failed_roots="$workdir/failed-roots.txt"
+          : > "$failed_roots"
+          failed_drvs="$workdir/failed-drvs.txt"
+          : > "$failed_drvs"
+          failed_pushes="$workdir/failed-pushes.txt"
+          : > "$failed_pushes"
+          realise_t=$SECONDS
+          # Each child pushes its own root the moment that root is realised,
+          # instead of leaving every path for the bulk push after the whole
+          # xargs finishes. That ordering is what wedged the lane: a run
+          # killed by the runner's 190-min unit cap published NOTHING, so the
+          # next run's probe found the same 200-odd roots missing and
+          # restarted from the same place -- forty runs over two days with
+          # zero convergence (#2551). Publishing per root makes a killed shard
+          # still leave progress behind for the next probe to skip, which is
+          # also why `fail-fast: false` above is load-bearing.
+          #
+          # --jobs 2, not 16: sixteen children share one uplink. A push
+          # failure is not a realise failure, so it lands in its own file and
+          # leaves the root out of failed-roots (which feeds the exit status);
+          # the sweep below and the next run retry it.
+          # shellcheck disable=SC2016  # positionals expand in the child, not here
+          "$xargs" -a "$drvs" -r -P16 -n1 bash -c \
+              'paths=$(nix-store --realise --keep-going "$4") || { printf "%s\n" "$4" >> "$1"; exit 1; }
+               printf "%s\n" "$paths"
+               # shellcheck disable=SC2086  # store paths never contain spaces
+               "$2" push --jobs 2 ix-public $paths >&2 || printf "%s\n" "$4" >> "$3"' \
+              _ "$failed_roots" "$attic" "$failed_pushes" \
+            > "$outs" 2>"$workdir/realise.err" \
+            || {
+              # Match any error line (nix phrases failures several ways); pure
+              # bash because the runner PATH has no grep/sed.
+              #
+              # The same pass harvests the derivations nix named, which is what
+              # `realise_log` needs below: when the break is under the root
+              # rather than in it, nix names the DEPENDENCY here while
+              # failed-roots.txt (written by the xargs child) only knows the
+              # root, whose log is empty. Keyed on the quoted store path rather
+              # than on a phrasing ("Cannot build '<drv>'", "builder for '<drv>'
+              # failed", ...) so a reworded nix error still yields a log.
+              # Annotations go to a file instead of straight down a
+              # `sort -u | head` pipe: SIGPIPE from `head` would kill this loop
+              # partway and silently drop the later drv paths.
+              while IFS= read -r line; do
+                case $line in
+                  *"error:"*"'/nix/store/"*".drv'"*)
+                    drv="/nix/store/${line#*\'/nix/store/}"
+                    printf '%s\n' "${drv%%\'*}" >> "$failed_drvs" ;;
+                esac
+                case $line in
+                  *error:*) printf '::warning::realise failed: %s\n' "${line#*error: }" ;;
+                esac
+              done < "$workdir/realise.err" > "$workdir/realise-annotations.txt"
+              sort -u "$workdir/realise-annotations.txt" | head -n 20
+            }
+          phase realise "$realise_t"
+
+          if [ -s "$failed_pushes" ]; then
+            echo "::warning::cache-push shard ${SHARD}: $(wc -l < "$failed_pushes") root(s) realised but failed their incremental push; the sweep below and the next run retry them"
+          fi
+
+          # `fallback = true` engages silently: nix rebuilds a failed
+          # substitute from source with no distinct log line, so a degraded
+          # cache would surface only as slower runs. Every substitution
+          # failure does leave a download-error line in realise.err even when
+          # the realise itself then succeeds; count those and warn loudly.
+          # Pure bash (no grep on the runner PATH), same as the error loop
+          # above.
+          fallback_hits=0
+          while IFS= read -r line; do
+            case $line in
+              *"Transferred a partial file"* | *"unable to download"* | *"some substitutes for the outputs"*)
+                fallback_hits=$(( fallback_hits + 1 )) ;;
+            esac
+          done < "$workdir/realise.err"
+          if [ "$fallback_hits" -gt 0 ]; then
+            echo "::warning::cache-push shard ${SHARD}: $fallback_hits substitution-failure line(s) during realise; nix fell back to source builds (cache health degraded, see indexable-inc/ix#6139)"
+          fi
+
+          if [ -s "$outs" ]; then
+            # Idempotent sweep: every path here was already pushed by its own
+            # child above, so attic finds them present and this is a cheap
+            # re-check that catches anything whose incremental push failed.
+            push_t=$SECONDS
+            "$xargs" -a "$outs" -r "$attic" push --jobs 16 ix-public \
+              || echo "::warning::some paths failed to push to ix-public"
+            phase push "$push_t"
+          elif [ -s "$drvs" ]; then
+            echo "::warning::no output paths resolved for ix-public; eval/realise logs follow"
+            tail -n 20 "$workdir/eval.err" "$workdir/realise.err" >&2 || true
+          elif [ ! -s "$all_roots" ]; then
+            echo "::warning::eval produced no roots; eval log follows"
+            tail -n 20 "$workdir/eval.err" >&2 || true
+          else
+            echo "::notice::cache-push shard ${SHARD}: every root in this slice already cached in ix-public; nothing to realise or push"
+          fi
+
+          # The publish-hole gate (#3195), moved here from a job output. Matrix
+          # jobs cannot aggregate outputs -- the last job to finish overwrites
+          # the rest -- so each shard reports its own holes by exiting non-zero
+          # and `advance-cache-ready`'s `needs` does the aggregation. This runs
+          # AFTER the sweep above for the reason the old comment gave: an exit
+          # before the push would discard the partial publish. Everything this
+          # shard realised is already on the cache by the time we fail.
+          if [ -s "$failed_roots" ]; then
+            # /nix/store/<hash>-<name>.drv -> <name>, joined on one line.
+            names=""
+            while IFS= read -r drv; do
+              name="${drv##*/}"
+              name="${name#*-}"
+              names="$names ${name%.drv}"
+            done < "$failed_roots"
+            echo "::error::cache-push shard ${SHARD}: $(wc -l < "$failed_roots") root(s) failed to realise (rebuilt and re-failed on every merge until fixed):$names"
+
+            # The names above say which; these logs say why. Union of the
+            # derivations nix named and the roots the children recorded, so a
+            # break below the root still gets its own builder output dumped.
+            log_targets="$workdir/log-targets.txt"
+            sort -u "$failed_drvs" "$failed_roots" > "$log_targets"
+            dumped=0
+            while IFS= read -r drv; do
+              [ "$dumped" -lt "$realise_log_drvs" ] || break
+              realise_log "$drv"
+              dumped=$(( dumped + 1 ))
+            done < "$log_targets"
+            omitted=$(( $(wc -l < "$log_targets") - dumped ))
+            if [ "$omitted" -gt 0 ]; then
+              echo "::notice::cache-push shard ${SHARD}: builder log withheld for $omitted further failed derivation(s) to keep this log readable; run 'nix log <drv>' for those"
+            fi
+            exit 1
+          fi
+
+  # Consumers pinning `github:indexable-inc/index/main` can `nix flake update`
+  # inside the window between a merge and the push above finishing, locking a
+  # rev whose darwin cross closure is not yet on cache.ix.dev; the
+  # substitute-only darwin packages (RFC 0009) then fail with "Required
+  # system: 'x86_64-linux'" (indexable-inc/index#1862). Fast-forwarding
+  # `cache-ready` only after a successful linux push gives consumers a pin
+  # target whose x86_64-linux closure is always published, minutes after the
+  # merge. The darwin lanes moved OFF this gate (2026-07-19): they exist to
+  # prewarm dev macs, every fleet consumer of this pin is linux, and gating
+  # on the GitHub-hosted mac held the fleet pin hostage for 2h13m-2h45m per
+  # run (8-run sample). Darwin consumers pin this same ref since #3587
+  # deleted the hosted-mac lane: what a mac can substitute is the
+  # Linux->Darwin cross closure, which this lane publishes
+  # (same #1890 guarantee, its own ref).
+  #
+  # `needs: [push]` is the publish-hole gate (#3195): GitHub requires EVERY
+  # matrix shard to succeed, and a shard with unrealised roots exits non-zero,
+  # so a hole in any slice skips this job and holds the pin. Run 29295767529
+  # concluded success while its own log recorded the whole codex closure
+  # failing to realise, and the pin advanced over the hole onto every darwin
+  # consumer (#3195, #3188). The darwin eval guard rides inside shard 0 and is
+  # report-only, so it can warn without ever holding the pin.
+  advance-cache-ready:
+    needs: [push]
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-advance-cache-ready', github.run_id, github.run_attempt) }}"]
+    # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # The self-hosted runner exposes a minimal PATH (git + nix +
+      # coreutils); this job shells out to more than that. Referenced by
+      # repo, not `./.github/actions/...`: this job never checks the
+      # repository out (it is pure `gh api`), so there is no local action
+      # tree to resolve a relative path against.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
+      - name: Fast-forward cache-ready to the pushed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # workflow_dispatch can target any ref; only main commits may move
+          # the consumer pin.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::notice::not on main ($GITHUB_REF); leaving cache-ready alone"
+            exit 0
+          fi
+
+          # Stderr stays on the job log: a 404 here is the expected first-run
+          # path, anything else explains itself in the log.
+          if ! current="$(gh api "repos/$REPOSITORY/git/ref/heads/cache-ready" --jq .object.sha)"; then
+            gh api -X POST "repos/$REPOSITORY/git/refs" \
+              -f ref=refs/heads/cache-ready -f "sha=$SHA" > /dev/null
+            echo "::notice::created cache-ready at $SHA"
+            exit 0
+          fi
+
+          if [ "$current" = "$SHA" ]; then
+            echo "::notice::cache-ready already at $SHA"
+            exit 0
+          fi
+
+          # force=false makes the update fast-forward-only: the API rejects
+          # any non-ancestor move, so a re-run of an older commit's workflow
+          # (or a full-pass dispatch racing a newer merge) can never drag the
+          # ref backwards past closures already published.
+          if gh api -X PATCH "repos/$REPOSITORY/git/refs/heads/cache-ready" \
+               -f "sha=$SHA" -F force=false > /dev/null; then
+            echo "::notice::cache-ready advanced: $current -> $SHA"
+            exit 0
+          fi
+
+          # Distinguish the expected rejection (this run's commit is already
+          # behind the ref) from a real failure that strands consumers.
+          status="$(gh api "repos/$REPOSITORY/compare/$SHA...cache-ready" --jq .status || echo unknown)"
+          if [ "$status" = "ahead" ] || [ "$status" = "identical" ]; then
+            echo "::notice::cache-ready ($current) is already at or past $SHA; not moving it backwards"
+          else
+            echo "::error::could not fast-forward cache-ready to $SHA (compare status: $status); darwin consumers tracking cache-ready stay pinned at $current (indexable-inc/index#1862)"
+            exit 1
+          fi

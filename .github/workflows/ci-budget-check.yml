@@ -1,0 +1,55 @@
+name: CI budget checks
+
+on:
+  pull_request:
+    paths:
+      - .github/actions/ci-budget/**
+      - .github/workflows/ci-budget-read-only.yml
+      - .github/workflows/ci-budget.yml
+      - .github/workflows/ci-budget-check.yml
+
+permissions:
+  contents: read
+
+env:
+  # ensure-tools resolves `nixpkgs#` attrs through the runner's nix client,
+  # which needs the flake CLI enabled. Only those two features: this job does
+  # not evaluate this repo's flake.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes
+
+jobs:
+  classify:
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ci-budget-read-only.yml
+    with:
+      force-big-change: true
+
+  test:
+    needs: classify
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-ci-budget-check', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # The hosted image shipped both interpreters; the ix-ci-run runner PATH
+      # is bash, coreutils, dash, git, github-runner, tar, gzip, nix and unzip,
+      # so the two `run:` steps below would die 127 without this. `node=nodejs`
+      # because the command and the nixpkgs attr differ.
+      - name: Provision missing CLI tools
+        uses: ./.github/actions/ensure-tools
+        with:
+          tools: python3 node=nodejs
+      - name: Check read-only workflow output
+        env:
+          BIG_CHANGE: ${{ needs.classify.outputs.big_change }}
+        run: test "$BIG_CHANGE" = true
+      - name: Test classifier behavior
+        run: >-
+          python3 -m unittest discover
+          -s .github/actions/ci-budget
+          -p 'test_*.py'
+      - name: Test worker deadline and process cleanup
+        run: node --test .github/actions/ci-budget/worker/worker.test.mjs

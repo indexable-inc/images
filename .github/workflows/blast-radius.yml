@@ -1,0 +1,297 @@
+name: Blast radius
+
+on:
+  # Disabled on PRs: the per-PR full-catalog eval (~57s "Report blast radius"
+  # step) claims a shared `ix-ci` runner from the one dispatcher pool that
+  # serves the whole team, so every PR queued one more eval-only runner and
+  # slowed the queue. The report is informational (a sticky PR comment), never
+  # a merge gate, so dropping the auto-trigger costs no safety. Re-enable by
+  # uncommenting the `pull_request` block below. `workflow_dispatch` only keeps
+  # `on:` non-empty (the jobs are PR-context gated, so a manual run no-ops).
+  workflow_dispatch: {}
+  # pull_request:
+  #   branches:
+  #     - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blast-radius-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The self-hosted runner's Nix daemon owns substituters; the job only sets
+  # client-side eval knobs (matching check.yml). The daemon already owns the
+  # cache configuration, so this untrusted runner explicitly ignores restricted
+  # flake settings instead of warning once per evaluator worker.
+  # `ca-derivations`: the rust units default to contentAddressed = true, so the
+  # `.#checks` eval this job forces resolves content-addressed drvs. Without it
+  # nix-eval-jobs aborts ("experimental Nix feature 'ca-derivations' is
+  # disabled"). Mirrors check.yml.
+  NIX_CONFIG: |-
+    experimental-features = nix-command flakes ca-derivations wasm-builtin
+    accept-flake-config = false
+
+jobs:
+  # Untrusted half: runs this PR's own `.#blast-radius` flake code. It holds only
+  # a read-only token (contents + actions: read), and that token is scoped to the
+  # timings-fetch step alone -- never the env of the PR-code "Report blast radius"
+  # step -- so PR-authored code cannot reach a credential or poison a later
+  # token-backed step. The report leaves this job only as an artifact (plain
+  # data) for the comment job.
+  evaluate:
+    # Same-repository, non-Dependabot PRs only.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    # Same self-hosted dispatcher as check.yml: the `ix-ci-run-*` label is
+    # claimed by the org dispatcher, which mints an ephemeral runner with a warm
+    # /nix/store. Evaluating .#ciChecks.x86_64-linux forces an x86_64-linux IFD
+    # build (lib/rust/cargo-unit.nix), so this must run on the Linux runner.
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius', github.run_id, github.run_attempt) }}"]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Read-only: lets `gh run download` fetch the base-branch check-timings
+      # artifact from the most recent successful main Check run (best-effort
+      # build-time annotations). No write scope is introduced.
+      actions: read
+    env:
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.sha }}
+    steps:
+      # The default pull_request checkout is the merge ref, so its working tree
+      # already carries this PR's `.#blast-radius` app, and fetch-depth 0 brings
+      # both parents (base.sha, head.sha) into the clone so the tool's
+      # `git merge-base` and the `?rev=<sha>` flake refs resolve. The only token
+      # in this job is the read-only one on the timings-fetch step below.
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Underscore digit separators: every nix invocation that evaluates this
+      # tree must go through the patched client (see the action's description).
+      - name: Bootstrap patched Nix client
+        uses: ./.github/actions/bootstrap-patched-nix
+
+      # Best-effort: download the most recent successful main Check run's
+      # check-timings artifact (the nix-fast-build --result-file the `check` gate
+      # uploads; see lib/per-system.nix). blast-radius --timings annotates each
+      # rebuilt check with its base-branch BUILD wall-clock. Every failure path
+      # (no run, no artifact, gh error) leaves no check-results.json, so the next
+      # step renders without timings rather than failing the job. This step never
+      # exits nonzero. The read-only token lives here, not at job level, so the
+      # PR-code "Report blast radius" step below never sees a credential.
+      - name: Fetch base-branch check timings
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          run_id="$(gh run list --repo "${REPOSITORY}" --workflow Check --branch main \
+                      --status success --limit 1 --json databaseId \
+                      --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+          if [ -z "${run_id}" ]; then
+            echo "no successful main Check run found; rendering without timings"
+            exit 0
+          fi
+          gh run download "${run_id}" --repo "${REPOSITORY}" \
+            --name "check-timings-${run_id}" --dir . 2>/dev/null \
+            || echo "check-timings-${run_id} unavailable; rendering without timings"
+
+      # --json emits a constrained data object (counts + name lists), not the
+      # final Markdown, so the trusted comment job owns the published body.
+      # pipefail makes an eval failure (nonzero `nix run`) fail the step instead
+      # of being masked by tee's exit code. Pass --timings only when the base
+      # artifact was fetched above (the flag's input is optional in the tool).
+      - name: Report blast radius
+        run: |
+          set -euo pipefail
+          if [ -f check-results.json ]; then
+            nix run .#blast-radius -- --json --timings check-results.json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
+          else
+            nix run .#blast-radius -- --json "${BASE_SHA}" "${HEAD_SHA}" | tee report.json
+          fi
+
+      - name: Upload report
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blast-radius-${{ github.run_id }}
+          path: report.json
+          retention-days: 1
+
+  # Trusted half: a fresh GitHub-hosted runner that never executes PR code. It
+  # downloads the data-only report.json, reconstructs the Markdown from it, and
+  # posts the sticky comment, so the write token is introduced on a runner the
+  # PR cannot influence.
+  comment:
+    needs: evaluate
+    runs-on: ["${{ format('ix-ci-run-{0}-{1}-blast-radius-comment', github.run_id, github.run_attempt) }}"]
+    # p95 <1m over last 30 green runs (2026-07-17); 10m floor.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The self-hosted runner exposes a minimal PATH (git + nix +
+      # coreutils); this job shells out to more than that. Referenced by
+      # repo, not `./.github/actions/...`: this job never checks the
+      # repository out (it is pure `gh api`), so there is no local action
+      # tree to resolve a relative path against.
+      - name: Provision missing CLI tools
+        uses: indexable-inc/index/.github/actions/ensure-tools@main
+        with:
+          tools: gh jq
+
+      - name: Download report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: blast-radius-${{ github.run_id }}
+          path: .
+
+      # report.json is produced by PR-controlled `.#blast-radius` code, so a
+      # broken or hostile app could emit `{}` (or wrong-shaped fields) and the
+      # write-token job would still post a bot comment claiming "0 of ?".
+      # Fail closed: require the full schema before rendering. Every field is
+      # type-checked, SHAs must be hex, and the `and` chain short-circuits so a
+      # non-array `.changed` never reaches the `+`/`test` that would error.
+      - name: Validate report schema
+        run: |
+          set -euo pipefail
+          # Slurp (-s) so the artifact must be exactly one object: `jq -e`
+          # otherwise exits on the last value, letting `{}` followed by a valid
+          # report pass while the render then emits a null first section.
+          jq -e -s '
+            def name_ok: type == "string" and test("^[A-Za-z0-9_./ +():-]+$");
+            length == 1 and
+            (.[0] |
+              (.base    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+              (.head    | type == "string" and test("^[0-9a-f]{7,40}$")) and
+              (.total   | type == "number") and
+              (.changed | type == "array") and
+              (.added   | type == "array") and
+              (.removed | type == "array") and
+              ((.changed + .added + .removed) | all(name_ok)) and
+              (.causes | type == "array") and
+              (.causes | all((.name | name_ok) and (.checks | type == "array") and (.checks | all(name_ok)))) and
+              # `timings` is optional (omitted when empty by the Rust crate via
+              # skip_serializing_if). When present it must be a string -> number
+              # map; the same `name_ok` charset gates the keys so a malicious
+              # report cannot inject mention/HTML through a check label.
+              ((.timings // {}) | type == "object") and
+              ((.timings // {}) | to_entries | all((.key | name_ok) and (.value | type == "number"))) and
+              # `phaseTimings` is always present (the Rust crate stamps every
+              # phase including `total`). Keys are stable kebab-case so a
+              # hostile report cannot smuggle attacker-controlled keys into
+              # the artifact, even though the renderer never reads them.
+              (.phaseTimings | type == "object" and (to_entries | all((.key | type == "string" and test("^[a-z][a-z0-9-]*$")) and (.value | type == "number"))))
+            )
+          ' report.json > /dev/null \
+            || { echo "::error::malformed blast-radius report.json"; exit 1; }
+
+      # Rebuild the Markdown from the validated data. Check names still pass
+      # through a conservative charset (Nix attr names do) so a malicious PR
+      # cannot inject mentions, HTML, or spoofed markers into a comment posted
+      # with the write token. The trusted job owns the marker.
+      - name: Render comment
+        run: |
+          set -euo pipefail
+          jq -r '
+            def safename: select(test("^[A-Za-z0-9_./ +():-]+$"));
+            # Mirror packages/blast-radius/src/report.rs::format_seconds: bucket
+            # by magnitude, round to integer. Empty string for a missing entry
+            # so a bare label renders when an attr was a substituter hit or new
+            # on this PR.
+            def round_int: (. + 0.5) | floor;
+            def fmt_time:
+              if . == null then ""
+              elif . < 1 then " (<1s)"
+              elif . < 60 then " (\(round_int)s)"
+              elif . < 3600 then " (\(. / 60 | round_int)m)"
+              else " (\(. / 3600 | round_int)h)"
+              end;
+            # Unique checks across all causes, so the flowchart shares one node
+            # per check (keeps the graph under the Mermaid node budget).
+            ([ .causes[].checks[] ] | unique) as $checks
+            | (.timings // {}) as $t
+            | "<!-- blast-radius -->",
+            "### Blast radius",
+            "",
+            "`\((.changed | length) + (.added | length))` of `\(.total)` checks would rebuild between base `\(.base)` and head `\(.head)`.",
+            (if ((.added | length) > 0) or ((.removed | length) > 0)
+             then "", "\(.added | length) added, \(.removed | length) removed"
+             else empty end),
+            # Which changed inputs fan out to which checks (top causes). A
+            # single-check cause is the same node twice (the cause drv is that
+            # check own per-unit derivation), so render it as one node labeled
+            # with the check name and skip the arrow; multi-check causes still
+            # fan out cause -> check. Mirror the local renderer in
+            # packages/blast-radius/src/report.rs.
+            (if (.causes | length) > 0
+             then "", "```mermaid", "flowchart LR",
+                  (.causes | to_entries[]
+                   | if (.value.checks | length) == 1
+                     then "  c\(.key)[\"\(.value.checks[0] | safename)\($t[.value.checks[0]] | fmt_time)\"]"
+                     else "  c\(.key)[\"\(.value.name | safename)\"]"
+                     end),
+                  (.causes | to_entries[] as $c
+                   | select(($c.value.checks | length) > 1)
+                   | $c.value.checks[] as $k
+                   | "  c\($c.key) --> k\($checks | index($k))[\"\($k | safename)\($t[$k] | fmt_time)\"]"),
+                  "```"
+             else empty end),
+            # Cap the changed-checks list so the comment cannot exceed the GitHub
+            # 65536-char body limit (HTTP 422 "Body is too long"). A PR touching
+            # a shared input rebuilds thousands of checks; the header and bounded
+            # mermaid diagrams carry the signal, the summary shows the true total,
+            # and the full list lives in the run artifact and logs. Mirrors
+            # packages/blast-radius/src/report.rs (CHANGED_LIST_CAP). (Keep this
+            # jq apostrophe-free: it is single-quoted in the shell.)
+            (200 as $cap
+             | if (.changed | length) > 0
+               then "", "<details><summary>changed checks (\(.changed | length))</summary>", "",
+                    (.changed[0:$cap][] | safename as $n | "- \($n)\($t[$n] | fmt_time)"),
+                    (if (.changed | length) > $cap
+                     then "- ...and \((.changed | length) - $cap) more (see the Blast radius check logs)"
+                     else empty end),
+                    "", "</details>"
+               else empty end)
+          ' report.json > comment.md
+          # Final hard guard against GitHub's 65536-char comment-body limit. The
+          # changed-checks cap covers the common case, but the mermaid sections
+          # are bounded only by the PR-controlled report, so a pathological shape
+          # could still overflow. Truncate on a byte boundary (the marker the
+          # post job keys on is at the TOP, so a tail truncation leaves it
+          # intact) and append a notice.
+          max_bytes=65000
+          if [ "$(wc -c < comment.md)" -gt "${max_bytes}" ]; then
+            head -c "${max_bytes}" comment.md > comment.md.trunc
+            mv comment.md.trunc comment.md
+            printf '\n\n_Comment truncated to fit the GitHub comment size limit._\n' >> comment.md
+          fi
+
+      # One sticky comment per PR, keyed by the `<!-- blast-radius -->` marker.
+      # Paginate the comment list so the marker is found on busy PRs (no
+      # duplicate comments), and restrict the match to comments this token can
+      # actually PATCH: a user comment that happens to start with the marker
+      # would otherwise be selected and every PATCH would 403 forever.
+      - name: Post sticky comment
+        run: |
+          set -euo pipefail
+          # `gh api --slurp` rejects `--jq`, so slurp the paginated pages (an
+          # array of per-page arrays) and filter with standalone jq.
+          id="$(gh api --paginate --slurp "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                  | jq -r 'map(.[] | select((.user.login == "github-actions[bot]" or .user.login == "github-actions") and ((.body // "") | startswith("<!-- blast-radius -->")))) | .[0].id // empty')"
+          if [ -n "${id}" ]; then
+            gh api -X PATCH "repos/${REPOSITORY}/issues/comments/${id}" -F body=@comment.md
+          else
+            gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -F body=@comment.md
+          fi

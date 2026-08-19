@@ -1,0 +1,47 @@
+name: Enforce a CI worker budget
+description: Enforce queue and setup admission or run one validation with cleanup
+
+inputs:
+  mode:
+    description: Check admission before setup or run validation after setup
+    default: check
+  repository:
+    description: GitHub repository in owner/name form
+    required: true
+  token:
+    description: Token with actions read permission
+    required: true
+  run-id:
+    description: Workflow run containing the worker
+    required: true
+  run-attempt:
+    description: Current workflow attempt containing the worker
+    required: true
+  big-change:
+    description: Whether the shared classifier granted the extended tier
+    required: true
+  script:
+    description: Repository-relative Bash script to execute in run mode
+    default: ""
+  arguments:
+    description: JSON array of arguments passed to the repository script
+    default: "[]"
+
+outputs:
+  lint_result:
+    description: >-
+      Optional lint phase result emitted by the budgeted script, or
+      budget-exceeded when the validation clock killed the script before it
+      published one
+  nix_result:
+    description: >-
+      Optional Nix phase result emitted by the budgeted script, or
+      budget-exceeded when the validation clock killed the script before it
+      published one
+
+runs:
+  using: node24
+  # GitHub's Node action host does not guarantee that argv[1] is the action
+  # module's real path. Keep invocation in a dedicated entrypoint instead of
+  # relying on worker.mjs's direct-execution guard.
+  main: worker-entrypoint.mjs

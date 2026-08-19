@@ -1,0 +1,38 @@
+name: Provision missing CLI tools
+description: >-
+  Put the named tools on PATH, sourcing any that are missing from nixpkgs. The
+  ix self-hosted runners expose a deliberately minimal PATH (git + nix +
+  coreutils): no awk, curl, jq, gh or python3. Each lane used to carry its own
+  copy of this `ensure` loop, which is how fork-sync died 127 on awk and then
+  again on curl, one live run at a time. Requires a nix client on PATH.
+
+inputs:
+  tools:
+    description: >-
+      Space-separated tool specs. A bare `jq` means "the `jq` command from
+      `nixpkgs#jq`"; use `command=attr` when they differ (`awk=gawk`).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Provision missing CLI tools
+      shell: bash
+      # The spec list reaches the script through env, never an inline `${{ }}`
+      # in `run:`, so an input can never be interpolated into the script body.
+      env:
+        TOOLS: ${{ inputs.tools }}
+      run: |
+        set -euo pipefail
+        for spec in $TOOLS; do
+          cmd="${spec%%=*}"
+          attr="${spec#*=}"
+          if command -v "$cmd" >/dev/null 2>&1; then
+            continue
+          fi
+          # --print-out-paths emits one line per output (jq: bin + man), so add
+          # /bin per path rather than to the joined string.
+          while IFS= read -r path; do
+            echo "${path}/bin" >> "$GITHUB_PATH"
+          done < <(nix build "nixpkgs#${attr}" --no-link --print-out-paths)
+        done

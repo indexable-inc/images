@@ -1,0 +1,116 @@
+name: Bootstrap patched Nix client
+description: >-
+  Put the fleet's patched Nix client (nix-ix, packages/nix) first on
+  PATH for every later step. Repo .nix files use underscore digit separators
+  in numeric literals, which a stock client cannot parse, so every nix
+  invocation that evaluates this tree must go through the patched client
+  (builds still talk to the host daemon; the 2.34.7+ix client is
+  protocol-compatible with the fleet daemon family). Evaluating the parent
+  tree to build that client would be circular, so the client is built from the
+  checked Nix view. The build is substituted from the warm store or
+  cache.ix.dev unless the runner already provides that exact output.
+  Requires git and a nix client on PATH, which every runner this repo dispatches
+  to provides: CI is self-hosted throughout, and the ephemeral ix-ci-run-*
+  runners carry a nix daemon and a warm store.
+
+runs:
+  using: composite
+  steps:
+    - name: Detect a compatible runner Nix client
+      id: ambient
+      shell: bash
+      env:
+        BOOTSTRAP_LOCK_READER: ${{ github.action_path }}/read-lock.nix
+      run: |
+        set -euo pipefail
+        pinned="$(nix --extra-experimental-features nix-command \
+          eval --raw --file "$BOOTSTRAP_LOCK_READER" \
+          --apply 'lock: builtins.concatStringsSep "\n" [ lock.system lock.outputPath ]')"
+        expected_system="${pinned%%$'\n'*}"
+        expected_client="${pinned#*$'\n'}/bin/nix"
+        # builtins.currentSystem does not exist under the patched client's
+        # pure-eval default, so this eval died before the compatible=false
+        # branch could run and every workflow failed at bootstrap (#9905
+        # regression). config show system reads the setting without
+        # evaluating anything.
+        actual_system="$(nix --extra-experimental-features nix-command \
+          config show system)"
+        actual_client="$(realpath "$(command -v nix)")"
+        if [[ "$actual_system" == "$expected_system" && "$actual_client" == "$expected_client" ]]; then
+          printf 'compatible=true\n' >> "$GITHUB_OUTPUT"
+          echo "::notice title=bootstrap-patched-nix::$actual_client is the pinned client; bootstrap skipped"
+        # Functional fallback, the pre-#9905 probe: a client that parses
+        # fork syntax and carries the +ix version marker satisfies every
+        # downstream surface (lib/evaluator-gate.nix keys on '+ix.'). The
+        # view-built #nix-cli reports a bare '2.34.7' with no marker, so
+        # building from the view produces a client the tests surface then
+        # refuses (main red 2026-08-05, run 30990704317); the fleet's
+        # installed client passes both probes. ENG-12512 tracks stamping
+        # the view build so the exact-pin path can stand alone again.
+        elif value="$(nix --extra-experimental-features nix-command \
+            eval --raw --expr 'toString 25_565' 2>&1)" \
+          && [[ "$value" == 25565 ]] \
+          && [[ "$(nix --extra-experimental-features nix-command \
+            eval --raw --expr builtins.nixVersion)" == *+ix.* ]]; then
+          printf 'compatible=true\n' >> "$GITHUB_OUTPUT"
+          echo "::notice title=bootstrap-patched-nix::$actual_client parses fork syntax and carries +ix; accepted (not the pinned $expected_client)"
+        else
+          printf 'compatible=false\n' >> "$GITHUB_OUTPUT"
+          echo "::notice title=bootstrap-patched-nix::expected $expected_system $expected_client; found $actual_system $actual_client"
+        fi
+
+    - name: Build the patched Nix client from the checked view
+      if: steps.ambient.outputs.compatible != 'true'
+      shell: bash
+      env:
+        BOOTSTRAP_LOCK_READER: ${{ github.action_path }}/read-lock.nix
+      run: |
+        set -euo pipefail
+        # Runner logs are not always reachable from automation, so failures
+        # must explain themselves through annotations: name the command that
+        # died and where.
+        trap 'echo "::error title=bootstrap-patched-nix::failed at line $LINENO: $BASH_COMMAND"' ERR
+        pinned="$(nix --extra-experimental-features nix-command \
+          eval --raw --file "$BOOTSTRAP_LOCK_READER" \
+          --apply 'lock: builtins.concatStringsSep "\n" [ lock.sourceTree lock.system lock.outputPath ]')"
+        expected_source_tree="${pinned%%$'\n'*}"
+        pinned="${pinned#*$'\n'}"
+        expected_system="${pinned%%$'\n'*}"
+        expected_client="${pinned#*$'\n'}/bin/nix"
+        # builtins.currentSystem does not exist under the patched client's
+        # pure-eval default, so this eval died before the compatible=false
+        # branch could run and every workflow failed at bootstrap (#9905
+        # regression). config show system reads the setting without
+        # evaluating anything.
+        actual_system="$(nix --extra-experimental-features nix-command \
+          config show system)"
+        if [[ "$actual_system" != "$expected_system" ]]; then
+          echo "::error title=bootstrap-patched-nix::runner system is $actual_system; lock requires $expected_system"
+          exit 1
+        fi
+        projection_root="$(realpath "$GITHUB_ACTION_PATH/../../..")"
+        source_view="$projection_root/views/nix"
+        git_root="$(git -C "$projection_root" rev-parse --show-toplevel)"
+        projection_prefix="$(git -C "$projection_root" rev-parse --show-prefix)"
+        actual_source_tree="$(git -C "$git_root" rev-parse "HEAD:${projection_prefix}views/nix")"
+        if [[ "$actual_source_tree" != "$expected_source_tree" ]]; then
+          echo "::error title=bootstrap-patched-nix::checked Nix view tree is $actual_source_tree; lock requires $expected_source_tree"
+          exit 1
+        fi
+        # Bootstrap must not depend on cache publication: the ambient client
+        # can carry the exact write-through bug the view's client fixes
+        # (ENG-12418; seen killing this step on run 30986699748), and a cache
+        # blip here takes down every workflow at once. Later jobs, running
+        # the client built here, publish as usual.
+        nix build \
+          --extra-experimental-features "nix-command flakes" \
+          --option write-through-store "" \
+          --out-link "$RUNNER_TEMP/nix-ix" \
+          "path:$source_view#nix-cli"
+        client="$RUNNER_TEMP/nix-ix/bin/nix"
+        if [[ "$(realpath "$client")" != "$expected_client" ]]; then
+          echo "::error title=bootstrap-patched-nix::built client is $(realpath "$client"); expected $expected_client"
+          exit 1
+        fi
+        echo "$RUNNER_TEMP/nix-ix/bin" >> "$GITHUB_PATH"
+        echo "::notice title=bootstrap-patched-nix::$("$client" --version) on PATH"

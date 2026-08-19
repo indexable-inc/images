@@ -36,17 +36,20 @@ A prebuilt-binary package pins its version and per-platform hashes in a generate
 `passthru.updateScript`; bump by running the updater, never by hand-editing the
 hashes. Set `updateScript = true` in the package's `package.nix` so it joins the
 repo-wide updater: `nix run .#update` runs every flagged package's updater (plus
-the Minecraft catalogs) in parallel via dag-runner, and the `update.yml` workflow
-runs it hourly and opens one PR. Do not add a per-package update workflow. See
-[`packages/claude-code`](packages/claude-code) and [`packages/yc`](packages/yc)
-for the worked shape: `nix run .#claude-code.updateScript -- <version>`.
+the Minecraft catalogs) in parallel via dag-runner. Do not add a per-package
+update workflow. See [`packages/claude-code`](packages/claude-code) and
+[`packages/yc`](packages/yc) for the worked shape:
+`nix run .#claude-code.updateScript -- <version>`.
 
-Ecosystem lockfiles get their own hourly updater rather than joining
-`nix run .#update`: the Rust workspace `Cargo.lock` is refreshed by
-`update-cargo.yml` (a plain `cargo update` plus a per-crate
-`cargo update --breaking` for the major bumps) and `flake.lock` by
-`update-flake-lock.yml`. Each opens its own PR gated by `flake-check`; do not
-fold them into the content updater.
+Ecosystem lockfiles stay out of `nix run .#update`: the Rust workspace
+`Cargo.lock` wants a plain `cargo update` plus a per-crate
+`cargo update --breaking` for the major bumps, and `flake.lock` has
+`update-flake-lock.yml` as a callable workflow. The hourly `update.yml` /
+`update-cargo.yml` workflows that used to run these and open PRs died with the
+standalone repository: `indexable-inc/index` is a read-only projection now, so
+an updater cannot push or PR there. Updates land in ix's `index/` subtree
+through the forge queue instead (ix-side automation for this is an open
+follow-up recorded in the ADR 0006 amendment, 2026-08-18).
 
 When upstream signs its release manifest, the updater verifies that signature
 against a pinned key and fails closed before writing hashes (claude-code). When

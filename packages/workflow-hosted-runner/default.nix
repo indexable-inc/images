@@ -45,6 +45,12 @@ quietly outlive the thing that justified it.
     # step outright. Revisit when scorecard ships a non-container entrypoint.
     "scorecard.yml:analysis" = "ossf/scorecard-action is a docker container action and the Nix runners have no Docker daemon";
 
+    # Fires on fork-authored pull requests via pull_request_target and does
+    # nothing but close them with a comment: no checkout, no build, no fleet
+    # resource it could want. Deliberately GitHub-hosted so refusing a
+    # stranger's PR never waits on fleet capacity.
+    "refuse-pull-requests.yml:refuse" = "closes fork PRs with a comment; no checkout, no build, deliberately GitHub-hosted so refusal never waits on fleet capacity";
+
     # The job the dispatcher is SUPPOSED to hand the ix-public push credential
     # to. Named rather than pattern-exempted, so the set of things holding a
     # fleet signing key is a list somebody can read.

@@ -1,0 +1,65 @@
+{
+  "big_change_label": "ci/big-change",
+  "extended_validation_seconds": 10800,
+  "notes": {
+    "extended_validation_seconds": "3h. Defends against a labelled change holding a self-hosted dispatcher slot indefinitely. Inherited from index#4139 and never measured against a distribution; it is an escape hatch, not a sized budget.",
+    "queue_start_seconds": "2h from worker creation to runner assignment. Defends against a change waiting silently on a starved self-hosted pool: one slot per host, shared by ci, auto-deploy, prod deploy, cache-warm, publish and antithesis (indexable-inc/ix#7625). Inherited and never measured against a distribution.",
+    "repositories.indexable-inc/index.routine_validation_seconds": "2400s (40 min). Measured over every `flake-check` job of the index `check.yml` workflow from 2026-07-23T16:19Z to 2026-07-27T06:03Z: 205 runs of the budgeted gate step, 67 of which passed. Successful gate step p50=123s, p75=168s, p90=314s, p95=500s, p99=1765s, max=1862s. index's gate is an order of magnitude cheaper than ix's, which is exactly why the two cannot share one number -- but 300s was killing correct work here too: 10.4% of gates that went on to PASS exceeded it, and 14 runs in the window died 295-320s in. 2400s is 1.29x the longest successful gate observed, so no gate in the measured population would have been killed by it.",
+    "repositories.indexable-inc/ix.routine_validation_seconds": "7500s (125 min), raised from 5400s because ix's gate now runs index's gate too. indexable-inc/ix#9288 folds index's `requiredGateRoots.x86_64-linux` into ix's `required-ci-checks`, adding 429 roots (3023 derivations) to a job set of 205. The 5400s it replaces was measured over every `nix` job of the ix `ci` workflow from 2026-07-25T09:18Z to 2026-07-27T05:50Z: 477 runs of the budgeted gate step, 112 of which passed. Successful gate step p50=313s, p75=1154s, p90=3298s, p95=3606s, p99=4647s, max=5012s; pull_request-only successes (n=44) p50=275s, p75=362s, p90=1217s, p95=2463s, max=3323s. At the 300s before that, 54.5% of gates that went on to PASS had already exceeded the budget, and 25 runs in the window died 295-320s in: the budget sat between the p50 and the p75 of correct work, so it was killing one-line changes for being cold rather than for being wrong (indexable-inc/ix#8688, ENG-10212, ENG-10261, ENG-10273). A comment added to any .nix file changes that file's hash and misses the cache for everything reading it, so the cold case is the routine case here and no threshold keyed on diff size can tell the two apart. The long tail is not an artifact of the 2026-07-26 dispatcher wedge (indexable-inc/ix#8648): successes recorded before it already reached 5012s (push) and 3302s (pull_request). 7500s keeps that derivation and adds the work being absorbed. The marginal is index's own budgeted gate step, which IS `build-gate` over `.#requiredGateRoots.x86_64-linux` (lib/per-system.nix) -- exactly the roots ix now takes on, on the same self-hosted pool: successful max=1862s in the window recorded below. Worst case is therefore 5012 + 1862 = 6874s, and the same 1.08x factor that produced 5400 from 5012 gives 7424s, rounded to 7500. It stays under `extended_validation_seconds` (10800s), so a wedged routine gate is still capped below the escape hatch. Additive maxima is deliberately conservative, and this number is a derivation rather than a measurement: the two gates share a store and a binary cache, so the real combined distribution should sit well below 6874s. It has NOT been fitted to a combined-gate population: none existed when the number was derived, since ix#9288 is the first change that produces one. The first observed combined gate is being recorded on that PR. Re-measure from merged data once two weeks of it exist and resize from the observed distribution, the way every other number in this file was set (ENG-11582).",
+    "routine_validation_seconds": "Default for a repository with no measured override. Defends against a hung validation holding a dispatcher slot. Inherited from index#4139 and never measured against a distribution; every repository below states its own measured number instead, so this value now applies only to a repository added without measuring one.",
+    "setup_allowance_seconds": "120s from runner assignment to the first byte of validation: checkout, submodules, token minting, Nix bootstrap. Defends against a runner that came up broken. Inherited and never measured against a distribution.",
+    "termination_grace_seconds": "10s between SIGTERM and SIGKILL of the gate's process group. Long enough for a Nix client to unwind, short enough that a wedged group cannot outlive the job. Inherited and never measured against a distribution."
+  },
+  "queue_start_seconds": 7200,
+  "repositories": {
+    "indexable-inc/index": {
+      "costly_paths": [
+        "Cargo.lock",
+        "**/Cargo.lock",
+        "flake.lock",
+        "**/flake.lock",
+        "rust-toolchain.toml",
+        "**/rust-toolchain.toml",
+        "rust-toolchain",
+        "**/rust-toolchain"
+      ],
+      "managed_workflows": [
+        ".github/workflows/check.yml",
+        ".github/workflows/closure-gate.yml"
+      ],
+      "routine_validation_seconds": 2400
+    },
+    "indexable-inc/ix": {
+      "costly_paths": [
+        ".cargo/config.toml",
+        ".github/workflows/ci.yml",
+        "Cargo.lock",
+        "**/Cargo.lock",
+        "Cargo.toml",
+        "flake.lock",
+        "**/flake.lock",
+        "flake.nix",
+        "crates/vm/guest/console/terminal/zig/deps.nix",
+        "nix/checks/default.nix",
+        "rust-toolchain.toml",
+        "**/rust-toolchain.toml",
+        "rust-toolchain",
+        "**/rust-toolchain",
+        "lib/workspace-cargo-unit.nix",
+        "nix/flake/outputs/default.nix",
+        "nix/flake/outputs/workspace.nix",
+        "nix/packages/workspace-*.nix",
+        "nix/packages/workspace-binaries.json",
+        "nix/packages/workspace-bins/**",
+        "nix/shells/toolchain.nix"
+      ],
+      "managed_workflows": [
+        ".github/workflows/ci.yml"
+      ],
+      "routine_validation_seconds": 7500
+    }
+  },
+  "routine_validation_seconds": 300,
+  "setup_allowance_seconds": 120,
+  "termination_grace_seconds": 10
+}

@@ -1,0 +1,110 @@
+name: Apply CI budget policy
+description: Classify a change or enforce worker queue admission
+
+inputs:
+  repository:
+    description: GitHub repository in owner/name form
+    required: true
+  pull-request-number:
+    description: Pull request number, or 0 outside a pull request
+    default: "0"
+  head-sha:
+    description: Head commit for a non-pull-request change association
+    default: ""
+  base-sha:
+    description: Event base commit that bounds a push or merge group
+    default: ""
+  token:
+    description: Token with actions and pull request read, plus issues write when publishing
+    required: true
+  force-big-change:
+    description: Grant the extended budget without a path or label match
+    default: "false"
+  publish:
+    description: Add the automatic label and publish the sticky comment
+    default: "true"
+  mode:
+    description: Policy operation, one of classify, gate, or cancel
+    default: classify
+  run-id:
+    description: Workflow run used by every non-pull-request policy operation
+    required: true
+  run-attempt:
+    description: Workflow attempt used by every non-pull-request policy operation
+    required: true
+  target-job-name:
+    description: Required target verified in gate mode
+    default: ""
+  merge-queue-branch:
+    description: Branch whose queue owns a merge-group workflow
+    default: main
+
+outputs:
+  big_change:
+    description: Whether the extended CI budget applies
+    value: ${{ steps.classify.outputs.big_change }}
+  reason:
+    description: JSON object describing every source of the decision
+    value: ${{ steps.classify.outputs.reason }}
+  queue_start_seconds:
+    description: Maximum wait from worker creation to runner assignment
+    value: ${{ steps.classify.outputs.queue_start_seconds }}
+  setup_allowance_seconds:
+    description: Maximum setup time after runner assignment
+    value: ${{ steps.classify.outputs.setup_allowance_seconds }}
+  validation_seconds:
+    description: Validation allowance for the classified tier
+    value: ${{ steps.classify.outputs.validation_seconds }}
+  termination_grace_seconds:
+    description: Cleanup allowance after validation
+    value: ${{ steps.classify.outputs.termination_grace_seconds }}
+  worker_timeout_minutes:
+    description: Assignment-relative worker backstop for the classified tier
+    value: ${{ steps.classify.outputs.worker_timeout_minutes }}
+
+runs:
+  using: composite
+  steps:
+    - name: Classify CI budget
+      id: classify
+      if: inputs.mode == 'classify'
+      shell: bash
+      env:
+        CI_BUDGET_BASE_SHA: ${{ inputs.base-sha }}
+        CI_BUDGET_SNAPSHOT_PATH: ${{ runner.temp }}/ci-budget-snapshot.json
+        CI_BUDGET_FORCE_BIG_CHANGE: ${{ inputs.force-big-change }}
+        CI_BUDGET_PUBLISH: ${{ inputs.publish }}
+        CI_BUDGET_PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
+        CI_BUDGET_HEAD_SHA: ${{ inputs.head-sha }}
+        CI_BUDGET_MERGE_QUEUE_BRANCH: ${{ inputs.merge-queue-branch }}
+        CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
+        CI_BUDGET_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/ci_budget.py"
+    - name: Preserve classified budget
+      if: inputs.mode == 'classify'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ci-budget-snapshot-${{ inputs.run-id }}-${{ inputs.run-attempt }}-${{ steps.classify.outputs.snapshot_key }}
+        path: ${{ steps.classify.outputs.snapshot_path }}
+        if-no-files-found: error
+    - name: Enforce worker queue admission
+      if: inputs.mode == 'gate' || inputs.mode == 'cancel'
+      shell: bash
+      env:
+        CI_BUDGET_DEADLINE_MODE: ${{ inputs.mode }}
+        CI_BUDGET_REPOSITORY: ${{ inputs.repository }}
+        CI_BUDGET_RUN_ATTEMPT: ${{ inputs.run-attempt }}
+        CI_BUDGET_RUN_ID: ${{ inputs.run-id }}
+        CI_BUDGET_TARGET_JOB_NAME: ${{ inputs.target-job-name }}
+        CI_BUDGET_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/ci_deadline.py"
+    - name: Reject unknown CI budget mode
+      if: inputs.mode != 'classify' && inputs.mode != 'gate' && inputs.mode != 'cancel'
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        printf '::error title=ci-budget::unknown mode %s\n' "$MODE"
+        exit 1
