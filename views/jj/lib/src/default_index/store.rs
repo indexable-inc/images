@@ -264,6 +264,13 @@ impl DefaultIndexStore {
             ops_count = ops_to_visit.len(),
             "collecting head commits to index"
         );
+        // Bulk-hint the views before the sequential loop below reads
+        // them one by one: on a remote op store a cold catch-up walk
+        // otherwise pays one round-trip per unindexed operation.
+        if let Some(op) = ops_to_visit.first() {
+            let view_ids: Vec<_> = ops_to_visit.iter().map(|op| op.view_id().clone()).collect();
+            op.op_store().prefetch_views(&view_ids).await?;
+        }
         let mut historical_heads: HashMap<CommitId, OperationId> = HashMap::new();
         for op in &ops_to_visit {
             for commit_id in itertools::chain(

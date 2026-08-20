@@ -3069,6 +3069,93 @@
     }
   ];
 
+  # Starts the base image's real Neovim wrapper and asserts it comes up clean
+  # with treesitter attached. This is the check that was missing: nvim-treesitter
+  # 0.10 deleted `nvim-treesitter.configs`, nixpkgs picked the rewrite up, and
+  # nothing in the tree noticed until every VM opened the editor on
+  # `E5108: module 'nvim-treesitter.configs' not found`. No eval-time assertion
+  # can see that -- the config is a string until something runs it.
+  nvimStartup = let
+    # The colorschemes reach a VM through /etc/xdg/nvim (programs.neovim.runtime),
+    # not through the wrapper, so a bare wrapper cannot find them and init.lua's
+    # `:colorscheme` aborts the rest of the config. Rebuild that directory from
+    # the image's own `environment.etc` rather than naming the files here, so the
+    # harness follows the config instead of duplicating it.
+    xdgConfigDirs = pkgs.linkFarm "ix-test-nvim-xdg" (
+      lib.mapAttrsToList (name: entry: {
+        name = lib.removePrefix "xdg/" name;
+        path = entry.source;
+      })
+      (lib.filterAttrs (name: _: lib.hasPrefix "xdg/nvim/" name) base.imageConfig.environment.etc)
+    );
+    # filetype -> the treesitter language it must attach, one per grammar family
+    # we care about being able to read in a guest.
+    probes = {
+      "probe.rs" = "rust";
+      "probe.nix" = "nix";
+      "probe.lua" = "lua";
+      "probe.py" = "python";
+      "probe.json" = "json";
+    };
+    # Counts the live highlighters. `vim.treesitter.highlighter.active` is keyed
+    # by buffer, so a non-empty table is the highlighter actually attached to
+    # this buffer rather than merely a parser existing on disk.
+    report = ''io.stderr:write(("TS %s active=%d indentexpr=%s\n"):format(vim.bo.filetype, vim.tbl_count(vim.treesitter.highlighter.active), vim.bo.indentexpr ~= "" and "set" or "unset"))'';
+  in
+    pkgs.runCommand "ix-test-nvim-startup" {
+      nativeBuildInputs = [
+        base.imageConfig.programs.neovim.finalPackage
+        pkgs.coreutils
+        pkgs.gnugrep
+      ];
+      XDG_CONFIG_DIRS = xdgConfigDirs;
+      # Matches the image's own environment.variables; without it nvim spends
+      # 100 ms per start waiting on a terminal reply that a builder never sends.
+      NVIM_NOTTYFAST = "1";
+    } ''
+      HOME=$(mktemp -d)
+      export HOME
+
+      fail() {
+        echo "FAIL: $1" >&2
+        shift
+        for f in "$@"; do echo "--- $f"; cat "$f"; done >&2
+        exit 1
+      }
+
+      ${lib.concatLines (lib.mapAttrsToList (file: _: "echo 'x' > ${file}") probes)}
+
+      # 1. Startup. A config error goes to stderr and still exits 0, so the
+      #    verdict is the text. The startup-ok grep is the control: without it a
+      #    harness that never ran the config would report clean.
+      nvim --headless '+lua print("startup-ok")' +q >startup.log 2>&1 || true
+      grep -q 'startup-ok' startup.log || fail "the harness never reached the config" startup.log
+      if grep -qE 'E5108|E5113|Error in VIMINIT|Error detected' startup.log; then
+        fail "neovim reported a config error on startup" startup.log
+      fi
+
+      # 2. Treesitter attaches, per filetype. Highlighting is Neovim's own
+      #    `vim.treesitter.start` now (the plugin stopped doing it in 0.10) and
+      #    indentexpr is the plugin's, so both halves are checked.
+      ${lib.concatLines (lib.mapAttrsToList (file: language: ''
+          nvim --headless ${file} '+lua ${report}' +q >ts-${language}.log 2>&1 || true
+          grep -qE 'TS ${language} active=[1-9]' "ts-${language}.log" \
+            || fail "no treesitter highlighter attached for ${language}" "ts-${language}.log"
+          grep -qE 'TS ${language} active=[1-9][0-9]* indentexpr=set' "ts-${language}.log" \
+            || fail "treesitter indentexpr not set for ${language}" "ts-${language}.log"
+        '')
+        probes)}
+
+      # 3. Negative control. The same probe against a config-less nvim must
+      #    report zero, or check 2 is measuring a Neovim default and would stay
+      #    green with this profile's config deleted entirely.
+      nvim --headless -u NONE probe.rs '+lua ${report}' +q >control.log 2>&1 || true
+      grep -q 'active=0' control.log \
+        || fail "negative control attached a highlighter with no config: the treesitter checks above prove nothing" control.log
+
+      touch $out
+    '';
+
   baseImageNixDb = let
     # Every `path`-type registry pin the image ships. Guard on the type so a
     # non-path entry (e.g. a default indirect/github registry row) can't break
@@ -4087,6 +4174,15 @@
       {
         assertion = base.config.home-manager.users.root.programs.fzf.historyWidget.command == "";
         message = "base profile should leave Ctrl-R history search to Atuin";
+      }
+      {
+        # Neovim's OSC 11 background query waits on a DSR reply the ix console
+        # never sends, so every `nvim` paid a 100 ms timeout and then printed
+        # E1568 over the operator's first screen. `:help 'ttyfast'` says the
+        # queries run "before --cmd and user config", so no Lua can turn them
+        # off and $NVIM_NOTTYFAST is the only lever.
+        assertion = base.config.environment.variables.NVIM_NOTTYFAST or null == "1";
+        message = "base profile should set NVIM_NOTTYFAST=1: the ix console does not answer Neovim's background-colour query and the config cannot decline it";
       }
       {
         assertion =
@@ -7656,7 +7752,7 @@ in {
   ephemeralRootVm = ephemeralRootVmTest;
   ephemeralRootLvmThinVm = ephemeralRootLvmThinVmTest;
   hardenedStateDirectoryVm = hardenedStateDirectoryVmTest;
-  inherit baseImageNixDb;
+  inherit baseImageNixDb nvimStartup;
   imageRegistryPin = imageRegistryPinTest;
   dev-profile-fortify = devProfileFortifyTest.premiseStillHolds;
   cargo-unit-dylib = cargoUnitDylibTest;

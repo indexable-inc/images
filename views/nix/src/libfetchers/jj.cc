@@ -26,7 +26,9 @@ namespace nix::fetchers {
    (working-copy) commit. Fields are NUL-separated (so that bookmark names
    containing spaces are handled correctly):
 
-     1. commit_id  -- the underlying (git-compatible) commit hash
+     1. commit_id  -- the commit id, rendered in the backend's own hash: 40
+        hexadecimal characters (SHA-1) on jj's Git backend, 64 (BLAKE3) on its
+        native one
      2. committer timestamp, in seconds since the epoch
      3. whether the commit has conflicts ("1"/"0")
      4. the commit hashes of the parents, space-separated
@@ -280,9 +282,13 @@ struct JjInputScheme : InputScheme
         if (fields.size() < 4)
             throw Error("unexpected output from 'jj log' for repository %s", PathFmt(repoPath));
 
+        /* `parseRev`, not a fixed algorithm: the template above renders ids in
+           whatever hash the backend uses, so the length decides. Reading a
+           native-backend repo hard-failed here before, one parse short of
+           working. */
         std::vector<Hash> parents;
         for (auto & p : tokenizeString<std::vector<std::string>>(chomp(fields[3]), " "))
-            parents.push_back(Hash::parseAny(p, HashAlgorithm::SHA1));
+            parents.push_back(parseRev(p));
 
         std::vector<std::string> bookmarks;
         for (auto it = fields.begin() + 4; it != fields.end(); ++it)
@@ -290,7 +296,7 @@ struct JjInputScheme : InputScheme
                 bookmarks.push_back(std::move(bookmark));
 
         return Metadata{
-            .rev = Hash::parseAny(chomp(fields[0]), HashAlgorithm::SHA1),
+            .rev = parseRev(chomp(fields[0])),
             .lastModified = string2Int<uint64_t>(chomp(fields[1])).value_or(0),
             .hasConflict = chomp(fields[2]) == "1",
             .parents = std::move(parents),
@@ -469,18 +475,69 @@ struct JjInputScheme : InputScheme
         return target;
     }
 
-    /* Materialise the tree of `rev` into `destDir`. jj has no `git archive` /
-       `hg archive` equivalent, so we reconstruct it: the file template gives the
-       type and executable bit, `jj file show` gives file contents (binary-safe),
-       and `readSymlinkTarget` recovers symlink targets. This is one `jj`
-       invocation per file, so it is reserved for the repos that leave no other
-       way to read the tree: a store on jj's native backend, and a revision whose
-       content is not in Git objects at all because it carries a conflict. Both
-       callers read the Git store where there is one. The comment this replaces
-       called it the cold path, which was wrong in the way that costs the most:
-       a lockfile pins a rev, so every pinned input came through here, every
-       time. */
-    void exportRev(
+    /* Materialise the tree of `rev` into `destDir` with a single `jj`
+       invocation, on the repos whose backend offers one.
+
+       `jj ix export` walks the tree in-process and fetches contents in
+       `object.get_batch` round trips of 64 objects, four in flight. That
+       replaces the per-file route below, whose cost is not the reading
+       but the *process*: one `jj` start measures 14.5 ms on this machine
+       against a local store, so a 174,845-file tree spent ~42 min in
+       `fork`/`exec` before accounting for a single byte. Against a
+       remote store each invocation also paid its own connection setup,
+       measured at 630 ms/file over a 124 ms-RTT link, and the resulting
+       handshake storm was heavy enough to make the store server itself
+       time out mid-evaluation.
+
+       Only the ix backend takes this route. That is the precise
+       condition and not a proxy for one: those repos are exactly the
+       ones a stock `jj` cannot read at all, so a `jj` that can read them
+       is a `jj` that has this subcommand. A conflicted revision in a
+       Git-backed repo -- the other caller of the per-file route -- keeps
+       working with whatever `jj` is on PATH.
+
+       Returns the root tree id the export reported, when it reported
+       one. It is a blake3 id over jj's own tree serialization, so nix
+       cannot ingest it into a store path, but it is a true content
+       address for the tree and two commits over one tree share it. */
+    std::optional<std::string> exportRevBulk(
+        const std::filesystem::path & repoPath, const std::string & rev, const std::filesystem::path & destDir) const
+    {
+        auto output = runJj(
+            repoPath,
+            {OS_STR("ix"),
+             OS_STR("export"),
+             OS_STR("-r"),
+             string_to_os_string(rev),
+             string_to_os_string(destDir.string())},
+            /*ignoreWorkingCopy=*/true);
+
+        /* `key value` lines. Only `tree` is read back; the counts are for
+           a human reading a log. An unrecognised key is ignored rather
+           than rejected so that adding one later is not a breaking
+           change. */
+        std::optional<std::string> treeId;
+        for (auto & line : splitString<std::vector<std::string>>(output, "\n")) {
+            auto trimmed = chomp(line);
+            if (hasPrefix(trimmed, "tree "))
+                treeId = trimmed.substr(5);
+        }
+        return treeId;
+    }
+
+    /* Materialise the tree of `rev` into `destDir` one file at a time.
+       jj has no `git archive` / `hg archive` equivalent, so we
+       reconstruct it: the file template gives the type and executable
+       bit, `jj file show` gives file contents (binary-safe), and
+       `readSymlinkTarget` recovers symlink targets.
+
+       This is one `jj` invocation per file. What is left on it is the
+       case `exportRevBulk` above cannot take: a revision carrying a
+       conflict in a repo whose backend is not ix, where the materialised
+       content is not in Git objects at all and the `jj` on PATH may be
+       any `jj`. Such a tree is small and rare, which is what makes the
+       per-file cost affordable here and ruinous there. */
+    void exportRevPerFile(
         const std::filesystem::path & repoPath, const std::string & rev, const std::filesystem::path & destDir) const
     {
         auto listing = runJj(
@@ -541,7 +598,7 @@ struct JjInputScheme : InputScheme
        path relative to `store/`. Both layouts occur: a colocated repo points
        at the workspace's own `.git`, a plain `jj git init` at
        `.jj/repo/store/git`. */
-    static std::optional<std::filesystem::path> gitStorePath(const std::filesystem::path & repoPath)
+    static std::optional<std::filesystem::path> storeDirOf(const std::filesystem::path & repoPath)
     {
         auto repoDir = repoPath / ".jj" / "repo";
         if (!std::filesystem::is_directory(repoDir)) {
@@ -550,8 +607,43 @@ struct JjInputScheme : InputScheme
             auto named = std::filesystem::path(chomp(readFile(repoDir)));
             repoDir = named.is_absolute() ? named : repoPath / ".jj" / named;
         }
+        return repoDir / "store";
+    }
 
-        auto storeDir = repoDir / "store";
+    /* The backend name recorded in `store/type`, if the repo has one.
+       `git` and `ix` are the two that matter here; jj writes others. */
+    static std::optional<std::string> storeType(const std::filesystem::path & repoPath)
+    {
+        auto storeDir = storeDirOf(repoPath);
+        if (!storeDir)
+            return std::nullopt;
+        auto typeFile = *storeDir / "type";
+        if (!pathExists(typeFile))
+            return std::nullopt;
+        return chomp(readFile(typeFile));
+    }
+
+    /* Whether this repo's objects live in an ix jj store (ADR 0001)
+       rather than in Git or on disk.
+
+       Used to pick the export route below, and it is the *precise*
+       condition rather than a proxy: a repo on that backend can only be
+       read by a `jj` that has the backend compiled in, so on such a repo
+       `jj ix export` is available by the same fact that makes the repo
+       readable at all. Probing for the subcommand instead would ask a
+       weaker question and answer it more slowly. */
+    static bool isIxStore(const std::filesystem::path & repoPath)
+    {
+        auto type = storeType(repoPath);
+        return type && *type == "ix";
+    }
+
+    static std::optional<std::filesystem::path> gitStorePath(const std::filesystem::path & repoPath)
+    {
+        auto storeDirOpt = storeDirOf(repoPath);
+        if (!storeDirOpt)
+            return std::nullopt;
+        auto storeDir = *storeDirOpt;
         auto typeFile = storeDir / "type";
         auto targetFile = storeDir / "git_target";
         if (!pathExists(typeFile) || chomp(readFile(typeFile)) != "git" || !pathExists(targetFile))
@@ -759,7 +851,10 @@ struct JjInputScheme : InputScheme
         auto tmpDir = createTempDir();
         AutoDelete delTmpDir(tmpDir, true);
 
-        exportRev(repoPath, meta.rev.gitRev(), tmpDir);
+        if (isIxStore(repoPath))
+            exportRevBulk(repoPath, meta.rev.gitRev(), tmpDir);
+        else
+            exportRevPerFile(repoPath, meta.rev.gitRev(), tmpDir);
 
         auto storePath = store.addToStore(input.getName(), {makeFSSourceAccessor(tmpDir), CanonPath::root});
         auto accessor = store.requireStoreObjectAccessor(storePath);

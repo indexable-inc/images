@@ -46,6 +46,7 @@ sources = files(
   'input.cc',
   'nix_api_fetchers.cc',
   'public-key.cc',
+  'rev.cc',
 )
 
 include_dirs = [ include_directories('.') ]

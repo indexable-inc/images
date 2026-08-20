@@ -213,6 +213,17 @@
       url = "github:NousResearch/hermes-agent/v2026.5.16";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # The flox CLI for the guest base image (modules/profiles/base). flox is
+    # not in nixpkgs, so it is pinned here to their release tag; `nix flake
+    # update flox` after bumping the tag is the supported intake path.
+    # Deliberately NO `inputs.nixpkgs.follows`: flox's closure must stay
+    # byte-identical to what cache.flox.dev serves -- re-pinning its nixpkgs
+    # would change every store path in its closure and turn the base-image
+    # build into a source build of flox's Rust workspace and bundled Nix.
+    flox = {
+      url = "github:flox/flox/v1.14.1";
+    };
   };
 
   outputs = {
@@ -223,6 +234,7 @@
     sdk-prebuilt-rust-overlay,
     home-manager,
     hermes-agent,
+    flox,
     disko,
     drgn-src,
     perftest-src,
@@ -310,6 +322,7 @@
         sdk-prebuilt-rust-overlay
         home-manager
         hermes-agent
+        flox
         drgn-src
         perftest-src
         fff-src

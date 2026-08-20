@@ -441,6 +441,47 @@ std::optional<std::string> Input::getRef() const
     return {};
 }
 
+/* `Hash` gates constructing a BLAKE3 hash on the `blake3-hashes` experimental
+   feature. That gate governs BLAKE3 as a *store* content address, which is a
+   thing a user chooses; a commit id is not. It is an opaque identifier minted
+   by whichever backend the repository already uses, so honouring the gate here
+   would make an unrelated experimental feature a prerequisite for reading a
+   repository whose ids the user cannot change anyway -- and would say so with
+   an error naming a feature they never asked for. Parse revisions against a
+   local settings object that has it on instead of the global one. */
+static const ExperimentalFeatureSettings & revXpSettings()
+{
+    struct RevSettings : ExperimentalFeatureSettings
+    {
+        RevSettings()
+        {
+            set("experimental-features", "blake3-hashes");
+        }
+    };
+
+    static const RevSettings settings;
+    return settings;
+}
+
+Hash parseRev(std::string_view s)
+{
+    constexpr size_t blake3RevLength = 2 * regularHashSize(HashAlgorithm::BLAKE3);
+
+    if (s.size() == blake3RevLength)
+        return Hash::parseExplicitFormatUnprefixed(s, HashAlgorithm::BLAKE3, HashFormat::Base16, revXpSettings());
+
+    try {
+        return Hash::parseAny(s, HashAlgorithm::SHA1);
+    } catch (BadHash &) {
+        throw BadHash(
+            "'%s' is not a revision: expected 40 hexadecimal characters (a Git/SHA-1 commit id) or %d "
+            "(a BLAKE3 one, as minted by Jujutsu's native backend), but got %d",
+            s,
+            blake3RevLength,
+            s.size());
+    }
+}
+
 std::optional<Hash> Input::getRev() const
 {
     std::optional<Hash> hash = {};
@@ -449,9 +490,11 @@ std::optional<Hash> Input::getRev() const
         try {
             hash = Hash::parseAnyPrefixed(*s);
         } catch (BadHash & e) {
-            // Default to sha1 for backwards compatibility with existing
-            // usages (e.g. `builtins.fetchTree` calls or flake inputs).
-            hash = Hash::parseAny(*s, HashAlgorithm::SHA1);
+            /* Unprefixed, so the algorithm comes from the length. SHA-1 stays
+               the reading for everything it used to cover, for backwards
+               compatibility with existing usages (e.g. `builtins.fetchTree`
+               calls or flake inputs). */
+            hash = parseRev(*s);
         }
     }
 

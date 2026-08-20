@@ -1,5 +1,10 @@
 -- Reasonable Neovim defaults shipped by the ix base profile.
--- Spliced into init.vim via programs.neovim.configure.customRC.
+--
+-- This file, and only this file, is spliced into the generated init.lua via
+-- programs.neovim.configure.customLuaRC, because options have to be set before
+-- a plugin loads. Per-plugin setup() lives in plugins/<name>.lua, which the
+-- base profile ships as after/plugin/ in a real Neovim plugin.
+--
 -- Generic only: no plugins, no terminal-specific clipboard wiring,
 -- no statusline opinions.
 

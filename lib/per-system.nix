@@ -2054,6 +2054,14 @@
             # `nix` command does not re-copy the tree through VCFS (ix
             # #1748/#1749/#1815). Its own check because it builds an image.
             base-image-nix-db = tests.baseImageNixDb;
+            # Starts the base image's real Neovim wrapper and asserts it comes
+            # up with no config error and treesitter attached. Its own check
+            # rather than an eval assertion because the config is only a string
+            # until something runs it: nvim-treesitter 0.10 deleted the module
+            # nvim/plugins/treesitter.lua called, nixpkgs shipped the rewrite,
+            # and every guest opened the editor on E5108 with the whole suite
+            # green. See tests/default.nix `nvimStartup`.
+            nvim-startup = tests.nvimStartup;
             # Holds the `nix.registry.index.to` construction against both
             # shapes of `self` (narHash-bearing git consumption vs the
             # path-locked submodule seam), the boundary that broke twice on

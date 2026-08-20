@@ -33,6 +33,54 @@
     ''
       makeWrapper ${pkgs.claude-code}/bin/claude "$out/bin/claude" --set IS_SANDBOX 1
     '';
+
+  # This profile's own Neovim Lua, shipped as an ordinary Neovim plugin.
+  #
+  # `programs.neovim.configure.customLuaRC` is one string, so the natural way
+  # to write this is to read every source file into it -- and then Neovim
+  # reports every error against the generated file. When nixpkgs picked up the
+  # nvim-treesitter `main` rewrite (0.10, which deleted
+  # `nvim-treesitter.configs`), every VM opened with `init.lua:64: module
+  # 'nvim-treesitter.configs' not found`: line 64 of a store path, which is
+  # line 3 of nvim/plugins/treesitter.lua. A plugin directory is how Neovim
+  # keeps a file's own name and line numbers in a stack trace, so the config
+  # goes out as one.
+  #
+  # `after/plugin/` and not `plugin/`: Neovim sources a start package's own
+  # `plugin/` scripts before any after-directory, and each file here calls
+  # `require('<plugin>').setup{}` on a plugin whose `plugin/` scripts must have
+  # run first. Measured order is customLuaRC -> plugin/ -> after/plugin/.
+  #
+  # agent.lua installs as the module `ix.agent` rather than being inlined. It
+  # already returns a module table, and the other consumer of the same file
+  # (users/andrewgazelka, as `lua/agent/init.lua`) already requires it as one;
+  # the `(function() ... end)()` wrapper it used to need existed only because a
+  # single concatenated string had nowhere to put a module.
+  nvimConfig =
+    pkgs.runCommandLocal "ix-nvim-config" {}
+    ''
+      mkdir -p "$out/after/plugin"
+      cp ${./nvim/plugins}/*.lua "$out/after/plugin/"
+      install -Dm444 ${./nvim/agent.lua} "$out/lua/ix/agent.lua"
+      # zz- so it sorts after every plugin's own setup(): agent.setup()
+      # registers keymaps that which-key picks up.
+      echo "require('ix.agent').setup()" > "$out/after/plugin/zz-ix-agent.lua"
+    '';
+
+  # flox comes from its own flake (`ix.floxPackage`, not nixpkgs -- flox is
+  # not packaged there) and is a pure CLI: no daemon, no boot units, nothing
+  # runs until a user types `flox`, so a tenant who never uses it pays only
+  # image bytes. Its bundled Nix inherits the guest's /etc/nix/nix.conf, so
+  # flox installs substitute through `cache.ix.dev` like everything else (the
+  # flox cache is an ncps upstream on the ix side). Metrics are opt-in on ix:
+  # `--set-default` (not `--set`) so FLOX_DISABLE_METRICS=false or
+  # `flox config` can still opt back in per user.
+  flox =
+    pkgs.runCommand "flox-${ix.floxPackage.version}"
+    {nativeBuildInputs = [pkgs.makeWrapper];}
+    ''
+      makeWrapper ${ix.floxPackage}/bin/flox "$out/bin/flox" --set-default FLOX_DISABLE_METRICS true
+    '';
 in {
   options.ix.profiles.base = {
     enable = lib.mkEnableOption "base runtime tools";
@@ -77,7 +125,15 @@ in {
 
       settings = {
         substituters = lib.mkBefore [ix.cache.url];
-        trusted-public-keys = lib.mkAfter [ix.cache.publicKey];
+        # `ix.cache.flox.publicKey` rides along because the base profile ships
+        # flox and the pull-through preserves flox-origin signatures on
+        # `cache.flox.dev` paths it re-serves. ncps also appends its own host
+        # key (already trusted), so this is belt-and-braces for paths that
+        # arrive with only the flox signature (e.g. `nix copy` between
+        # machines). cache.flox.dev itself is deliberately NOT a guest
+        # substituter: the guest keeps exactly one cache URL and the edge
+        # fans out.
+        trusted-public-keys = lib.mkAfter [ix.cache.publicKey ix.cache.flox.publicKey];
 
         # Rollback-journal mode for `/nix/var/nix/db/db.sqlite`, against nix's
         # own default of WAL.
@@ -151,8 +207,128 @@ in {
     # The prompt deliberately does NOT live here; see `programs.starship`
     # further down for why anything an operator sees on their first line
     # has to survive activation not running.
-    home-manager.users.root = {
+    home-manager.users.root = {config, ...}: let
+      # Home Manager owns the attribute names of the files it generates, and
+      # they are not all guessable: zsh keys its rc files off `dotDir` (so
+      # `./.zshrc` while dotDir is the home directory), nushell keys its three
+      # off `configDir` (an absolute path), and fish's lives under
+      # `xdg.configFile`. Each entry maps a Home Manager key to the target
+      # `mutable.files` deploys it to.
+      nushellRcFiles = [
+        "config.nu"
+        "env.nu"
+        "login.nu"
+      ];
+
+      homeFileRcs =
+        {
+          ".profile" = ".profile";
+          ".bashrc" = ".bashrc";
+          ".bash_profile" = ".bash_profile";
+          "./.zshenv" = ".zshenv";
+          "./.zshrc" = ".zshrc";
+          "./.zprofile" = ".zprofile";
+        }
+        // lib.listToAttrs (
+          map (
+            name:
+              lib.nameValuePair
+              "${config.programs.nushell.configDir}/${name}"
+              ".config/nushell/${name}"
+          )
+          nushellRcFiles
+        );
+
+      configFileRcs = {
+        "fish/config.fish" = ".config/fish/config.fish";
+      };
+
+      # The declared base is exactly what the store symlink used to point at:
+      # a `text` definition still populates `source` through `mkDefault`
+      # (views/home-manager/modules/lib/file-type.nix), and disabling the entry
+      # suppresses only the link, not the content.
+      mutableRc = source: {
+        inherit source;
+        # Shell rc files have no structured format. Pin it instead of letting
+        # detection decide, because the detected format is frozen into
+        # index-delta's state the first time the file is seeded.
+        format = "text";
+        # The whole point: a local edit survives activation, and a base change
+        # under drift queues in `index-delta status` instead of clobbering it.
+        persistence = "durable";
+        declaredAt = "modules/profiles/base/default.nix";
+      };
+
+      # Every rc file root could plausibly end up with, not just the ones Home
+      # Manager generates today, so enabling another shell module (or a
+      # `loginExtra` that makes `.zlogin` appear) trips the assertion below
+      # rather than quietly shipping one read-only dotfile again.
+      rcTargets =
+        [
+          ".profile"
+          ".bashrc"
+          ".bash_profile"
+          ".bash_logout"
+          ".zshenv"
+          ".zshrc"
+          ".zprofile"
+          ".zlogin"
+          ".zlogout"
+          ".config/fish/config.fish"
+        ]
+        ++ map (name: ".config/nushell/${name}") nushellRcFiles;
+
+      storeSymlinkedRc =
+        lib.filter
+        (file: file.enable && lib.elem file.target rcTargets)
+        (lib.attrValues config.home.file);
+    in {
       home.stateVersion = "25.11";
+
+      # ROOT'S SHELL RC FILES SHIP AS WRITABLE REAL FILES, NOT STORE SYMLINKS.
+      #
+      # Home Manager deploys what it manages as a symlink into /nix/store, and
+      # a guest mounts the store read-only -- `findmnt -T /root/.profile` in a
+      # fresh VM reports `/dev/vda[/nix/store] xfs ro,...`. Anything that
+      # installs itself by appending to a shell rc therefore dies on first run.
+      # rustup, verbatim:
+      #
+      #   could not amend shell profile: '/root/.profile': could not write
+      #   rcfile file: '/root/.profile': Read-only file system (os error 30)
+      #
+      # That is the bar at the top of this file failing inside the first ten
+      # minutes. `mutable.files` (modules/home/mutable-files.nix, wired into
+      # every guest by lib/image/default.nix) deploys the same declared content
+      # as a plain writable file that `index-delta` seeds and tracks, with
+      # `durable` persistence so an in-guest edit is never clobbered by a later
+      # activation. Do not "clean this up" back into plain `home.file`: the
+      # symlink IS the defect.
+      home.file = lib.mapAttrs (_: _: {enable = false;}) homeFileRcs;
+      xdg.configFile = lib.mapAttrs (_: _: {enable = false;}) configFileRcs;
+
+      mutable.files =
+        lib.mapAttrs' (
+          key: target:
+            lib.nameValuePair target (mutableRc config.home.file.${key}.source)
+        )
+        homeFileRcs
+        // lib.mapAttrs' (
+          key: target:
+            lib.nameValuePair target (mutableRc config.xdg.configFile.${key}.source)
+        )
+        configFileRcs;
+
+      # Two-sided guard on the block above: the keys are Home Manager's, so an
+      # upstream rename would leave our `enable = false` pointing at nothing
+      # and quietly restore a read-only symlink under a name we no longer
+      # convert. Assert on the deployed shape instead of on our own key list,
+      # which we define and so cannot fail.
+      assertions = [
+        {
+          assertion = storeSymlinkedRc == [];
+          message = "ix.profiles.base: root's ${lib.concatMapStringsSep ", " (file: file.target) storeSymlinkedRc} would deploy as a read-only /nix/store symlink, which breaks every tool that self-installs into a shell rc (see the EROFS comment in modules/profiles/base/default.nix). Route it through `mutable.files` by adding its Home Manager key to `homeFileRcs` or `configFileRcs` there.";
+        }
+      ];
 
       # Workaround for upstream nixpkgs#485682: `make-options-doc` strips
       # string context from `options.json` via `unsafeDiscardStringContext`,
@@ -675,10 +851,14 @@ in {
         };
       };
 
-      # Neovim is wired through the NixOS module because the wrapper
-      # bakes the curated config into the binary itself, so XDG never
-      # has to find anything in `~/.config/nvim/` for the operator to
-      # land in the configured experience. (HM's neovim module on
+      # Neovim is wired through the NixOS module because the wrapper bakes
+      # the curated config and its plugins into the binary itself, so no
+      # per-user `~/.config/nvim/` has to exist for the operator to land in
+      # the configured experience. (The colorschemes are the exception, and
+      # have to be: `programs.neovim.runtime` writes them to /etc/xdg/nvim,
+      # which unlike a packdir entry is on the runtimepath while init.lua is
+      # still running -- and init.lua is where `:colorscheme` is called.)
+      # (HM's neovim module on
       # release-25.05 and release-25.11 extends nixpkgs' plugin
       # submodule with a `runtime` attr that the wrapped binary's
       # submodule rejects; the `suppressIncompatibleConfig` cleanup
@@ -689,34 +869,22 @@ in {
       #
       # defaultEditor wires EDITOR via environment.sessionVariables;
       # vi/vim aliases mean muscle memory from any other Unix box
-      # lands on nvim. init.lua ships the base options (numbers,
-      # leader, undo, soft wrap, ...) and each plugin's setup() lives
-      # in its own plugins/<name>.lua so the file is editable as
-      # ordinary Lua. treesitter ships every grammar (cross-tenant
-      # dedup makes this free, see AGENTS.md).
+      # lands on nvim. init.lua ships the base options (numbers, leader,
+      # undo, soft wrap, ...) and is the only thing spliced into the
+      # generated init.lua, because options have to be set before a plugin
+      # loads. Everything else rides in `nvimConfig` as an ordinary plugin.
+      # treesitter ships every grammar (cross-tenant dedup makes this
+      # free, see AGENTS.md).
       neovim = {
         enable = true;
         defaultEditor = true;
         viAlias = true;
         vimAlias = true;
         configure = {
-          customLuaRC =
-            lib.concatMapStringsSep "\n" builtins.readFile [
-              ./nvim/init.lua
-              ./nvim/plugins/treesitter.lua
-              ./nvim/plugins/telescope.lua
-              ./nvim/plugins/gitsigns.lua
-              ./nvim/plugins/which-key.lua
-              ./nvim/plugins/oil.lua
-            ]
-            + ''
-              local agent = (function()
-              ${builtins.readFile ./nvim/agent.lua}
-              end)()
-              agent.setup()
-            '';
+          customLuaRC = builtins.readFile ./nvim/init.lua;
           packages.ix.start =
             [
+              nvimConfig
               pkgs.vimPlugins.nvim-treesitter.withAllGrammars
             ]
             ++ builtins.attrValues {
@@ -767,6 +935,22 @@ in {
           "colors/ix-islands-light.lua".source = colorscheme "light" ix.islandsTheme.light;
         };
       };
+    };
+
+    environment.variables = {
+      # Neovim queries the terminal for its background colour (OSC 11) and
+      # waits 100 ms for a DSR reply before giving up with
+      # `E1568: Terminal did not respond to DSR request for 'background'
+      # color`. The ix console and the browser terminal do not answer, so
+      # every `nvim` in a VM pays the timeout and then prints the warning over
+      # the first screen the operator sees. The query cannot be turned off
+      # from Lua -- `:help 'ttyfast'` is explicit that "the queries are
+      # performed early, before --cmd and user config, so `:set nottyfast` in
+      # your config happens too late" -- and $NVIM_NOTTYFAST is the knob it
+      # names instead. Nothing is lost: the two things those queries decide
+      # are 'background', which the ix-islands colorscheme sets, and
+      # 'termguicolors', which nvim/init.lua sets.
+      NVIM_NOTTYFAST = "1";
     };
 
     environment.systemPackages =
@@ -888,8 +1072,10 @@ in {
       # claude needs the IS_SANDBOX wrapper from the let-block because guests run
       # as root. Both belong in the consensus baseline this profile ships - "the
       # first ten minutes of a person or agent in a fresh VM must just work"
-      # includes the agents themselves.
-      ++ [claude-code];
+      # includes the agents themselves. flox rides from the let-block too: it
+      # is not in nixpkgs (own flake input) and gets the metrics-default
+      # wrapper.
+      ++ [claude-code flox];
 
     systemd.tmpfiles.rules =
       [

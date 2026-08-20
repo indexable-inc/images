@@ -17,4 +17,19 @@
 {
   url = "https://cache.ix.dev";
   publicKey = "ix-workspace:JuAaeOPfR3GL3nUICpEz/88/+S3BzGF3L6bPYFy0GwI=";
+
+  # flox's binary cache identity. `cache.flox.dev` holds the flox CLI closure
+  # and their daily nixpkgs catalog builds; the base profile ships flox (the
+  # `flox` flake input), so guests must be able to verify flox-origin
+  # signatures on paths the pull-through preserves. The URL is NOT a guest
+  # substituter -- guests keep exactly one substituter (`url` above) and
+  # cache.flox.dev is fronted by ncps on the ix side
+  # (ix `nix/modules/services/host/cache-surface/module.nix`); ix
+  # `lib/fleet-cache-keys.nix` carries this key for host-side trust. Keep the
+  # copies in sync. Key source: github.com/flox/flox flake.nix
+  # `nixConfig.extra-trusted-public-keys`.
+  flox = {
+    url = "https://cache.flox.dev";
+    publicKey = "flox-cache-public-1:7F4OyH7ZCnFhcze3fJdfyXYLQw/aV7GEed86nQ7IsOs=";
+  };
 }

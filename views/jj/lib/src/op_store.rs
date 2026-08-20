@@ -468,6 +468,19 @@ pub trait OpStore: Any + Send + Sync + Debug {
 
     async fn read_view(&self, id: &ViewId) -> OpStoreResult<View>;
 
+    /// Hints that the given views are about to be read.
+    ///
+    /// A store backed by a remote server may fetch and locally cache
+    /// them in bulk so the following `read_view` calls do not pay one
+    /// round-trip each. This is a pure optimization hook: the default
+    /// does nothing, and implementations must degrade to `Ok(())` when
+    /// bulk fetching is unavailable (for example against an older
+    /// server) rather than fail a read path that would otherwise work.
+    async fn prefetch_views(&self, ids: &[ViewId]) -> OpStoreResult<()> {
+        let _ = ids;
+        Ok(())
+    }
+
     async fn write_view(&self, contents: &View) -> OpStoreResult<ViewId>;
 
     async fn read_operation(&self, id: &OperationId) -> OpStoreResult<Operation>;

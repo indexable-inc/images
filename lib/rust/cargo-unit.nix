@@ -947,7 +947,7 @@
     # every test binary. The renderer refuses an empty binary list, so a
     # workspace without test targets has no buildable export rather than a
     # vacuously green one.
-    nextestExportBinaries = (pkgs.formats.json { }).generate "cargo-unit-nextest-export-binaries.json" (
+    nextestExportBinaries = (pkgs.formats.json {}).generate "cargo-unit-nextest-export-binaries.json" (
       map (target: {
         # The raw cargo target name, not the workspace-global attr key:
         # nextest binary ids are package-scoped already.

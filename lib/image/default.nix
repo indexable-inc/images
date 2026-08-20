@@ -10,6 +10,7 @@
   moduleList,
   writeNushellApplication,
   packageSetFor,
+  portableServices,
   # The index flake's own `self`, for the guest `index` registry pin (see the
   # `nix.registry.index` module below). `null` when `lib` is imported without a
   # flake; the pin is then omitted.
@@ -64,6 +65,40 @@
           "nomad"
         ];
     };
+  };
+
+  /**
+  Declarative-but-writable files for guest users: the `mutable.files` home
+  module (modules/home/mutable-files.nix), wired into every guest's Home
+  Manager the way lib/home-modules.nix wires it for workstations.
+
+  A guest mounts /nix/store read-only, so Home Manager's default store-symlink
+  deployment leaves every file it manages unwritable inside the VM -- fatal for
+  the shell rc files that tools like rustup self-install into. The base profile
+  routes root's rc files through this module; the block in
+  modules/profiles/base/default.nix has the incident.
+
+  `_file` keeps the module's own source in `definitionsWithLocations` (the
+  #3938 wrapper lib/home-modules.nix documents); the module's own `key` still
+  dedups this instance against any other a consumer combines.
+  */
+  mutableFilesHomeModule = {
+    _file = paths.modules + "/home/mutable-files.nix";
+    imports = [
+      (import (paths.modules + "/home/mutable-files.nix") {
+        # The module resolves `index-delta` through a `system -> package set`
+        # function. Every image evaluates against the single `imagePkgs`
+        # instance above, and lib/default.nix fixes that instance's system, so
+        # there is exactly one answer here. Assert it rather than discard the
+        # argument, so a future per-system guest fails at this line instead of
+        # silently baking the wrong architecture's binary.
+        indexPackages = requestedSystem:
+          assert lib.assertMsg (requestedSystem == system)
+          "guest mutable.files: index-delta requested for ${requestedSystem}, but images evaluate against ${system} (lib/default.nix pins it); thread a real per-system package set through lib/image first";
+            packageSetFor imagePkgs;
+        portableServicesModule = portableServices.homeModule;
+      })
+    ];
   };
 
   /**
@@ -191,6 +226,10 @@
               # instead of failing, so an operator who hand-edited a config
               # sees the conflict rather than losing the file.
               backupFileExtension = "hm-backup";
+              # Every guest user gets `mutable.files`: a read-only store mount
+              # makes plain `home.file` the wrong deployment for anything an
+              # in-guest tool edits. See `mutableFilesHomeModule` above.
+              sharedModules = [mutableFilesHomeModule];
             };
           }
         ]

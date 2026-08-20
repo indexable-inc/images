@@ -10,6 +10,11 @@
   sdk-prebuilt-rust-overlay,
   home-manager,
   hermes-agent,
+  # flox CLI flake (github:flox/flox release tag). Its own nixpkgs pin is kept
+  # (no `follows`) so the closure substitutes from cache.flox.dev via the ix
+  # pull-through; the base profile consumes the built package as
+  # `ix.floxPackage`.
+  flox,
   drgn-src,
   perftest-src,
   fff-src,
@@ -790,6 +795,11 @@
     // {
       inherit buildRustPackage islandsTheme;
       packages = packageSetFor pkgs;
+      # The flox CLI as built by flox's own flake (own nixpkgs pin, so the
+      # derivation is exactly what cache.flox.dev serves). Consumed by
+      # modules/profiles/base, which wraps it (metrics default) and ships it
+      # in the consensus baseline.
+      floxPackage = flox.packages.${system}.flox;
     };
 
   inherit
@@ -807,6 +817,7 @@
         moduleList
         writeNushellApplication
         packageSetFor
+        portableServices
         ;
     })
     evalImageConfig

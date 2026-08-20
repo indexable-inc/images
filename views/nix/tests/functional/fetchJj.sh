@@ -53,6 +53,9 @@ path=$(fetchjj "" outPath)
 [[ ! -e "$path"/.git ]]
 
 # The working copy is always identified by a revision (jj has no "dirty" state).
+# 40 characters because every fixture here is `jj git init`, so the ids are
+# SHA-1; the length is the backend's, not the fetcher's, and a repo on jj's
+# native backend reports 64 (see `parseRev`).
 rev=$(fetchjj "" rev)
 [[ $rev =~ ^[0-9a-f]{40}$ ]]
 
