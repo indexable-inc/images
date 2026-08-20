@@ -387,6 +387,20 @@
         }
       ];
     };
+    # The toolchain-baked baml-class variant of the same template (its
+    # `#baml` attr): platform policy plus ci/runner-template/baml.nix.
+    bamlTemplateCheck = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./ci/runner-template/module.nix
+        ./ci/runner-template/platform.nix
+        ./ci/runner-template/baml.nix
+        {
+          services.ix-runner.enable = true;
+          boot.isContainer = true;
+        }
+      ];
+    };
   in {
     lib = ix;
     inherit (ix) nixosModules;
@@ -404,6 +418,7 @@
         // lib.optionalAttrs (system == "x86_64-linux") {
           loom-template = loomTemplateCheck.config.system.build.toplevel;
           runner-template = runnerTemplateCheck.config.system.build.toplevel;
+          baml-template = bamlTemplateCheck.config.system.build.toplevel;
         }
     ) (collected.collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI

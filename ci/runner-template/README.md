@@ -9,6 +9,19 @@ pins). The runner control plane (`crates/ci/runners`) builds
 customer's machine; the JIT credential contract is
 `/var/lib/ix-runner/jitconfig` (see module.nix header).
 
+## The `baml` attr
+
+`#baml` is the toolchain-baked variant for baml-class pools: the same
+mechanism and platform policy plus `baml.nix`, which bakes the toolchains
+those repos' lanes expect preinstalled (rustup, sccache, go, node, ruby,
+the musl cross gcc) and the openssl/dotnet/playwright env, ported from
+ix-runners pool-mode-v2 `pools/baml/ci-runner.nix`. Use it for pools whose
+jobs assume a hosted-image-like PATH instead of installing per-job; the
+cost is a heavier image closure, which is why it is a separate attr and
+not a default-template change. Pin procedure is unchanged - the pool's
+`template_rev` selects the commit, and the attr rides the same subflake
+(`...?dir=ci/runner-template#baml`).
+
 ## Pinning a new template rev
 
 The control plane consumes an exact commit, never a branch:

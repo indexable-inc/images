@@ -24,14 +24,33 @@
         {services.ix-runner.enable = true;}
       ];
     };
+    # Toolchain-baked variant for baml-class pools: the same mechanism and
+    # platform policy plus baml.nix (rustup, sccache, go, node, ruby, the
+    # musl cross gcc and the openssl env baked into the image instead of
+    # arriving via the seed snapshot's HOME). Heavier closure, so it is a
+    # separate attr, not a default-template change.
+    bamlRunner = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./module.nix
+        ./platform.nix
+        ./baml.nix
+        {services.ix-runner.enable = true;}
+      ];
+    };
   in {
     nixosConfigurations.ci-runner = runner;
+    nixosConfigurations.baml = bamlRunner;
 
     # A plain ix template leaves root-device and bootloader facts to the
     # platform's injected machine profile; extend as a container only for
     # the check, so the closure realizes without inventing guest hardware.
     checks.x86_64-linux.ci-runner-template =
       (runner.extendModules {
+        modules = [{boot.isContainer = true;}];
+      }).config.system.build.toplevel;
+    checks.x86_64-linux.baml-template =
+      (bamlRunner.extendModules {
         modules = [{boot.isContainer = true;}];
       }).config.system.build.toplevel;
   };
