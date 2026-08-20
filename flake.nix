@@ -372,6 +372,21 @@
     loomTemplateCheck = loomConfiguration.extendModules {
       modules = [{boot.isContainer = true;}];
     };
+    # The platform default CI runner template (ci/runner-template), evaluated
+    # against the ROOT lock's nixpkgs: gates eval errors in the vendored
+    # module and the platform policy, not the subflake's own lock rot (that
+    # lock is bumped deliberately; see ci/runner-template/README.md).
+    runnerTemplateCheck = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./ci/runner-template/module.nix
+        ./ci/runner-template/platform.nix
+        {
+          services.ix-runner.enable = true;
+          boot.isContainer = true;
+        }
+      ];
+    };
   in {
     lib = ix;
     inherit (ix) nixosModules;
@@ -388,6 +403,7 @@
         }
         // lib.optionalAttrs (system == "x86_64-linux") {
           loom-template = loomTemplateCheck.config.system.build.toplevel;
+          runner-template = runnerTemplateCheck.config.system.build.toplevel;
         }
     ) (collected.collect "checks");
     # Sharded keying of the same check derivations for the memory-bounded CI
