@@ -53,15 +53,15 @@ Nix-managed binary lives in the read-only store and is refused: update the
 - **`ix run` is the imperative one-off.** It boots a fresh VM, runs one command,
   streams its output, and leaves the VM up. Reach for `apply`
   for a config you own and re-converge; reach for `run` for a quick command.
-- **The VM builds; you can hand it the answer instead.** `ix apply .#web`
-  evaluates the target on your machine and the VM realises the derivation, so
-  the compile happens in the guest. If your own store already holds that
-  system, apply exports the built closure and the guest builds nothing. So
-  `nix build .#a .#b .#c` (on whatever builder your nix names) followed by
-  `ix apply .#a .#b .#c` compiles a set of VMs once rather than once each,
-  which matters because nodes of one deployment usually share almost all of
-  their closure. Apply never builds and never substitutes to make this true:
-  either the paths are already there or nothing changes.
+- **Evaluation and build are remote.** `ix apply .#web` uploads your tree,
+  evaluates it on a caller-owned evaluator VM (`ix-eval-<region>`), and the
+  target VM builds the system from that same uploaded source: no nix on your
+  machine, ever. To hand a VM a prebuilt answer instead, name the store path:
+  `ix apply $(nix build --print-out-paths .#web)` exports your built closure
+  and the guest builds nothing, which matters because nodes of one deployment
+  usually share almost all of their closure. Apply never builds locally and
+  never substitutes to make this true: either the path is already in your
+  store or nothing changes.
 - **There is no fleet concept.** A project defines one VM and `ix apply`
   converges it. The standalone multi-VM `ix-fleet` tool is deprecated
   (indexable-inc/ix#8306, see [fleet.md](fleet.md)). There is no `ix down`,
