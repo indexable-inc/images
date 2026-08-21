@@ -1020,6 +1020,87 @@ in {
     systemd.services = {
       "serial-getty@ttyS0".enable = false;
       "serial-getty@hvc0".enable = false;
+
+      # The rescue prompt the masked instances above cannot be. Masking is
+      # still correct -- the generator's instances are unfixable, because the
+      # `BindsTo=dev-%i.device` is baked into the systemd store path and no
+      # .device unit ever activates under `boot.isContainer` -- but masking on
+      # its own left ix guests with exactly one interactive path: ix-console
+      # over vsock. That path runs inside the guest as a process scheduled
+      # alongside the workload, so the failure that most needs a rescue shell
+      # is the failure that takes the rescue shell with it. On the 2026-08-17
+      # dev fleet a guest that pegged its single entitled core starved the
+      # ix-agent QUIC endpoint until it stopped answering, and there was no
+      # second way in: the VM was wedged with a live kernel, a live serial
+      # console carrying printk, and nothing on the far end of it to log into.
+      #
+      # This unit is that second way in. It is deliberately NOT an instance of
+      # `serial-getty@`: it carries no `BindsTo=`, no `After=dev-ttyS0.device`,
+      # and no `Requires=` on anything a container-mode guest cannot activate,
+      # so it starts on the same boot every generator instance would have hung
+      # on. `ConditionPathExists` is the whole device check -- devtmpfs has
+      # /dev/ttyS0 long before multi-user.target, and a guest booted without a
+      # serial port simply skips the unit as a satisfied no-op rather than
+      # failing it.
+      #
+      # `--autologin root`, deliberately, because the alternative is a prompt
+      # nobody can answer. This image sets no root credential anywhere:
+      # `users.defaultUserShell` above is the only `users.*` fact it states, so
+      # nixpkgs' update-users-groups.pl falls through to `my $hashedPassword =
+      # "!"` and the guest ships `root:!:` in /etc/shadow, which pam_unix can
+      # never authenticate against. There is no sshd in the image and no
+      # authorized_keys injection on the ix side either. A bare agetty here
+      # would answer every rescue attempt with "Login incorrect" -- a rescue
+      # path that cannot be entered is not one. The alternative, baking a
+      # password hash into a shared base image, would put one guessable
+      # long-lived secret in front of every guest in the fleet; a per-VM
+      # injected credential is real control-plane machinery (mint, store,
+      # deliver, rotate) and is not what this unit is.
+      #
+      # Autologin grants no authority the caller lacks. `ix serial` and
+      # `ix shell` mint their connect tokens through the same op-level gate,
+      # `vm:exec`, behind the same owner-or-platform-admin check; ix's
+      # per-audience escalation table lifts only the `Switch` audience, and the
+      # one non-owner mint path is hardcoded to port-forward. Every principal
+      # who can reach this getty already has root in the guest via `ix shell`,
+      # and the serial bridge refuses any attach without a signed
+      # Serial-audience JWT.
+      #
+      # Known cost, accepted: the emulated UART is teed into the capture file
+      # backing the `kernel` log stream, and that stream reads at `vm:read` --
+      # weaker than the `vm:exec` an attach needs. A rescue session's prompt and
+      # echoed commands therefore land in `ix logs --stream kernel` and
+      # ClickHouse `vm_serial_logs` alongside kernel printk. The tee is a
+      # property of using serial at all rather than of autologin, but it does
+      # mean this console is not the place to type secrets. `--noclear` keeps a
+      # respawn from also emitting a screen-clear escape sequence into that log.
+      ix-serial-getty = {
+        description = "Rescue serial login prompt on ttyS0";
+        documentation = ["man:agetty(8)"];
+        wantedBy = ["multi-user.target"];
+        # Ordering only, never a dependency: a rescue shell that refuses to
+        # start because a normal-boot unit failed is not a rescue shell.
+        after = ["systemd-user-sessions.service"];
+        # A switch must not kill the session an operator is using to debug the
+        # switch. Same reasoning nixpkgs applies to its own gettys.
+        restartIfChanged = false;
+        unitConfig.ConditionPathExists = "/dev/ttyS0";
+        serviceConfig = {
+          ExecStart = "${pkgs.util-linux}/sbin/agetty --keep-baud --noclear --autologin root ttyS0 115200 vt100";
+          Type = "idle";
+          Restart = "always";
+          RestartSec = 5;
+          UtmpIdentifier = "ttyS0";
+          TTYPath = "/dev/ttyS0";
+          TTYReset = true;
+          TTYVHangup = true;
+          KillMode = "process";
+          IgnoreSIGPIPE = false;
+          SendSIGHUP = true;
+          StandardInput = "tty";
+          StandardOutput = "tty";
+        };
+      };
     };
 
     # Capture native crashes (JVM segfault, Rust panics in extern, anything
