@@ -14,6 +14,7 @@
 
 #![deny(unused_must_use)]
 
+pub mod agent_context;
 pub mod cleanup_guard;
 pub mod cli_util;
 pub mod command_error;

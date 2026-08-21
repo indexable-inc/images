@@ -12,6 +12,7 @@ mod test_abandon_command;
 mod test_absorb_command;
 mod test_acls;
 mod test_advance_bookmarks;
+mod test_agent_provenance;
 mod test_alias;
 mod test_arrange_command;
 mod test_bisect_command;

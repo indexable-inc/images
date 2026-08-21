@@ -155,6 +155,7 @@ use tracing::instrument;
 use tracing_chrome::ChromeLayerBuilder;
 use tracing_subscriber::prelude::*;
 
+use crate::agent_context::AgentContext;
 use crate::command_error::CommandError;
 use crate::command_error::cli_error;
 use crate::command_error::config_error_with_message;
@@ -2989,6 +2990,11 @@ pub fn start_repo_transaction(
     tx.set_workspace_name(workspace_name);
     for (key, value) in command_args_to_transaction_attribute(string_args) {
         tx.set_attribute(key, value);
+    }
+    if let Some(agent_context) = AgentContext::resolve_from_env() {
+        for (key, value) in agent_context.to_transaction_attributes() {
+            tx.set_attribute(key, value);
+        }
     }
     tx
 }
