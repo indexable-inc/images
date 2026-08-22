@@ -38,9 +38,25 @@
         {services.ix-runner.enable = true;}
       ];
     };
+    # Family variant for flox-class pools: the same mechanism and platform
+    # policy plus flox.nix. Deliberately NOT toolchain-baked the way baml is
+    # - flox runs every CI step inside `nix develop`, so its devshell
+    # carries the toolchains. What this attr adds is what a job cannot give
+    # itself on a machine pinning trusted-users to root: the cache.flox.dev
+    # substituter, daemon-side `max-jobs`, and util-linux PATH parity.
+    floxRunner = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./module.nix
+        ./platform.nix
+        ./flox.nix
+        {services.ix-runner.enable = true;}
+      ];
+    };
   in {
     nixosConfigurations.ci-runner = runner;
     nixosConfigurations.baml = bamlRunner;
+    nixosConfigurations.flox = floxRunner;
 
     # A plain ix template leaves root-device and bootloader facts to the
     # platform's injected machine profile; extend as a container only for
@@ -51,6 +67,10 @@
       }).config.system.build.toplevel;
     checks.x86_64-linux.baml-template =
       (bamlRunner.extendModules {
+        modules = [{boot.isContainer = true;}];
+      }).config.system.build.toplevel;
+    checks.x86_64-linux.flox-template =
+      (floxRunner.extendModules {
         modules = [{boot.isContainer = true;}];
       }).config.system.build.toplevel;
   };

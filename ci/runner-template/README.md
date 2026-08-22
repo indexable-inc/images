@@ -22,6 +22,35 @@ not a default-template change. Pin procedure is unchanged - the pool's
 `template_rev` selects the commit, and the attr rides the same subflake
 (`...?dir=ci/runner-template#baml`).
 
+## The `flox` attr
+
+`#flox` is the family variant for flox-class pools (`ci/runner-template/
+flox.nix`). Deliberately NOT toolchain-baked the way `#baml` is: flox runs
+every CI step inside `nix develop`, so its devshell closure carries rust,
+just, pre-commit and the whole bats dependency set. What the image adds is
+the three things a job cannot give itself on a machine that pins
+`trusted-users = ["root"]`:
+
+1. `cache.flox.dev` as a trusted substituter. flox's root flake declares it
+   through `nixConfig.extra-substituters`, but an unprivileged job cannot
+   add a substituter and `--accept-flake-config` is ignored for it, so
+   without this every lane source-builds flox's patched Nix and its Rust
+   workspace.
+2. `max-jobs = 4` (with `cores = 8`). This is the entry that cannot be moved
+   into a workflow: `max-jobs` is a daemon setting, so on a
+   trusted-users-root machine a job cannot lower it, and the daemon
+   otherwise schedules one derivation per visible core against a guest that
+   advertises ~100 vCPUs. `cores` a client can forward per build; `max-jobs`
+   it cannot.
+3. `util-linux` on the job PATH, which GitHub's ubuntu images ship and
+   neither `module.nix` nor `platform.nix` does.
+
+Every entry carries the lane observation that produced it; see the file.
+The consuming pool is `indexable-inc/flox` (preview), whose repository also
+carries a `.github/actions/ix-setup` PATH shim that exists ONLY because this
+attr was unavailable to it, and which should be deleted once the pool's
+`template_attr` is `flox`.
+
 ## Pinning a new template rev
 
 The control plane consumes an exact commit, never a branch:
