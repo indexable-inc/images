@@ -401,8 +401,8 @@
         }
       ];
     };
-    # The flox-class variant of the same template (its `#flox` attr):
-    # platform policy plus ci/runner-template/flox.nix.
+    # The flox-class family variant of the same template (its `#flox`
+    # attr): platform policy plus ci/runner-template/flox.nix.
     floxTemplateCheck = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [

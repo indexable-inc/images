@@ -39,11 +39,11 @@
       ];
     };
     # Family variant for flox-class pools: the same mechanism and platform
-    # policy plus flox.nix. Deliberately NOT toolchain-baked the way baml is
-    # - flox runs every CI step inside `nix develop`, so its devshell
-    # carries the toolchains. What this attr adds is what a job cannot give
-    # itself on a machine pinning trusted-users to root: the cache.flox.dev
-    # substituter, daemon-side `max-jobs`, and util-linux PATH parity.
+    # policy plus flox.nix (cache.flox.dev substitution, nix-daemon
+    # max-jobs/cores sizing, 8-thread parallelism pins, and a thin
+    # pre-devshell userland). Almost nothing is baked - flox CI runs inside
+    # `nix develop` - but the substituter set and pins are flox policy, so
+    # it is a separate attr, not a default-template change.
     floxRunner = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
