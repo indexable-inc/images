@@ -5,7 +5,7 @@
 # pools/baml/ci-runner.nix, reduced to the delta over platform.nix: the
 # substrate facts that file restated (cache substitution + nix.settings GC
 # headroom, gai.conf v4 preference, build-essential parity packages,
-# CARGO/NEXTEST/RUST_TEST/VITEST parallelism pins, MISE_*_COMPILE,
+# CARGO/VITEST parallelism pins, MISE_*_COMPILE,
 # stateVersion) already live in platform.nix with the same values, so they
 # are deliberately not repeated here - platform.nix's jobEnvironment values
 # are mkDefault, so this layer could still override them in nix if a pool
@@ -48,9 +48,14 @@
       '')
     ];
 
-    # Delta over platform.nix's pins: only the baml-specific env. attrsOf
-    # merge keeps platform.nix's parallelism/mise keys alongside these.
+    # Delta over platform.nix's pins. attrsOf merge keeps platform.nix's
+    # remaining parallelism and mise keys alongside these.
     jobEnvironment = {
+      # BAML tests use wall-clock cancellation bounds and loopback mock
+      # servers. Keep both Rust test harnesses at the build lane's 16 threads
+      # instead of sizing each job from the guest's visible CPU ceiling.
+      NEXTEST_TEST_THREADS = "16";
+      RUST_TEST_THREADS = "16";
       # Playwright's host check refuses NixOS; the browsers run fine via
       # nix-ld's library set.
       PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
