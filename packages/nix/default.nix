@@ -268,6 +268,19 @@ let
         runHook postInstall
       '';
     };
+    # The Rust evaluator's meson flags, in one place: the conditional in
+    # `patchedComponents` below and the always-on `rustEvalComponents` scope must
+    # apply exactly the same pair, or the parity lane stops testing the build
+    # everyone else would get with `withRustEval = true`.
+    rustEvalCli = nixCli:
+      nixCli.overrideAttrs (old: {
+        mesonFlags =
+          (old.mesonFlags or [])
+          ++ [
+            "-Drust-eval=enabled"
+            "-Drust-eval-prefix=${nixEvalRs}"
+          ];
+      });
     patchedComponents = ((base.overrideSource patchedSrc).overrideAllMesonComponents
       (_: _: {inherit version;}))
       .overrideScope (_: prev: {
@@ -302,15 +315,19 @@ let
       nix-cli =
         if !withRustEval
         then prev.nix-cli
-        else
-          prev.nix-cli.overrideAttrs (old: {
-            mesonFlags =
-              (old.mesonFlags or [])
-              ++ [
-                "-Drust-eval=enabled"
-                "-Drust-eval-prefix=${nixEvalRs}"
-              ];
-          });
+        else rustEvalCli prev.nix-cli;
+    });
+
+    # The rust/C++ parity tests are the only thing in the tree that executes the
+    # Rust evaluator, and `nix-cli` links it only under `-Drust-eval=enabled` --
+    # off by default at the meson option, at `withRustEval` here, and therefore in
+    # every binary CI builds. Run them against their own scope rather than turning
+    # the flag on for the shared one: the parity claim gets a live instrument and
+    # no other consumer grows a cargo dependency. The crate is a separate
+    # derivation (`nixEvalRs`), so this costs one extra CLI relink, not a rebuild
+    # of the component chain.
+    rustEvalComponents = patchedComponents.overrideScope (_: prev: {
+      nix-cli = rustEvalCli prev.nix-cli;
     });
 
     # The aggregate `nix` package (daemon + client + libs), the same attribute
@@ -328,6 +345,11 @@ let
           # same language the client does, underscore digit separators
           # included).
           components = patchedComponents;
+          # The same scope with the Rust evaluator linked into the CLI, for the
+          # parity lane (`passthru.tests.rustEvalShadow*`). Exposed for the same
+          # reason `components` is: it is bound inside this `let` and the tests
+          # are assembled outside it.
+          componentsRustEval = rustEvalComponents;
           inherit provenance;
         };
       # The aggregate's `doCheck = true` gates the build on `checkInputs`: the
@@ -425,6 +447,79 @@ let
       mesonCheckFlags = (old.mesonCheckFlags or []) ++ [name];
     });
 
+  # `focusedFunctionalTest` leaves the derivation named `nix-functional-tests`,
+  # which every other focused check also carries. Tooling that addresses a
+  # check by derivation name therefore cannot tell the eight focused tests
+  # apart, and a per-check decision recorded against the shared name silently
+  # applies to all eight. Its own pname makes this lane addressable on its own.
+  rustEvalFunctionalTest = {name}:
+    package.componentsRustEval.nix-functional-tests.overrideAttrs (old: {
+      pname = "nix-rust-eval-parity-tests";
+      mesonCheckFlags = (old.mesonCheckFlags or []) ++ [name];
+
+      # Pinned, not inherited. `postCheck` runs only inside `checkPhase`, and
+      # stdenv skips `checkPhase` when `doCheck` is unset -- so a future
+      # build-budget trim setting `doCheck = false` (as another derivation in
+      # this file already does) would make the guard below unreachable and
+      # take this lane green having compared nothing.
+      doCheck = true;
+
+      # A SKIPPED test leaves this derivation GREEN. `skipTest` exits 77,
+      # meson's default exitcode protocol reads 77 as SKIP, and `meson test`
+      # still exits 0 -- so if `-Drust-eval=enabled` ever stops reaching this
+      # build, the capability guard in both parity scripts skips, the check
+      # goes green, and the lane measures nothing for ever. That is exactly
+      # the failure class this lane exists to kill, one level up. So assert
+      # the outcome the lane is promoted on: this test RAN, and it said OK.
+      #
+      # Read meson's STRUCTURED log, not the human one. `testlog.txt` embeds
+      # the whole build environment, and that includes this postCheck's own
+      # source, so a text pattern there can match itself and pass vacuously.
+      # `testlog.json` is one JSON object per test and is selected on fields.
+      #
+      # Fails closed: a missing log, an absent entry, or any result other
+      # than OK is a failure rather than a pass.
+      # Parse the last component because meson's display name changes by version.
+      postCheck = ''
+        testlogs=()
+        while IFS= read -r tl; do testlogs+=("$tl"); done < <(
+          find . -path '*meson-logs/testlog.json' -print | sort)
+        if [[ ''${#testlogs[@]} -eq 0 ]]; then
+          echo "parity lane: no meson testlog.json; cannot prove ${name} ran" >&2
+          exit 1
+        fi
+        # meson renders this field for humans and has changed the rendering at
+        # least twice: "<test>", "<prj>:<suites> / <test>", and (1.10.x)
+        # "<suites> - <prj>:<test>". Take the last component under either
+        # separator rather than hard-coding one of them.
+        results=()
+        while IFS= read -r r; do
+          [[ -n "$r" ]] && results+=("$r")
+        done < <(jq -r --arg n "${name}" \
+          'select((.name | split(" / ") | last | split(":") | last) == $n) | .result' \
+          "''${testlogs[@]}")
+        if [[ ''${#results[@]} -ne 1 ]]; then
+          echo "parity lane: expected exactly one testlog entry for ${name}, found ''${#results[@]}." >&2
+          echo "meson most likely changed its test-name rendering. Names present:" >&2
+          jq -r '.name' "''${testlogs[@]}" >&2
+          exit 1
+        fi
+        if [[ "''${results[0]}" != OK ]]; then
+          echo "parity lane: ${name} reported result [''${results[0]}], not OK." >&2
+          echo "A SKIP here means this build lost the rust evaluator, and without" >&2
+          echo "this check the derivation would have succeeded having compared nothing." >&2
+          exit 1
+        fi
+      '';
+    });
+
+  # ENG-12874: the shadow census must survive a divergence whose text the JSON
+  # writer dislikes, rather than serialising the whole document to zero bytes.
+  rustEvalShadowCensus = rustEvalFunctionalTest {name = "rust-eval-shadow-census";};
+  # Flake installables reach the shadow census, agree on both arms, and account
+  # for every skip and verdict in the vocabulary.
+  rustEvalShadowFlake = rustEvalFunctionalTest {name = "rust-eval-shadow-flake";};
+
   autoGcInterrupt = focusedFunctionalTest {name = "gc-auto";};
   # `libfetchers: resolve git refs lazily and refresh the cached HEAD`
   # regression coverage: a cached rev-pinned fetchGit input must evaluate
@@ -476,7 +571,7 @@ in
         tests =
           (old.passthru.tests or old.tests or {})
           // lib.optionalAttrs (!isCross) {
-            inherit autoGcInterrupt buildLogFastExit buildStatus curlMultiWakeup daemonSignal fetchGitHeadCache machoRewrite overlayLowerGainsOutput smoke sparseLocks;
+            inherit autoGcInterrupt buildLogFastExit buildStatus curlMultiWakeup daemonSignal fetchGitHeadCache machoRewrite overlayLowerGainsOutput rustEvalShadowCensus rustEvalShadowFlake smoke sparseLocks;
           };
       }
       // lib.optionalAttrs (updateScriptWriter != null) {
