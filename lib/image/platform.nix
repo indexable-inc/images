@@ -555,6 +555,42 @@
     );
 in {
   options.ix = {
+    cpus = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum [2 4 8 16 32 64]);
+      default = null;
+      example = 8;
+      description = ''
+        How many vCPUs this image's VM boots with, or `null` for the platform
+        default.
+
+        The default is the full autoscale ceiling, which is what every machine
+        gets and what almost every machine should keep: a VM boots with the
+        whole shape and costs nothing extra for it, because machines are billed
+        on what they consume rather than on the size they were created at.
+        Setting this is an opt-DOWN, and it is worth doing when a workload is
+        known to be small and you would rather fit more machines per node --
+        placement admits against this number, not against the ceiling.
+
+        The guest genuinely sees this many vCPUs; it is the boot topology, not
+        a scheduler quota on a larger machine. Hotplug headroom is unaffected:
+        the machine can still grow back to the platform ceiling without being
+        recreated.
+
+        The allowed values are a menu rather than a range, and the reason is
+        the warm-boot cache. A machine's restore seed is staged per hardware
+        class, whose first component is the boot vCPU count, and each new class
+        pays a cold first boot before it is warm. Six sizes stay cheap to
+        pre-warm; an open range would let one configuration mint an unbounded
+        set of shapes that the whole fleet then carries.
+
+        Read at CREATE time only. Like `ix.networking.ipv4`, the count is
+        stamped on the machine when it is created, so changing it for a VM that
+        already exists is not converged by `ix apply` -- `ix rm` and re-apply to
+        resize. Declared here rather than passed as `ix new --cpus` so the shape
+        travels with the definition instead of with whoever ran the command.
+      '';
+    };
+
     secrets = lib.mkOption {
       type = lib.types.attrsOf secretType;
       default = {};
