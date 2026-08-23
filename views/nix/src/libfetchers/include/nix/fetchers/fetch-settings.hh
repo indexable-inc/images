@@ -99,6 +99,27 @@ struct Settings : public Config
         true,
         Xp::Flakes};
 
+    Setting<bool> allowRawRepoPaths{
+        this,
+        false,
+        "allow-raw-repo-paths",
+        R"(
+          Whether to allow a raw `path:` input to point at the root of a
+          Git or Jujutsu repository.
+
+          A raw path fetch copies the working-tree bytes and strips all
+          VCS metadata: the revision, the dirty state, and everything
+          derived from them (such as version stamps). Artifacts built
+          from such an input misreport their provenance. By default Nix
+          therefore refuses a `path:` input whose root contains `.git`
+          or `.jj` and suggests the metadata-carrying scheme
+          (`git+file` or `jj+file`) instead.
+
+          Bare paths without an explicit `path:` prefix are promoted to
+          those schemes automatically and are unaffected by this
+          setting, as are trees that are not repository roots.
+        )"};
+
     Setting<bool> trustTarballsFromGitForges{
         this,
         true,

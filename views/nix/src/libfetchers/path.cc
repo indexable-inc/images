@@ -4,6 +4,7 @@
 #include "nix/fetchers/cache.hh"
 #include "nix/fetchers/fetch-to-store.hh"
 #include "nix/fetchers/fetch-settings.hh"
+#include "nix/util/file-system.hh"
 
 namespace nix::fetchers {
 
@@ -145,6 +146,31 @@ struct PathInputScheme : InputScheme
         auto path = getStrAttr(input.attrs, "path");
 
         auto absPath = getAbsPath(input);
+
+        /* Refuse to fetch the root of a VCS repository as a raw path:
+           the copy strips all VCS metadata (revision, dirty state, and
+           anything derived from them, such as version stamps), so
+           artifacts built from it misreport their provenance. Bare
+           paths never get here: flake-ref parsing promotes them to
+           `git+file` / `jj+file` before the path scheme is selected,
+           so this fires only on an explicit `path:` spelling. */
+        if (!settings.allowRawRepoPaths) {
+            auto denyRepoRoot = [&](std::string_view vcs, std::string_view scheme) {
+                throw Error(
+                    "input '%s' is the root of a %s repository, and raw 'path:' fetches of a repository are not "
+                    "allowed: they strip VCS metadata (revision, dirty state, version stamps). "
+                    "Refer to it as '%s://%s' (or as a bare path, which selects that scheme automatically), "
+                    "or set 'allow-raw-repo-paths = true' to allow this deliberately.",
+                    input.to_string(),
+                    vcs,
+                    scheme,
+                    absPath.string());
+            };
+            if (pathExists(absPath / ".git"))
+                denyRepoRoot("Git", "git+file");
+            else if (pathExists(absPath / ".jj"))
+                denyRepoRoot("Jujutsu", "jj+file");
+        }
 
         // FIXME: check whether access to 'path' is allowed.
         auto storePath = store.maybeParseStorePath(absPath.string());
