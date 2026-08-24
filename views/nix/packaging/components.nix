@@ -29,13 +29,23 @@ let
 
   baseVersion = lib.fileContents ../.version;
 
-  versionSuffix = lib.optionalString (!officialRelease) "pre";
+  # This tree is the ix fork of Nix: its default version must never
+  # masquerade as an upstream release. The ix packaging overrides
+  # `version` on every component with a provenance digest
+  # (`+ix.h<digest>`), so this default only governs other builds of the
+  # tree: a direct `nix build .#nix-cli`, or a build from a raw source
+  # snapshot. `+ix.g<rev>` when the source carries a revision,
+  # `+ix.norev` when it does not (e.g. a raw `path:` snapshot, which
+  # strips VCS metadata). Build metadata uses `+`: meson feeds the
+  # version to darwin ld's -current_version, which rejects `-`.
+  ixMark = "+ix." + (if src ? shortRev then "g${src.shortRev}" else "norev");
+
+  versionSuffix = ixMark + lib.optionalString (!officialRelease) ".pre";
 
   fineVersionSuffix =
-    lib.optionalString (!officialRelease)
-      "pre${
-        builtins.substring 0 8 (src.lastModifiedDate or src.lastModified or "19700101")
-      }_${src.shortRev or "dirty"}";
+    ixMark
+    + lib.optionalString (!officialRelease)
+      ".pre${builtins.substring 0 8 (src.lastModifiedDate or src.lastModified or "19700101")}";
 
   fineVersion = baseVersion + fineVersionSuffix;
 
