@@ -489,12 +489,18 @@ struct JjInputScheme : InputScheme
        handshake storm was heavy enough to make the store server itself
        time out mid-evaluation.
 
-       Only the ix backend takes this route. That is the precise
-       condition and not a proxy for one: those repos are exactly the
-       ones a stock `jj` cannot read at all, so a `jj` that can read them
-       is a `jj` that has this subcommand. A conflicted revision in a
-       Git-backed repo -- the other caller of the per-file route -- keeps
-       working with whatever `jj` is on PATH.
+       Only the ix backends (`ix`, `ix-local`) take this route. That
+       is the precise condition and not a proxy for one: those repos are
+       exactly the ones a stock `jj` cannot read at all, so a `jj` that
+       can read them is a `jj` that has this subcommand. A conflicted
+       revision in a Git-backed repo -- the other caller of the per-file
+       route -- keeps working with whatever `jj` is on PATH.
+
+       The export refuses a case-insensitive `destDir`: the tree carries
+       paths that differ only by case, which such a filesystem would
+       silently merge. The `jj-export-dir` setting is how a caller on
+       macOS, where `/tmp` and `$TMPDIR` are both case-insensitive, puts
+       `destDir` on a case-sensitive volume.
 
        Returns the root tree id the export reported, when it reported
        one. It is a blake3 id over jj's own tree serialization, so nix
@@ -611,7 +617,8 @@ struct JjInputScheme : InputScheme
     }
 
     /* The backend name recorded in `store/type`, if the repo has one.
-       `git` and `ix` are the two that matter here; jj writes others. */
+       `git`, `ix` and `ix-local` are the ones that matter here; jj
+       writes others. */
     static std::optional<std::string> storeType(const std::filesystem::path & repoPath)
     {
         auto storeDir = storeDirOf(repoPath);
@@ -635,7 +642,7 @@ struct JjInputScheme : InputScheme
     static bool isIxStore(const std::filesystem::path & repoPath)
     {
         auto type = storeType(repoPath);
-        return type && *type == "ix";
+        return type && (*type == "ix" || *type == "ix-local");
     }
 
     static std::optional<std::filesystem::path> gitStorePath(const std::filesystem::path & repoPath)
@@ -812,7 +819,8 @@ struct JjInputScheme : InputScheme
 
     /* Fetch an explicitly-requested revision or bookmark: read it out of the
        Git store where there is one, and otherwise materialise its tree into the
-       store a file at a time. */
+       store: an ix store exports the whole tree in one call, any other backend
+       a file at a time. */
     std::pair<ref<SourceAccessor>, Input> getAccessorFromRev(
         const Settings & settings, Store & store, const std::filesystem::path & repoPath, Input input) const
     {
@@ -838,7 +846,8 @@ struct JjInputScheme : InputScheme
 
            A conflict keeps the export: jj does not store a conflicted file's
            materialised content in the Git tree, and the markers the warning
-           above promises come from `jj file show`. */
+           above promises come from the export (`jj ix export` for an ix store,
+           `jj file show` otherwise). */
         if (!meta.hasConflict) {
             if (auto gitStore = gitStorePath(repoPath)) {
                 auto repo = GitRepo::openRepo(*gitStore, {});
@@ -848,7 +857,16 @@ struct JjInputScheme : InputScheme
             }
         }
 
-        auto tmpDir = createTempDir();
+        /* `jj-export-dir` chooses the volume; empty falls through to the
+           process temporary directory inside `createTempDir`. The export
+           directory holds repository content, so it is private to the user
+           (0700) whatever the root's own mode. A missing root is refused
+           here, naming the setting, rather than as a bare mkdir failure on
+           a generated child path. */
+        const std::filesystem::path & exportRoot = settings.jjExportDir.get();
+        if (!exportRoot.empty() && !std::filesystem::is_directory(exportRoot))
+            throw Error("'jj-export-dir' is set to '%s', which is not an existing directory", exportRoot.string());
+        auto tmpDir = createTempDir(exportRoot, "nix-jj-export", 0700);
         AutoDelete delTmpDir(tmpDir, true);
 
         if (isIxStore(repoPath))

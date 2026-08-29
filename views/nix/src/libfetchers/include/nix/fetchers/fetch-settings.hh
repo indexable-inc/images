@@ -120,6 +120,25 @@ struct Settings : public Config
           setting, as are trees that are not repository roots.
         )"};
 
+    Setting<AbsolutePath> jjExportDir{
+        this,
+        "",
+        "jj-export-dir",
+        R"(
+          Directory under which the `jj` fetcher materialises a revision
+          before adding it to the Nix store. Unset (the default) means the
+          process temporary directory (on Unix `$TMPDIR`, else `/tmp`). A
+          configured value must be an absolute path to an existing
+          directory; the per-fetch export directory created beneath it is
+          private to the user (mode `0700`) whatever the parent's mode.
+
+          The export of an ix-store revision refuses a case-insensitive
+          filesystem: the tree may carry paths that differ only by case,
+          and such a filesystem would silently merge them. On macOS both
+          `/tmp` and the per-user `$TMPDIR` are case-insensitive, so this
+          setting must name a directory on a case-sensitive volume there.
+        )"};
+
     Setting<bool> trustTarballsFromGitForges{
         this,
         true,
