@@ -26,7 +26,14 @@ const BOOKMARK_SEARCH_DEPTH: usize = 20;
 /// of a bookmarked row in `ancestors(@, N)` is not the number of commits
 /// between it and `@` as soon as a merge is in the window. `contained_in`
 /// asks the revset engine the question directly, and the counts it yields are
-/// the ones a reader can restate: `⇡` is `trunk()..@`, `⇣` is `@..trunk()`.
+/// the ones a reader can restate: `⇡` is `trunk()..@` less an empty `@`,
+/// `⇣` is `@..trunk()`.
+///
+/// An empty working-copy commit is excluded from `⇡`: jj keeps one on top of
+/// whatever was last checked out, and right after `jj bookmark set main -r @`
+/// it is the only member of `trunk()..@`. It holds nothing trunk lacks, so
+/// counting it rendered a clean checkout of `main` as `main⇡1`. A non-empty
+/// `@` does carry edits trunk lacks and still counts (and renders `*`).
 ///
 /// `local_bookmarks`, never `bookmarks`: the latter also yields *remote*
 /// bookmarks, and in a non-colocated repo that includes jj's `git`
@@ -76,7 +83,8 @@ pub struct Trunk {
     /// The trunk bookmark as jj renders it, so a local bookmark out of sync
     /// with its tracked remote keeps its trailing `*`.
     pub name: String,
-    /// Commits in `trunk()..@`: mine that trunk does not have.
+    /// Commits in `trunk()..@`, less an empty `@`: jj's working-copy
+    /// placeholder holds nothing trunk lacks. Any other empty commit counts.
     pub ahead: usize,
     /// Commits in `@..trunk()`: trunk's that I do not have.
     pub behind: usize,
@@ -174,7 +182,10 @@ fn parse(stdout: &str) -> Result<Head> {
             };
             (!name.is_empty()).then(|| Trunk {
                 name: name.to_owned(),
-                ahead: rows.iter().filter(|row| row.tagged('A')).count(),
+                ahead: rows
+                    .iter()
+                    .filter(|row| row.tagged('A') && !(row.tagged('W') && row.flags.empty))
+                    .count(),
                 behind: rows.iter().filter(|row| row.tagged('B')).count(),
             })
         });
@@ -210,7 +221,6 @@ impl<'a> Row<'a> {
         let local_bookmarks = columns.next().unwrap_or_default();
         let remote_bookmarks = columns.next().unwrap_or_default();
         let flags = columns.next().unwrap_or_default();
-
 
         Self {
             tags,
@@ -259,6 +269,32 @@ B\tolnqwyy\tk\t\t\t
                 behind: 2,
             })
         );
+    }
+
+    /// Right after `jj bookmark set main -r @`, jj's fresh empty `@` is the
+    /// only member of `trunk()..@`; it is a placeholder, not a commit ahead.
+    #[test]
+    fn an_empty_working_copy_on_trunk_is_not_ahead() {
+        let head = parse("WA\tqp\tzxrtlnk\t\t\te\nT\touork\tvyw\tmain\t\t\n").expect("parse rows");
+
+        assert!(head.flags.empty);
+        assert_eq!(
+            head.trunk,
+            Some(Trunk {
+                name: "main".to_owned(),
+                ahead: 0,
+                behind: 0,
+            })
+        );
+    }
+
+    /// The same shape with edits in `@` is one commit ahead: only the EMPTY
+    /// working copy is excluded, not the working copy as such.
+    #[test]
+    fn a_dirty_working_copy_on_trunk_is_one_ahead() {
+        let head = parse("WA\tqp\tzxrtlnk\t\t\t\nT\touork\tvyw\tmain\t\t\n").expect("parse rows");
+
+        assert_eq!(head.trunk.map(|trunk| trunk.ahead), Some(1));
     }
 
     /// The bug this file exists to prevent: jj's `git` pseudo-remote is a

@@ -63,10 +63,12 @@ const SURVEY_FRESH: Duration = Duration::from_mins(15);
 /// local bookmark naming it, where it stands against trunk, the state flags,
 /// and the view it sits in with the last survey's counts and their vintage.
 ///
-/// Every number names a comparison a reader can restate: `⇡` is `trunk()..@`,
-/// `⇣` is `@..trunk()`, and the view's arrows are the last survey against the
-/// published repository, dated. There is no separate dirty count: in jj the
-/// edits are already in @, so a non-empty working copy is the dirty signal.
+/// Every number names a comparison a reader can restate: `⇡` is `trunk()..@`
+/// less an empty working-copy commit (a placeholder holds nothing trunk
+/// lacks), `⇣` is `@..trunk()`, and the view's arrows are the last survey
+/// against the published repository, dated. There is no separate dirty count:
+/// in jj the edits are already in @, so a non-empty working copy is the dirty
+/// signal.
 pub fn jj(head: &jj::Head, view: Option<&views::View>, color: bool) -> String {
     let mut segment = Segment::new(color);
     segment.push_plain("on ");
